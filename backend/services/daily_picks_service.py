@@ -190,7 +190,7 @@ Respond ONLY in JSON:
 Provide 5 short-term picks and 5 long-term picks. Be specific, actionable, and conviction-driven."""
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=2500,
             messages=[{"role": "user", "content": prompt}],
         )

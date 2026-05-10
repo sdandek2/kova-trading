@@ -43,7 +43,7 @@ def ask_ai(prompt: str, max_tokens: int = 600) -> str:
     # --- Try Claude first ---
     try:
         msg = _anthropic.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
