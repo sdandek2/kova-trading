@@ -1,0 +1,21 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+backend/.env
+
+# Runtime state (regenerated on server)
+backend/strategy_setting.txt
+backend/watchlist.json
+
+# iOS / Xcode
+ios/TradingApp/.build/
+ios/TradingApp/Kova.xcodeproj/xcuserdata/
+ios/TradingApp/Kova.xcworkspace/xcuserdata/
+*.xcuserstate
+*.DS_Store
+
+# Railway
+.railway/
