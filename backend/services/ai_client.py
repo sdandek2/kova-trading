@@ -9,8 +9,6 @@ care which model actually ran.
 import logging
 
 import anthropic
-from google import genai as google_genai
-from google.genai import types as genai_types
 
 from config import settings
 
@@ -20,11 +18,17 @@ logger = logging.getLogger(__name__)
 
 _anthropic = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-if settings.gemini_api_key:
-    _gemini = google_genai.Client(api_key=settings.gemini_api_key)
-else:
-    _gemini = None
-    logger.warning("GEMINI_API_KEY not set — Gemini unavailable, will use Claude only.")
+# Gemini is optional — only available if google-genai is installed
+_gemini = None
+_genai_types = None
+try:
+    from google import genai as _google_genai
+    from google.genai import types as _genai_types
+    if settings.gemini_api_key:
+        _gemini = _google_genai.Client(api_key=settings.gemini_api_key)
+        logger.info("Gemini client initialized.")
+except ImportError:
+    logger.info("google-genai not installed — using Claude only.")
 
 
 # ── Public helper ──────────────────────────────────────────────────────────
@@ -55,7 +59,7 @@ def ask_ai(prompt: str, max_tokens: int = 600) -> str:
             response = _gemini.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt,
-                config=genai_types.GenerateContentConfig(
+                config=_genai_types.GenerateContentConfig(
                     max_output_tokens=max_tokens,
                     temperature=0.2,
                 ),
