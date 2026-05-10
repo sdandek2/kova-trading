@@ -39,3 +39,15 @@ def place_manual_order(req: ManualOrderRequest):
         return {"status": "submitted", "order_id": str(order.id), "symbol": symbol, "side": req.side, "qty": req.qty}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/orders/{order_id}")
+def cancel_order(order_id: str):
+    try:
+        from alpaca.trading.client import TradingClient
+        from config import settings
+        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
+        client.cancel_order_by_id(order_id)
+        return {"status": "cancelled", "order_id": order_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
