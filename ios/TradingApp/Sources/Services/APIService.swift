@@ -22,7 +22,20 @@ class APIService {
 
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // Custom date strategy: handles multiple ISO 8601 variants from different RSS feeds
+        // e.g. "2026-05-11T12:00:00Z", "2026-05-11T12:00:00+00:00", "2026-05-11T12:00:00.000Z"
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoStrict = ISO8601DateFormatter()
+        isoStrict.formatOptions = [.withInternetDateTime]
+        d.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let str = try container.decode(String.self)
+            if let date = iso.date(from: str) { return date }
+            if let date = isoStrict.date(from: str) { return date }
+            throw DecodingError.dataCorruptedError(in: container,
+                debugDescription: "Cannot decode date: \(str)")
+        }
         return d
     }()
 

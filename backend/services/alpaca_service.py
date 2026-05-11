@@ -610,12 +610,23 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _parse_date(raw: str) -> str | None:
+        """Parse any date string → clean ISO 8601 UTC string iOS can decode, or None."""
         if not raw:
             return None
         try:
-            return parsedate_to_datetime(raw).isoformat()
+            from email.utils import parsedate_to_datetime as _ptd
+            dt = _ptd(raw)
+            # Normalize: strip microseconds, use Z suffix (strict iso8601 for iOS)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         except Exception:
-            return raw
+            pass
+        try:
+            # Handle ISO 8601 variants (Atom feeds, e.g. "2026-05-11T12:00:00.123Z")
+            import re as _re2
+            cleaned = _re2.sub(r"\.\d+", "", raw).replace("+00:00", "Z").rstrip("Z") + "Z"
+            return cleaned
+        except Exception:
+            return None  # Return None rather than an unparseable string that crashes iOS
 
     def _parse_rss(xml_text: str, source: str, symbol_hints: list[str] = []) -> list[dict]:
         """Parse standard RSS (item-based) XML."""
