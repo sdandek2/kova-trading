@@ -26,6 +26,15 @@ struct OrdersView: View {
                 } else {
                     List(vm.orders) { order in
                         OrderRowView(order: order)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if ["accepted", "pending_new", "new", "partially_filled"].contains(order.status) {
+                                    Button(role: .destructive) {
+                                        Task { await vm.cancelOrder(order) }
+                                    } label: {
+                                        Label("Cancel", systemImage: "xmark.circle")
+                                    }
+                                }
+                            }
                     }
                     .listStyle(.insetGrouped)
                     .refreshable { await vm.load() }

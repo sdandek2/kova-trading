@@ -205,74 +205,102 @@ struct DailyPickCard: View {
     let pick: DailyPick
     let accentColor: Color
     var onTap: () -> Void
+    @State private var showTrade = false
+
+    private var suggestedQty: Int {
+        guard let price = pick.current_price_approx, price > 0 else { return 1 }
+        let budget: Double = pick.confidence == "high" ? 1000 : 600
+        return max(1, Int(budget / price))
+    }
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                // Symbol + upside
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(pick.symbol)
+        VStack(alignment: .leading, spacing: 8) {
+            // Symbol + upside
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pick.symbol)
+                        .font(.title3.weight(.bold))
+                    if let price = pick.current_price_approx {
+                        Text(String(format: "~$%.2f", price))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let upside = pick.upside_pct {
+                        Text(String(format: "+%.0f%%", upside))
                             .font(.title3.weight(.bold))
-                        if let price = pick.current_price_approx {
-                            Text(String(format: "~$%.2f", price))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                            .foregroundStyle(accentColor)
                     }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        if let upside = pick.upside_pct {
-                            Text(String(format: "+%.0f%%", upside))
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(accentColor)
-                        }
-                        if let target = pick.target_price {
-                            Text(String(format: "→ $%.2f", target))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                    if let target = pick.target_price {
+                        Text(String(format: "→ $%.2f", target))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                }
-
-                // Type + confidence
-                HStack(spacing: 6) {
-                    typeTag
-                    confidenceTag
-                }
-
-                // Thesis
-                Text(pick.thesis)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Divider()
-
-                // Entry + risk
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(pick.entry_zone, systemImage: "arrow.down.circle")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Label(pick.key_risk, systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .lineLimit(2)
                 }
             }
-            .padding(14)
-            .frame(width: 260)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: accentColor.opacity(0.12), radius: 8, x: 0, y: 3)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(accentColor.opacity(0.2), lineWidth: 1)
-            )
+
+            // Type + confidence
+            HStack(spacing: 6) {
+                typeTag
+                confidenceTag
+            }
+
+            // Thesis
+            Text(pick.thesis)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            // Entry + risk
+            VStack(alignment: .leading, spacing: 4) {
+                Label(pick.entry_zone, systemImage: "arrow.down.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Label(pick.key_risk, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+
+            // Buy button
+            HStack {
+                Text("AI: \(suggestedQty) share\(suggestedQty == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showTrade = true
+                } label: {
+                    Text("Buy")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Color.green)
+                        .clipShape(Capsule())
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .frame(width: 260)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: accentColor.opacity(0.12), radius: 8, x: 0, y: 3)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(accentColor.opacity(0.2), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .sheet(isPresented: $showTrade) {
+            TradeSheet(prefillSymbol: pick.symbol, prefillSide: "buy", prefillQty: suggestedQty)
+        }
     }
 
     var typeTag: some View {

@@ -6,22 +6,15 @@ from typing import Optional
 from config import settings
 from services import alpaca_service
 from services.ai_client import ask_ai
+from services.db import cache_get, cache_set
 from services.indicators import compute_all, compute_atr
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache: symbol -> (prediction_dict, cached_at)
-_prediction_cache: dict[str, tuple[dict, datetime]] = {}
-_suggestions_cache: tuple[Optional[list], Optional[datetime]] = (None, None)
 CACHE_TTL_MINUTES = 60
-
-
-def _is_cache_fresh(cached_at: Optional[datetime]) -> bool:
-    if not cached_at:
-        return False
-    return (datetime.now(timezone.utc) - cached_at).total_seconds() < CACHE_TTL_MINUTES * 60
+CACHE_TTL_SECONDS = CACHE_TTL_MINUTES * 60
 
 
 def get_stock_prediction(symbol: str) -> dict:
@@ -31,8 +24,8 @@ def get_stock_prediction(symbol: str) -> dict:
     key catalysts, risks, and a recommendation.
     Cached for 1 hour.
     """
-    cached, cached_at = _prediction_cache.get(symbol, (None, None))
-    if cached and _is_cache_fresh(cached_at):
+    cached = cache_get(f"prediction:{symbol}")
+    if cached:
         logger.info(f"Prediction cache hit for {symbol}")
         return cached
 
@@ -178,7 +171,7 @@ Respond ONLY in JSON with this exact structure:
         logger.info(f"Prediction for {symbol}: {result['recommendation']} ({result['confidence']} confidence)")
 
         # Only cache successful predictions
-        _prediction_cache[symbol] = (result, datetime.now(timezone.utc))
+        cache_set(f"prediction:{symbol}", result, CACHE_TTL_SECONDS)
 
     except Exception as e:
         logger.error(f"Prediction failed for {symbol}: {e}")
@@ -194,9 +187,8 @@ def get_top_suggestions(n: int = 8) -> list[dict]:
     Uses Claude to rank and explain opportunities with short and long-term context.
     Cached for 1 hour.
     """
-    global _suggestions_cache
-    cached_list, cached_at = _suggestions_cache
-    if cached_list and _is_cache_fresh(cached_at):
+    cached_list = cache_get("suggestions:top")
+    if cached_list:
         logger.info("Suggestions cache hit")
         return cached_list
 
@@ -282,7 +274,7 @@ Respond ONLY in JSON:
         logger.info(f"Generated {len(suggestions)} suggestions: {[s['symbol'] for s in suggestions]}")
 
         # Only cache successful results
-        _suggestions_cache = (suggestions, datetime.now(timezone.utc))
+        cache_set("suggestions:top", suggestions, CACHE_TTL_SECONDS)
 
     except Exception as e:
         logger.error(f"Suggestions failed: {e}")

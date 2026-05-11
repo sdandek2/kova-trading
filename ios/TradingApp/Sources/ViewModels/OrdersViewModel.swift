@@ -30,4 +30,13 @@ class OrdersViewModel: ObservableObject {
         }
         isLoading = false
     }
+
+    func cancelOrder(_ order: Order) async {
+        do {
+            try await APIService.shared.cancelOrder(id: order.id)
+            orders.removeAll { $0.id == order.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

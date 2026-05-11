@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @StateObject private var vm = DashboardViewModel()
+    @State private var showTradeSheet = false
 
     var body: some View {
         NavigationStack {
@@ -54,6 +55,20 @@ struct DashboardView: View {
                 }
             }
             .navigationTitle("Dashboard")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showTradeSheet = true
+                    } label: {
+                        Label("Trade", systemImage: "arrow.left.arrow.right.circle.fill")
+                            .labelStyle(.iconOnly)
+                            .font(.title3)
+                    }
+                }
+            }
+            .sheet(isPresented: $showTradeSheet) {
+                TradeSheet()
+            }
         }
         .task { await vm.load() }
     }

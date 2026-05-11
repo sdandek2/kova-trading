@@ -126,17 +126,23 @@ struct PredictionSearchBar: View {
 struct SuggestionCard: View {
     let suggestion: Suggestion
     var onTap: () -> Void
+    @State private var showTrade = false
+
+    private var suggestedQty: Int {
+        guard let price = suggestion.current_price, price > 0 else { return 1 }
+        let budget: Double = suggestion.risk_level == "low" ? 1000 : suggestion.risk_level == "high" ? 400 : 700
+        return max(1, Int(budget / price))
+    }
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(suggestion.symbol)
-                        .font(.headline)
-                    Spacer()
-                    typeChip
-                    riskChip
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(suggestion.symbol)
+                    .font(.headline)
+                Spacer()
+                typeChip
+                riskChip
+            }
 
                 if let price = suggestion.current_price {
                     HStack(spacing: 12) {
@@ -173,14 +179,35 @@ struct SuggestionCard: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
+
+                HStack {
+                    Text("AI suggests \(suggestedQty) share\(suggestedQty == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        showTrade = true
+                    } label: {
+                        Text("Buy")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(Color.green)
+                            .clipShape(Capsule())
+                    }
+                }
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .sheet(isPresented: $showTrade) {
+            TradeSheet(prefillSymbol: suggestion.symbol, prefillSide: "buy", prefillQty: suggestedQty)
+        }
     }
 
     var typeChip: some View {

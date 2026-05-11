@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     anthropic_api_key: str
     gemini_api_key: str = ""
+    database_url: str = ""
 
     class Config:
         env_file = ".env"

@@ -29,6 +29,7 @@
 		67E84F0D1458C344E698717E /* PortfolioHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F053517D466107EC84CCE07 /* PortfolioHistory.swift */; };
 		6B02D45229625C484318B291 /* TradingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1DCC54F514E8DE3C5CF416 /* TradingViewModel.swift */; };
 		6F15AD912154589D7CD91D4C /* AccountCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */; };
+		AA11BB22CC33DD44EE55FF66 /* TradeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB22CC33DD44EE55FF66AA11 /* TradeSheet.swift */; };
 		7ABFB19CDEDECF435C9E3568 /* ErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB85530A0AD6484B28AC9BAF /* ErrorView.swift */; };
 		7B3B8724C93807D026206E8E /* StrategyPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C0C835D1A3EAEC1E9E32702 /* StrategyPickerView.swift */; };
 		8686D043EDA79CF6A0325CE2 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDFC4BDBBEBA8630ACFC22E1 /* Config.swift */; };
@@ -75,6 +76,7 @@
 		98185D223838F12E20232E0F /* Account.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Account.swift; path = Sources/Models/Account.swift; sourceTree = "<group>"; };
 		9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoadingView.swift; path = Sources/Views/Common/LoadingView.swift; sourceTree = "<group>"; };
 		9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccountCardView.swift; path = Sources/Views/Dashboard/AccountCardView.swift; sourceTree = "<group>"; };
+		BB22CC33DD44EE55FF66AA11 /* TradeSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradeSheet.swift; path = Sources/Views/Dashboard/TradeSheet.swift; sourceTree = "<group>"; };
 		ADC6D1F769C0615A14CB7530 /* PositionRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PositionRowView.swift; path = Sources/Views/Dashboard/PositionRowView.swift; sourceTree = "<group>"; };
 		AFE0F45C9B54B4CEC8AFDD7E /* NewsRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NewsRowView.swift; path = Sources/Views/News/NewsRowView.swift; sourceTree = "<group>"; };
 		B02D08EB9752167470CF3074 /* PortfolioChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PortfolioChartView.swift; path = Sources/Views/Dashboard/PortfolioChartView.swift; sourceTree = "<group>"; };
@@ -148,6 +150,7 @@
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
+				BB22CC33DD44EE55FF66AA11 /* TradeSheet.swift */,
 				B6143A960A98DED56CD87E91 /* DashboardView.swift */,
 				B02D08EB9752167470CF3074 /* PortfolioChartView.swift */,
 				ADC6D1F769C0615A14CB7530 /* PositionRowView.swift */,
@@ -262,6 +265,7 @@
 				7ABFB19CDEDECF435C9E3568 /* ErrorView.swift in Sources */,
 				88E924C2FA451B19763F0A3A /* LoadingView.swift in Sources */,
 				6F15AD912154589D7CD91D4C /* AccountCardView.swift in Sources */,
+				AA11BB22CC33DD44EE55FF66 /* TradeSheet.swift in Sources */,
 				192503AB8BAEC7326B3782D4 /* DashboardView.swift in Sources */,
 				26E5F5AAD849E344B6E5A96C /* PortfolioChartView.swift in Sources */,
 				AD7B474336C66DBF6EA55DF8 /* PositionRowView.swift in Sources */,

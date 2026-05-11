@@ -1,12 +1,13 @@
 import json
 import logging
 from datetime import datetime, timezone, date
-from typing import Optional
+
 
 import anthropic
 
 from config import settings
 from services import alpaca_service
+from services.db import cache_get, cache_set
 from services.indicators import compute_all
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
@@ -15,15 +16,9 @@ logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-# Cache: refreshes once per trading day
-_cache: Optional[dict] = None
-_cache_date: Optional[date] = None
-
-
-def _cache_is_fresh() -> bool:
-    if not _cache or not _cache_date:
-        return False
-    return _cache_date == date.today()
+# Cache key is date-scoped so it refreshes automatically each new trading day
+def _picks_cache_key() -> str:
+    return f"daily_picks:{date.today().isoformat()}"
 
 
 def get_daily_picks(force_refresh: bool = False) -> dict:
@@ -32,13 +27,13 @@ def get_daily_picks(force_refresh: bool = False) -> dict:
     Returns two lists:
       - short_term: stocks likely to move significantly in 1-2 weeks
       - long_term: stocks with strong 1-3 month growth thesis
-    Cached until the next calendar day.
+    Cached until the next calendar day (key is date-scoped).
     """
-    global _cache, _cache_date
-
-    if not force_refresh and _cache_is_fresh():
-        logger.info("Daily picks cache hit")
-        return _cache
+    if not force_refresh:
+        cached = cache_get(_picks_cache_key())
+        if cached:
+            logger.info("Daily picks cache hit")
+            return cached
 
     logger.info("Generating fresh daily picks...")
 
@@ -219,6 +214,11 @@ Provide 5 short-term picks and 5 long-term picks. Be specific, actionable, and c
         logger.error(f"Daily picks generation failed: {e}", exc_info=True)
         result["error"] = str(e)
 
-    _cache = result
-    _cache_date = date.today()
+    # Cache until end of day (seconds remaining in the day)
+    now = datetime.now(timezone.utc)
+    seconds_until_midnight = int(
+        (datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+         + __import__('datetime').timedelta(days=1) - now).total_seconds()
+    )
+    cache_set(_picks_cache_key(), result, max(seconds_until_midnight, 3600))
     return result

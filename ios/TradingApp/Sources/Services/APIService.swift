@@ -116,6 +116,32 @@ class APIService {
         try await fetch("/api/picks/daily\(refresh ? "?refresh=true" : "")", timeout: 120)
     }
 
+    func cancelOrder(id: String) async throws {
+        guard let url = URL(string: baseURL + "/api/orders/\(id)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 10
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            throw APIError.networkError(NSError(domain: "", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: detail ?? "Cancel failed"]))
+        }
+    }
+
+    func placeManualOrder(symbol: String, side: String, qty: Int) async throws {
+        guard let url = URL(string: baseURL + "/api/orders/manual") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["symbol": symbol, "side": side, "qty": qty])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            throw APIError.networkError(NSError(domain: "", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: detail ?? "Order failed"]))
+        }
+    }
+
     func getWatchlist() async throws -> [String] {
         let response: [String: [String]] = try await fetch("/api/watchlist/")
         return response["watchlist"] ?? []
