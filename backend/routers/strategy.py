@@ -7,7 +7,9 @@ router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
 @router.get("/")
 def get_strategy():
-    return strategy_service.get_strategy()
+    s = strategy_service.get_strategy()
+    # Return only string-safe fields so Swift [String:String] decode doesn't fail
+    return {"key": s["key"], "name": s["name"]}
 
 
 @router.get("/all")
