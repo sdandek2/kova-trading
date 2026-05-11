@@ -394,6 +394,7 @@ async def run_trading_cycle():
 async def _trading_loop():
     global _next_run_at
     from datetime import timedelta
+    _cleanup_counter = 0
     while _is_running:
         # Run pre-market scan if market is about to open (13:00-14:00 UTC = 9-10 AM EST)
         now_utc = datetime.now(timezone.utc)
@@ -401,6 +402,15 @@ async def _trading_loop():
             await run_premarket_scan()
 
         await run_trading_cycle()
+
+        # Run DB cleanup once every ~144 cycles (~24 hours at 10-min intervals)
+        _cleanup_counter += 1
+        if _cleanup_counter >= 144:
+            _cleanup_counter = 0
+            from services.db import cleanup_old_trade_logs, cleanup_expired_cache
+            cleanup_old_trade_logs(days=90)
+            cleanup_expired_cache()
+            logger.info("DB cleanup complete.")
 
         # Sleep longer when market is closed (nights / weekends)
         # so we don't spin every 5 min for 18 hours doing nothing

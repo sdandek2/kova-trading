@@ -182,38 +182,94 @@ def log_trade_decision(decision_data: dict) -> None:
             return
 
         with conn.cursor() as cur:
+            # Create table with full schema
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS trade_log (
-                    id            SERIAL PRIMARY KEY,
-                    timestamp     TIMESTAMPTZ NOT NULL,
-                    action        TEXT NOT NULL,
-                    symbol        TEXT,
-                    quantity      INTEGER,
-                    reasoning     TEXT,
-                    confidence    TEXT,
-                    market_regime TEXT,
-                    geo_risk      TEXT
+                    id              SERIAL PRIMARY KEY,
+                    timestamp       TIMESTAMPTZ NOT NULL,
+                    action          TEXT NOT NULL,
+                    symbol          TEXT,
+                    quantity        INTEGER,
+                    reasoning       TEXT,
+                    confidence      TEXT,
+                    market_regime   TEXT,
+                    geo_risk        TEXT,
+                    take_profit_pct FLOAT,
+                    stop_loss_pct   FLOAT,
+                    partial_exit    BOOLEAN DEFAULT FALSE
                 )
             """)
+            # Add new columns if they don't exist yet (safe on existing tables)
+            for col_sql in [
+                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS take_profit_pct FLOAT",
+                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS stop_loss_pct FLOAT",
+                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS partial_exit BOOLEAN DEFAULT FALSE",
+            ]:
+                cur.execute(col_sql)
+
             cur.execute(
                 """
                 INSERT INTO trade_log
-                    (timestamp, action, symbol, quantity, reasoning, confidence, market_regime, geo_risk)
+                    (timestamp, action, symbol, quantity, reasoning, confidence,
+                     market_regime, geo_risk, take_profit_pct, stop_loss_pct, partial_exit)
                 VALUES
                     (%(timestamp)s, %(action)s, %(symbol)s, %(quantity)s,
-                     %(reasoning)s, %(confidence)s, %(market_regime)s, %(geo_risk)s)
+                     %(reasoning)s, %(confidence)s, %(market_regime)s, %(geo_risk)s,
+                     %(take_profit_pct)s, %(stop_loss_pct)s, %(partial_exit)s)
                 """,
                 {
-                    "timestamp":     decision_data.get("timestamp", datetime.now(timezone.utc)),
-                    "action":        decision_data.get("action", "hold"),
-                    "symbol":        decision_data.get("symbol"),
-                    "quantity":      decision_data.get("quantity"),
-                    "reasoning":     decision_data.get("reasoning"),
-                    "confidence":    decision_data.get("confidence"),
-                    "market_regime": decision_data.get("market_regime"),
-                    "geo_risk":      decision_data.get("geo_risk"),
+                    "timestamp":       decision_data.get("timestamp", datetime.now(timezone.utc)),
+                    "action":          decision_data.get("action", "hold"),
+                    "symbol":          decision_data.get("symbol"),
+                    "quantity":        decision_data.get("quantity"),
+                    "reasoning":       decision_data.get("reasoning"),
+                    "confidence":      decision_data.get("confidence"),
+                    "market_regime":   decision_data.get("market_regime"),
+                    "geo_risk":        decision_data.get("geo_risk"),
+                    "take_profit_pct": decision_data.get("take_profit_pct"),
+                    "stop_loss_pct":   decision_data.get("stop_loss_pct"),
+                    "partial_exit":    decision_data.get("partial_exit", False),
                 },
             )
         logger.info(f"log_trade_decision: logged action={decision_data.get('action')} symbol={decision_data.get('symbol')}")
     except Exception as e:
         logger.warning(f"log_trade_decision failed ({e}), continuing without logging.")
+
+
+def cleanup_old_trade_logs(days: int = 90) -> None:
+    """
+    Delete trade_log entries older than *days* days.
+    Run periodically to prevent unbounded table growth.
+    Safe to call at any time — never raises.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM trade_log WHERE timestamp < %s", (cutoff,))
+            deleted = cur.rowcount
+        if deleted:
+            logger.info(f"cleanup_old_trade_logs: removed {deleted} rows older than {days} days")
+    except Exception as e:
+        logger.warning(f"cleanup_old_trade_logs failed ({e}), skipping.")
+
+
+def cleanup_expired_cache() -> None:
+    """
+    Delete expired rows from ai_cache to keep the table lean.
+    Safe to call at any time — never raises.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        now = datetime.now(timezone.utc)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_cache WHERE expires_at < %s", (now,))
+            deleted = cur.rowcount
+        if deleted:
+            logger.debug(f"cleanup_expired_cache: removed {deleted} expired entries")
+    except Exception as e:
+        logger.warning(f"cleanup_expired_cache failed ({e}), skipping.")
