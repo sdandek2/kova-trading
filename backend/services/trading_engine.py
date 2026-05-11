@@ -59,6 +59,65 @@ def get_latest_analysis() -> Optional[AIAnalysis]:
     return None
 
 
+async def run_premarket_scan():
+    """
+    Runs at 9:00-9:30 AM EST before market open.
+    Identifies top opportunities from overnight news and pre-market movers.
+    Stores results in cache so the first trading cycle uses them immediately.
+    """
+    try:
+        now_utc = datetime.now(timezone.utc)
+        if not (13 <= now_utc.hour < 14):
+            return
+
+        logger.info("Running pre-market scan (13:00-14:00 UTC)...")
+
+        universe = alpaca_service.get_tradeable_universe()
+        news_articles = alpaca_service.get_news(limit=20)
+        macro = get_macro_context()
+
+        # Build news headlines list
+        news_headlines = [
+            f"[{art.get('source', '')}] [{', '.join(art.get('symbols', [])[:3])}] {art['headline']}"
+            for art in news_articles[:15]
+            if art.get("headline")
+        ]
+
+        # Derive sentiment from news articles
+        sentiment = {}
+        for art in news_articles:
+            for sym in art.get("symbols", []):
+                if sym in universe:
+                    sentiment[sym] = sentiment.get(sym, 0) + 1
+
+        # Top movers from news (symbols with most mentions)
+        top_movers = sorted(sentiment.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_movers_str = ", ".join([f"{sym}({cnt})" for sym, cnt in top_movers]) or "none identified"
+
+        # Format a simple pre-market context string
+        market_regime = macro.get("market_regime", "unknown").upper()
+        premarket_context = (
+            f"Pre-market scan: regime={market_regime}, "
+            f"top news movers={top_movers_str}, "
+            f"articles={len(news_articles)}"
+        )
+
+        cache_set(
+            "premarket_scan",
+            {
+                "headlines": news_headlines,
+                "sentiment": sentiment,
+                "macro_regime": macro.get("market_regime"),
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+            },
+            7200,  # 2 hour TTL
+        )
+
+        logger.info(f"Pre-market scan complete: {premarket_context}")
+    except Exception as e:
+        logger.warning(f"Pre-market scan failed (non-fatal): {e}")
+
+
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis
 
@@ -115,7 +174,39 @@ async def run_trading_cycle():
 
         macro = get_macro_context()
         sector_info = get_sector_rotation()
+
+        # Sector momentum scores — used to boost/reduce conviction per symbol
+        from services.sector_momentum import get_sector_momentum_scores, get_sector_context_for_symbols
+        sector_scores = {}
+        sector_context = {}
+        try:
+            sector_scores = get_sector_momentum_scores(lookback_days=3)
+            sector_context = get_sector_context_for_symbols(universe[:30], sector_scores)
+            leading_sectors = [f"{s}({v:+.1f}%)" for s, v in sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
+            logger.info(f"Sector momentum — Leading: {', '.join(leading_sectors)}")
+        except Exception as e:
+            logger.warning(f"Sector momentum failed (non-fatal): {e}")
+
+        # Recent trade outcomes — fed back to Claude so it learns from past decisions
+        from services.db import get_recent_trade_outcomes
+        recent_trades = []
+        try:
+            recent_trades = get_recent_trade_outcomes(limit=10)
+        except Exception as e:
+            logger.warning(f"Could not fetch trade history (non-fatal): {e}")
+
         earnings_map = get_upcoming_earnings(universe)
+
+        # Earnings play candidates — small pre-earnings run-up plays
+        from services.earnings import get_earnings_play_candidates
+        earnings_plays = []
+        try:
+            earnings_plays = get_earnings_play_candidates(universe, earnings_map)
+            if earnings_plays:
+                logger.info(f"Earnings play candidates: {[p['symbol'] for p in earnings_plays]}")
+        except Exception as e:
+            logger.warning(f"Earnings plays failed (non-fatal): {e}")
+
         geo = get_geopolitical_context()
         trend_forecast = get_trend_forecast(macro, geo)
         logger.info(f"Macro: {macro['market_regime']} | VIX: {macro['vix_level']} | SPY: {macro['spy_trend']}")
@@ -166,6 +257,9 @@ async def run_trading_cycle():
             trend_forecast=trend_forecast,
             news_headlines=news_headlines,
             full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
+            sector_context=sector_context,
+            recent_trades=recent_trades,
+            earnings_plays=earnings_plays,
         )
 
         _last_analysis_at = datetime.now(timezone.utc)
@@ -181,14 +275,17 @@ async def run_trading_cycle():
 
         # Log the AI decision for future performance analysis
         log_trade_decision({
-            "timestamp":     _last_analysis_at,
-            "action":        decision.action,
-            "symbol":        decision.symbol,
-            "quantity":      decision.quantity,
-            "reasoning":     decision.reasoning,
-            "confidence":    getattr(decision, "confidence", None),
-            "market_regime": macro.get("market_regime"),
-            "geo_risk":      geo.get("risk_level"),
+            "timestamp":      _last_analysis_at,
+            "action":         decision.action,
+            "symbol":         decision.symbol,
+            "quantity":       decision.quantity,
+            "reasoning":      decision.reasoning,
+            "confidence":     getattr(decision, "confidence", None),
+            "market_regime":  macro.get("market_regime"),
+            "geo_risk":       geo.get("risk_level"),
+            "take_profit_pct": decision.take_profit_pct,
+            "stop_loss_pct":   decision.stop_loss_pct,
+            "partial_exit":    decision.partial_exit,
         })
 
         logger.info(f"AI decision: {decision.action} {decision.symbol} x{decision.quantity}")
@@ -298,6 +395,11 @@ async def _trading_loop():
     global _next_run_at
     from datetime import timedelta
     while _is_running:
+        # Run pre-market scan if market is about to open (13:00-14:00 UTC = 9-10 AM EST)
+        now_utc = datetime.now(timezone.utc)
+        if 13 <= now_utc.hour < 14:
+            await run_premarket_scan()
+
         await run_trading_cycle()
 
         # Sleep longer when market is closed (nights / weekends)

@@ -27,6 +27,9 @@ def analyze_and_decide(
     trend_forecast: str = "",
     news_headlines: list = None,
     full_data_fetcher=None,
+    sector_context: dict = None,      # {symbol: {"sector": str, "sector_pct": float, "sector_signal": str}}
+    recent_trades: list = None,        # last 10 AI decisions from DB
+    earnings_plays: list = None,       # pre-earnings play candidates
 ) -> TradeDecision:
     current_strategy = strategy_service.get_strategy()
     max_position = portfolio_value * current_strategy["max_position_pct"]
@@ -51,13 +54,23 @@ def analyze_and_decide(
         sentiment_flag = f" [NEWS:{news_mentions}]" if news_mentions > 0 else ""
         earnings_flag = f" [EARNINGS:{(earnings_map or {}).get(sym)}]" if (earnings_map or {}).get(sym) else ""
 
+        rel_vol = data.get("relative_volume", 1.0)
+        vol_flag = f" [VOL:{rel_vol:.1f}x]" if rel_vol >= 1.5 else ""
+
         line = (
             f"  - {sym}{penny_flag}{sentiment_flag}{earnings_flag}: ${price}, "
             f"5-day: {data.get('five_day_change_pct', 'N/A')}%, "
             f"RSI: {rsi}, "
             f"MACD hist: {macd.get('histogram', 'N/A')}, "
             f"MA20: ${mas.get('ma20', 'N/A')}, MA50: ${mas.get('ma50', 'N/A')}"
+            f"{vol_flag}"
         )
+
+        if sector_context and sym in sector_context:
+            sc = sector_context[sym]
+            sector_tag = f" [{sc['sector']}:{sc['sector_signal'].upper()}:{sc['sector_pct']:+.1f}%]"
+            line = line + sector_tag
+
         snapshot_lines.append(line)
 
     snapshot_text = "\n".join(snapshot_lines)
@@ -65,6 +78,32 @@ def analyze_and_decide(
     portfolio_context = f"""Portfolio: ${portfolio_value:,.2f} total, ${account_cash:,.2f} cash, max ${max_position:,.2f} per position ({int(current_strategy['max_position_pct']*100)}%)
 Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
 Open positions: {positions_text}"""
+
+    # ── Trade feedback: last 10 decisions ──
+    trade_feedback_text = ""
+    if recent_trades:
+        lines = []
+        for t in recent_trades[:10]:
+            action = t.get("action", "hold")
+            sym = t.get("symbol", "N/A")
+            conf = t.get("confidence", "?")
+            ts = t.get("timestamp", "")[:10]  # just the date
+            reasoning_short = (t.get("reasoning") or "")[:80]
+            lines.append(f"  • {ts} {action.upper()} {sym} [{conf}]: {reasoning_short}")
+        trade_feedback_text = f"""
+## Your Recent Trade Decisions (learn from these)
+{chr(10).join(lines)}
+Note: Use this history to avoid repeating losing setups and to identify what's been working.
+"""
+
+    earnings_plays_text = ""
+    if earnings_plays:
+        lines = [f"  • {p['symbol']}: {p['reason']}" for p in earnings_plays]
+        earnings_plays_text = f"""
+## Pre-Earnings Play Opportunities (small positions, high reward)
+{chr(10).join(lines)}
+These stocks have earnings coming this week. Consider a small position (5% max) for the pre-earnings run-up. SELL before the actual report.
+"""
 
     # ── Step 1: Broad scan — identify top opportunities ──
     macro_text = ""
@@ -121,7 +160,7 @@ Open positions: {positions_text}"""
     step1_prompt = f"""You are an expert stock trader and portfolio manager executing an AGGRESSIVE growth strategy. Your mandate is to find the best trade RIGHT NOW.
 
 {portfolio_context}
-{macro_text}{geo_text}{news_text}
+{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
@@ -132,10 +171,13 @@ Open positions: {positions_text}"""
 - [NEWS:N]: mentioned in N recent news articles — sentiment catalyst (higher = stronger signal)
 - [EARNINGS:today/tomorrow]: avoid — binary risk; [EARNINGS:this_week]: small position only
 - SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — use when market regime is bullish
+- [SECTOR:signal:pct%]: sector momentum — BULLISH sector boosts conviction, BEARISH reduces it
+- [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
 Scan ALL stocks above. Use ALL signals: technicals, news catalysts, momentum, macro alignment.
 Identify the TOP 5 best opportunities right now — stocks most likely to move in the next 1-5 days.
 Prioritize: strong news catalysts + technical breakout + macro tailwind (highest conviction).
+Boost conviction when: [VOL:2x+] + bullish sector + strong technical signal = highest priority. Reduce conviction when sector is BEARISH even if individual stock looks good.
 You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative across the board.
 
 For each, give: symbol, signal type (momentum/reversal/sentiment/breakout/geopolitical/news_catalyst/squeeze), and 1-sentence reason incorporating the specific catalyst driving it.
@@ -174,6 +216,22 @@ Respond in JSON:
         except Exception as e:
             logger.warning(f"Could not fetch deep data: {e}")
 
+    # ── Multi-timeframe: 15-min bars for top candidates ──
+    intraday_summary = {}
+    try:
+        from services import alpaca_service as _alpaca_svc
+        intraday_data = _alpaca_svc.get_intraday_bars(top_symbols, lookback_bars=8)
+        for sym in top_symbols:
+            bars = intraday_data.get(sym, [])
+            if len(bars) >= 3:
+                closes = [b["close"] for b in bars]
+                # Simple trend: last 3 bars going up or down?
+                recent_trend = "up" if closes[-1] > closes[-3] else "down"
+                vol_now = bars[-1]["volume"] if bars else 0
+                intraday_summary[sym] = f"15min trend: {recent_trend}, last bar vol: {vol_now:,}"
+    except Exception as e:
+        logger.warning(f"Intraday bars failed (non-fatal): {e}")
+
     candidate_detail = []
     for opp in opportunities[:5]:
         sym = opp["symbol"]
@@ -188,6 +246,9 @@ Respond in JSON:
             f"MACD hist={indicators.get('macd',{}).get('histogram','N/A')}, "
             f"news mentions={(sentiment or {}).get(sym, 0)}"
         )
+        intraday_info = intraday_summary.get(sym, "")
+        if intraday_info:
+            candidate_detail[-1] += f", {intraday_info}"
 
     default_tp = current_strategy.get("default_take_profit_pct", 0.10)
     default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
@@ -255,6 +316,23 @@ Respond in JSON:
     take_profit_pct = step2_data.get("take_profit_pct") or default_tp
     stop_loss_pct = step2_data.get("stop_loss_pct") or default_sl
     partial_exit = bool(step2_data.get("partial_exit", False))
+
+    # ── Correlation check: don't double-bet on the same sector ──
+    if best_symbol and action == "buy" and positions:
+        try:
+            from services.sector_momentum import get_sector_for_symbol
+            target_sector = get_sector_for_symbol(best_symbol)
+            existing_in_sector = [
+                p.symbol for p in positions
+                if get_sector_for_symbol(p.symbol) == target_sector
+            ]
+            if len(existing_in_sector) >= 2 and target_sector not in ("Unknown", "Broad"):
+                logger.info(f"Correlation check: already have {existing_in_sector} in {target_sector}. Reducing size by 50%.")
+                if qty_suggestion:
+                    qty_suggestion = max(1, qty_suggestion // 2)
+                deep_analysis += f" [Correlation: already holding {', '.join(existing_in_sector)} in {target_sector} — reduced size]"
+        except Exception as e:
+            logger.warning(f"Correlation check failed (non-fatal): {e}")
 
     # Clamp to sane ranges (never more than 40% TP or 10% stop)
     take_profit_pct = max(0.05, min(float(take_profit_pct), 0.40))

@@ -249,12 +249,21 @@ def get_market_snapshot(symbols: list[str]) -> dict:
             if closing_prices and len(closing_prices) >= 2:
                 five_day_change = round((closing_prices[-1] - closing_prices[0]) / closing_prices[0] * 100, 2)
 
+            volume = int(symbol_bars[-1].volume) if symbol_bars else 0
+            volumes = [int(b.volume) for b in symbol_bars]
+            last_20_volumes = volumes[-20:] if len(volumes) >= 20 else volumes
+            avg_volume = int(sum(last_20_volumes) / len(last_20_volumes)) if last_20_volumes else 0
+            relative_volume = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
             snapshot[symbol] = {
                 "current_price": current_price,
                 "five_day_change_pct": five_day_change,
                 "closing_prices": closing_prices,
                 "high_prices": high_prices,
                 "low_prices": low_prices,
+                "volume": volume,
+                "avg_volume": avg_volume,
+                "relative_volume": relative_volume,
             }
     except Exception as e:
         logger.error(f"Error fetching market snapshot: {e}")
@@ -378,9 +387,9 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
         quote_request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
         quotes = data_client.get_stock_latest_quote(quote_request)
 
-        # 5-day bars for change calculation
+        # 30-day bars — enough to get 20 trading days for avg_volume + 5-day change
         end = datetime.now(timezone.utc)
-        start = end - timedelta(days=8)
+        start = end - timedelta(days=30)
         bars_request = StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
@@ -402,13 +411,82 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
                 newest = float(symbol_bars[-1].close)
                 five_day_change = round((newest - oldest) / oldest * 100, 2) if oldest else None
 
+            volume = int(symbol_bars[-1].volume) if symbol_bars else 0
+            volumes = [int(b.volume) for b in symbol_bars]
+            last_20_volumes = volumes[-20:] if len(volumes) >= 20 else volumes
+            avg_volume = int(sum(last_20_volumes) / len(last_20_volumes)) if last_20_volumes else 0
+            relative_volume = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
             snapshot[symbol] = {
                 "current_price": current_price,
                 "five_day_change_pct": five_day_change,
+                "volume": volume,
+                "avg_volume": avg_volume,
+                "relative_volume": relative_volume,
             }
     except Exception as e:
         logger.error(f"Error fetching light snapshot: {e}")
     return snapshot
+
+
+def get_intraday_bars(symbols: list[str], lookback_bars: int = 8) -> dict[str, list[dict]]:
+    """
+    Fetch the last `lookback_bars` 15-minute bars for each symbol.
+    Returns {symbol: [{"time": iso_str, "open": float, "high": float, "low": float, "close": float, "volume": int}, ...]}
+    Used for multi-timeframe entry confirmation — is the stock trending up on the 15-min chart?
+    """
+    from datetime import timedelta
+    result: dict[str, list[dict]] = {}
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=4)
+
+    try:
+        try:
+            from alpaca.data.timeframe import TimeFrameUnit
+            bars_request = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=TimeFrame(15, TimeFrameUnit.Minute),
+                feed="iex",
+                start=start,
+                end=end,
+            )
+        except Exception:
+            bars_request = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=TimeFrame.Minute,
+                timeframe_multiplier=15,
+                feed="iex",
+                start=start,
+                end=end,
+            )
+
+        bars = data_client.get_stock_bars(bars_request)
+        bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
+
+        for symbol in symbols:
+            try:
+                symbol_bars = bars_dict.get(symbol, [])
+                last_bars = symbol_bars[-lookback_bars:] if len(symbol_bars) > lookback_bars else symbol_bars
+                result[symbol] = [
+                    {
+                        "time": bar.timestamp.isoformat(),
+                        "open": float(bar.open),
+                        "high": float(bar.high),
+                        "low": float(bar.low),
+                        "close": float(bar.close),
+                        "volume": int(bar.volume),
+                    }
+                    for bar in last_bars
+                ]
+            except Exception as e:
+                logger.warning(f"Error processing intraday bars for {symbol}: {e}")
+                result[symbol] = []
+    except Exception as e:
+        logger.error(f"Error fetching intraday bars: {e}")
+        for symbol in symbols:
+            result.setdefault(symbol, [])
+
+    return result
 
 
 def get_sentiment_context(symbols: list[str]) -> dict[str, int]:

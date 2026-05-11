@@ -129,6 +129,47 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
             logger.warning(f"cache_set pg error ({e}), stored in memory only.")
 
 
+def get_recent_trade_outcomes(limit: int = 10) -> list[dict]:
+    """
+    Read the most recent AI trade decisions from trade_log.
+    Returns list of dicts with keys: action, symbol, quantity, reasoning, confidence, timestamp, market_regime
+    Used to inject trade history into AI prompts so Claude learns from past decisions.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT action, symbol, quantity, reasoning, confidence, market_regime, timestamp
+                FROM trade_log
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+        results = []
+        for row in rows:
+            action, symbol, quantity, reasoning, confidence, market_regime, timestamp = row
+            results.append({
+                "action": action,
+                "symbol": symbol,
+                "quantity": quantity,
+                "reasoning": reasoning,
+                "confidence": confidence,
+                "market_regime": market_regime,
+                "timestamp": timestamp.isoformat() if timestamp else None,
+            })
+        return results
+    except Exception as e:
+        logger.warning(f"get_recent_trade_outcomes failed ({e}), returning empty list.")
+        return []
+
+
 def log_trade_decision(decision_data: dict) -> None:
     """
     Insert a record of an AI trade decision into the trade_log table.
