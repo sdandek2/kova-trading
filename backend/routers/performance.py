@@ -20,78 +20,106 @@ def _compute_sharpe(returns: list[float], risk_free_rate: float = 0.05) -> float
 
 @router.get("/")
 def get_performance():
-    orders = alpaca_service.get_orders(limit=200)
-    filled = [o for o in orders if o.status == "filled" and o.filled_avg_price]
-
-    # Win rate: count profitable sell orders
-    sells = [o for o in filled if o.side == "sell"]
-    wins = 0
-    total_gain = 0.0
-    total_loss = 0.0
-
-    for order in sells:
-        # Find matching buy for same symbol
-        matching_buys = [o for o in filled if o.side == "buy" and o.symbol == order.symbol and o.created_at < order.created_at]
-        if matching_buys:
-            buy = max(matching_buys, key=lambda x: x.created_at)
-            pnl = (order.filled_avg_price - buy.filled_avg_price) * order.qty
-            if pnl > 0:
-                wins += 1
-                total_gain += pnl
-            else:
-                total_loss += abs(pnl)
-
-    win_rate = round(wins / len(sells) * 100, 1) if sells else 0.0
-    avg_win = round(total_gain / wins, 2) if wins else 0.0
-    avg_loss = round(total_loss / (len(sells) - wins), 2) if (len(sells) - wins) > 0 else 0.0
-    profit_factor = round(total_gain / total_loss, 2) if total_loss > 0 else 0.0
-
-    # Portfolio history for Sharpe
-    history = alpaca_service.get_portfolio_history(period="1M")
-    daily_returns = []
-    for i in range(1, len(history)):
-        prev = history[i-1]["equity"]
-        curr = history[i]["equity"]
-        if prev > 0:
-            daily_returns.append((curr - prev) / prev)
-
-    sharpe = _compute_sharpe(daily_returns)
-
-    # SPY comparison: get SPY 1M return
-    spy_return = None
     try:
-        from datetime import timedelta
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame
-        from alpaca.data.historical import StockHistoricalDataClient
-        from config import settings
-        data_client = StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=30)
-        bars_req = StockBarsRequest(symbol_or_symbols=["SPY"], timeframe=TimeFrame.Day, start=start, end=end)
-        bars = data_client.get_stock_bars(bars_req)
-        spy_bars = bars.get("SPY", [])
-        if len(spy_bars) >= 2:
-            spy_return = round((float(spy_bars[-1].close) - float(spy_bars[0].close)) / float(spy_bars[0].close) * 100, 2)
+        orders = alpaca_service.get_orders(limit=200)
+        filled = [o for o in orders if o.status == "filled" and o.filled_avg_price]
+
+        # Win rate: count profitable sell orders
+        sells = [o for o in filled if o.side == "sell"]
+
+        if not sells:
+            win_rate = 0.0
+            avg_win = 0.0
+            avg_loss = 0.0
+            profit_factor = 0.0
+        else:
+            wins = 0
+            total_gain = 0.0
+            total_loss = 0.0
+
+            for order in sells:
+                # Find matching buy for same symbol
+                matching_buys = [o for o in filled if o.side == "buy" and o.symbol == order.symbol and o.created_at < order.created_at]
+                if matching_buys:
+                    buy = max(matching_buys, key=lambda x: x.created_at)
+                    pnl = (order.filled_avg_price - buy.filled_avg_price) * order.qty
+                    if pnl > 0:
+                        wins += 1
+                        total_gain += pnl
+                    else:
+                        total_loss += abs(pnl)
+
+            win_rate = round(wins / len(sells) * 100, 1)
+            avg_win = round(total_gain / wins, 2) if wins else 0.0
+            avg_loss = round(total_loss / (len(sells) - wins), 2) if (len(sells) - wins) > 0 else 0.0
+            profit_factor = round(total_gain / total_loss, 2) if total_loss > 0 else 0.0
+
+        # Portfolio history for Sharpe
+        sharpe = 0.0
+        portfolio_return = None
+        history = []
+        try:
+            history = alpaca_service.get_portfolio_history(period="1M")
+            daily_returns = []
+            for i in range(1, len(history)):
+                prev = history[i-1]["equity"]
+                curr = history[i]["equity"]
+                if prev > 0:
+                    daily_returns.append((curr - prev) / prev)
+
+            sharpe = _compute_sharpe(daily_returns)
+
+            if history and len(history) >= 2:
+                start_equity = history[0]["equity"]
+                end_equity = history[-1]["equity"]
+                if start_equity > 0:
+                    portfolio_return = round((end_equity - start_equity) / start_equity * 100, 2)
+        except Exception:
+            sharpe = 0.0
+            portfolio_return = None
+
+        # SPY comparison: get SPY 1M return
+        spy_return = None
+        try:
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+            from alpaca.data.historical import StockHistoricalDataClient
+            from config import settings
+            data_client = StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_secret_key)
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=30)
+            bars_req = StockBarsRequest(symbol_or_symbols=["SPY"], timeframe=TimeFrame.Day, start=start, end=end)
+            bars = data_client.get_stock_bars(bars_req)
+            spy_bars = bars.get("SPY", [])
+            if len(spy_bars) >= 2:
+                spy_return = round((float(spy_bars[-1].close) - float(spy_bars[0].close)) / float(spy_bars[0].close) * 100, 2)
+        except Exception:
+            pass
+
+        return {
+            "total_trades": len(filled),
+            "total_orders": len(orders),
+            "filled_orders": len(filled),
+            "win_rate": win_rate,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "sharpe_ratio": sharpe,
+            "portfolio_return_1m": portfolio_return,
+            "spy_return_1m": spy_return,
+            "alpha": round(portfolio_return - spy_return, 2) if portfolio_return is not None and spy_return is not None else None,
+        }
     except Exception:
-        pass
-
-    # Portfolio 1M return
-    portfolio_return = None
-    if history and len(history) >= 2:
-        start_equity = history[0]["equity"]
-        end_equity = history[-1]["equity"]
-        if start_equity > 0:
-            portfolio_return = round((end_equity - start_equity) / start_equity * 100, 2)
-
-    return {
-        "total_trades": len(filled),
-        "win_rate": win_rate,
-        "avg_win": avg_win,
-        "avg_loss": avg_loss,
-        "profit_factor": profit_factor,
-        "sharpe_ratio": sharpe,
-        "portfolio_return_1m": portfolio_return,
-        "spy_return_1m": spy_return,
-        "alpha": round(portfolio_return - spy_return, 2) if portfolio_return is not None and spy_return is not None else None,
-    }
+        return {
+            "total_trades": 0,
+            "total_orders": 0,
+            "filled_orders": 0,
+            "win_rate": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "profit_factor": 0.0,
+            "sharpe_ratio": 0.0,
+            "portfolio_return_1m": None,
+            "spy_return_1m": None,
+            "alpha": None,
+        }

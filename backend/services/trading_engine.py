@@ -5,6 +5,7 @@ from typing import Optional
 
 from models.trade import TradingStatus, AIAnalysis
 from services import alpaca_service, claude_service
+from services.db import cache_get, cache_set, log_trade_decision
 from services.indicators import compute_atr, compute_rsi, volatility_adjusted_quantity
 from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out
 from services.earnings import get_upcoming_earnings
@@ -43,7 +44,19 @@ def get_status() -> TradingStatus:
 
 
 def get_latest_analysis() -> Optional[AIAnalysis]:
-    return _latest_analysis
+    global _latest_analysis
+    if _latest_analysis is not None:
+        return _latest_analysis
+    # Attempt to restore from the persistent cache after a restart
+    try:
+        cached = cache_get("latest_ai_decision")
+        if cached:
+            _latest_analysis = AIAnalysis(**cached)
+            logger.info("Restored latest AI analysis from Postgres cache.")
+            return _latest_analysis
+    except Exception as e:
+        logger.warning(f"Could not restore latest_ai_decision from cache: {e}")
+    return None
 
 
 async def run_trading_cycle():
@@ -138,6 +151,21 @@ async def run_trading_cycle():
             symbol=decision.symbol,
             timestamp=_last_analysis_at,
         )
+
+        # Persist so the analysis survives Railway restarts
+        cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
+
+        # Log the AI decision for future performance analysis
+        log_trade_decision({
+            "timestamp":     _last_analysis_at,
+            "action":        decision.action,
+            "symbol":        decision.symbol,
+            "quantity":      decision.quantity,
+            "reasoning":     decision.reasoning,
+            "confidence":    getattr(decision, "confidence", None),
+            "market_regime": macro.get("market_regime"),
+            "geo_risk":      geo.get("risk_level"),
+        })
 
         logger.info(f"AI decision: {decision.action} {decision.symbol} x{decision.quantity}")
         logger.info(f"Reasoning: {decision.reasoning}")

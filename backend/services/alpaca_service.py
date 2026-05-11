@@ -387,7 +387,9 @@ def is_market_open() -> bool:
 
 
 def get_news(symbols: list[str] = None, limit: int = 20) -> list[dict]:
-    """Fetch latest news for watchlist symbols via Alpaca News API."""
+    """Fetch latest news from Alpaca News API + Yahoo Finance RSS, deduplicated by headline."""
+    import httpx
+    import xml.etree.ElementTree as ET
     from alpaca.data.requests import NewsRequest
     from alpaca.data.historical.news import NewsClient
 
@@ -398,25 +400,91 @@ def get_news(symbols: list[str] = None, limit: int = 20) -> list[dict]:
 
     target_symbols = symbols or ["AAPL", "MSFT", "GOOGL", "TSLA", "SPY", "NVDA"]
 
+    result = []
+    seen_headlines: set[str] = set()
+
+    # ── Alpaca News ──
     try:
         request = NewsRequest(
             symbols=",".join(target_symbols),
             limit=limit,
+            exclude_contentless=True,
         )
         news = news_client.get_news(request)
-        result = []
         for article in news.news:
-            result.append({
-                "id": str(article.id),
-                "headline": article.headline,
-                "summary": article.summary or "",
-                "author": article.author or "",
-                "created_at": article.created_at.isoformat() if article.created_at else None,
-                "url": article.url or "",
-                "symbols": article.symbols or [],
-                "source": getattr(article, 'source', ''),
-            })
-        return result
+            headline = article.headline or ""
+            if headline and headline not in seen_headlines:
+                seen_headlines.add(headline)
+                result.append({
+                    "id": str(article.id),
+                    "headline": headline,
+                    "summary": article.summary or "",
+                    "author": article.author or "",
+                    "created_at": article.created_at.isoformat() if article.created_at else None,
+                    "url": article.url or "",
+                    "symbols": article.symbols or [],
+                    "source": getattr(article, 'source', ''),
+                })
+    except TypeError:
+        # exclude_contentless not supported in this version — retry without it
+        try:
+            request = NewsRequest(
+                symbols=",".join(target_symbols),
+                limit=limit,
+            )
+            news = news_client.get_news(request)
+            for article in news.news:
+                headline = article.headline or ""
+                if headline and headline not in seen_headlines:
+                    seen_headlines.add(headline)
+                    result.append({
+                        "id": str(article.id),
+                        "headline": headline,
+                        "summary": article.summary or "",
+                        "author": article.author or "",
+                        "created_at": article.created_at.isoformat() if article.created_at else None,
+                        "url": article.url or "",
+                        "symbols": article.symbols or [],
+                        "source": getattr(article, 'source', ''),
+                    })
+        except Exception as e:
+            logger.error(f"Error fetching Alpaca news: {e}")
     except Exception as e:
-        logger.error(f"Error fetching news: {e}")
-        return []
+        logger.error(f"Error fetching Alpaca news: {e}")
+
+    # ── Yahoo Finance RSS (supplemental) ──
+    try:
+        rss_url = "https://finance.yahoo.com/news/rssindex"
+        resp = httpx.get(rss_url, timeout=5.0, follow_redirects=True)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.text)
+        ns = {"media": "http://search.yahoo.com/mrss/"}
+        items = root.findall(".//item")
+        for item in items:
+            headline = (item.findtext("title") or "").strip()
+            if not headline or headline in seen_headlines:
+                continue
+            seen_headlines.add(headline)
+            pub_date = item.findtext("pubDate") or ""
+            # Convert RSS date to ISO if possible
+            created_at = None
+            if pub_date:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    created_at = parsedate_to_datetime(pub_date).isoformat()
+                except Exception:
+                    created_at = pub_date
+            result.append({
+                "id": "",
+                "headline": headline,
+                "summary": (item.findtext("description") or "").strip(),
+                "author": "",
+                "created_at": created_at,
+                "url": (item.findtext("link") or "").strip(),
+                "symbols": [],
+                "source": "Yahoo Finance",
+            })
+    except Exception as e:
+        logger.warning(f"Yahoo Finance RSS fetch failed (non-fatal): {e}")
+
+    return result

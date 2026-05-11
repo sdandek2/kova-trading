@@ -24,6 +24,37 @@ def place_manual_order(req: ManualOrderRequest):
         raise HTTPException(status_code=400, detail="side must be buy or sell")
     if req.qty < 1:
         raise HTTPException(status_code=400, detail="qty must be at least 1")
+
+    # Validate symbol exists and is tradeable
+    try:
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.requests import MarketOrderRequest, GetAssetsRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, AssetStatus
+        from config import settings
+        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
+        try:
+            asset = client.get_asset(symbol)
+            if not asset.tradable:
+                raise HTTPException(status_code=400, detail=f"{symbol} is not currently tradeable")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Symbol '{symbol}' not found or cannot be traded")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # For sell orders, verify the user actually owns enough shares
+    if req.side == "sell":
+        positions = alpaca_service.get_positions()
+        position = next((p for p in positions if p.symbol == symbol), None)
+        if position is None:
+            raise HTTPException(status_code=400, detail=f"No position in {symbol}")
+        owned = int(position.qty)
+        if req.qty > owned:
+            raise HTTPException(status_code=400, detail=f"You only own {owned} shares of {symbol}")
+
     try:
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import MarketOrderRequest

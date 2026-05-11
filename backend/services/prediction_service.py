@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -63,6 +64,14 @@ def get_stock_prediction(symbol: str) -> dict:
         low_prices = sym_data.get("low_prices", [])
         current_price = sym_data.get("current_price")
         result["current_price"] = current_price
+
+        # Early exit if no price data — OTC, delisted, or not on Alpaca
+        if current_price is None:
+            result["reasoning"] = (
+                f"No price data available for {symbol}. "
+                "It may be OTC, delisted, or not tradeable on Alpaca."
+            )
+            return result
 
         indicators = compute_all(closing_prices) if closing_prices else {}
         atr = compute_atr(high_prices, low_prices, closing_prices)
@@ -162,7 +171,15 @@ Respond ONLY in JSON with this exact structure:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        data = json.loads(raw.strip())
+        try:
+            data = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            # AI returned malformed JSON — try to extract the JSON object via regex
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+            else:
+                raise ValueError(f"Could not parse AI response as JSON: {raw[:200]}")
 
         result.update({k: v for k, v in data.items() if k in result})
         result["generated_at"] = datetime.now(timezone.utc).isoformat()

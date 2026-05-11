@@ -127,3 +127,52 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
             logger.debug(f"cache_set (pg): {key} ttl={ttl_seconds}s")
         except Exception as e:
             logger.warning(f"cache_set pg error ({e}), stored in memory only.")
+
+
+def log_trade_decision(decision_data: dict) -> None:
+    """
+    Insert a record of an AI trade decision into the trade_log table.
+    Never raises — if the DB is unavailable, logs a warning and continues.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            logger.warning("log_trade_decision: no DB connection, skipping log.")
+            return
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id            SERIAL PRIMARY KEY,
+                    timestamp     TIMESTAMPTZ NOT NULL,
+                    action        TEXT NOT NULL,
+                    symbol        TEXT,
+                    quantity      INTEGER,
+                    reasoning     TEXT,
+                    confidence    TEXT,
+                    market_regime TEXT,
+                    geo_risk      TEXT
+                )
+            """)
+            cur.execute(
+                """
+                INSERT INTO trade_log
+                    (timestamp, action, symbol, quantity, reasoning, confidence, market_regime, geo_risk)
+                VALUES
+                    (%(timestamp)s, %(action)s, %(symbol)s, %(quantity)s,
+                     %(reasoning)s, %(confidence)s, %(market_regime)s, %(geo_risk)s)
+                """,
+                {
+                    "timestamp":     decision_data.get("timestamp", datetime.now(timezone.utc)),
+                    "action":        decision_data.get("action", "hold"),
+                    "symbol":        decision_data.get("symbol"),
+                    "quantity":      decision_data.get("quantity"),
+                    "reasoning":     decision_data.get("reasoning"),
+                    "confidence":    decision_data.get("confidence"),
+                    "market_regime": decision_data.get("market_regime"),
+                    "geo_risk":      decision_data.get("geo_risk"),
+                },
+            )
+        logger.info(f"log_trade_decision: logged action={decision_data.get('action')} symbol={decision_data.get('symbol')}")
+    except Exception as e:
+        logger.warning(f"log_trade_decision failed ({e}), continuing without logging.")

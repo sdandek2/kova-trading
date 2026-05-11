@@ -1,4 +1,4 @@
-import os
+from services.db import cache_get, cache_set
 
 # Strategies define how aggressively the bot trades
 STRATEGIES = {
@@ -37,24 +37,20 @@ STRATEGIES = {
     },
 }
 
-_SETTING_FILE = os.path.join(os.path.dirname(__file__), "..", "strategy_setting.txt")
 _DEFAULT = "aggressive"
+_CACHE_KEY = "user_pref:strategy"
+_CACHE_TTL = 31536000  # 365 days in seconds
 
 
 def _read_key() -> str:
-    try:
-        with open(_SETTING_FILE, "r") as f:
-            key = f.read().strip().lower()
-            if key in STRATEGIES:
-                return key
-    except FileNotFoundError:
-        pass
+    value = cache_get(_CACHE_KEY)
+    if isinstance(value, str) and value in STRATEGIES:
+        return value
     return _DEFAULT
 
 
 def _write_key(key: str):
-    with open(_SETTING_FILE, "w") as f:
-        f.write(key)
+    cache_set(_CACHE_KEY, key, _CACHE_TTL)
 
 
 def get_strategy() -> dict:

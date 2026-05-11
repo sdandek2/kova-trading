@@ -13,6 +13,21 @@ struct TradeSheet: View {
     @State private var errorMessage: String?
     @State private var successMessage: String?
 
+    // Price & position state
+    @State private var currentPrice: Double? = nil
+    @State private var isFetchingPrice = false
+    @State private var ownedQty: Double? = nil  // shares owned for sell validation
+
+    private var estimatedTotal: Double? {
+        guard let price = currentPrice, let qty = Double(qtyText), qty > 0 else { return nil }
+        return qty * price
+    }
+
+    private var maxSellQty: Int? {
+        guard side == "sell", let owned = ownedQty else { return nil }
+        return Int(owned)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -22,6 +37,14 @@ struct TradeSheet: View {
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                             .font(.headline)
+                        if isFetchingPrice {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else if let price = currentPrice {
+                            Text(String(format: "$%.2f", price))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -38,6 +61,35 @@ struct TradeSheet: View {
                         TextField("Qty", text: $qtyText)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
+                    }
+
+                    if let total = estimatedTotal {
+                        HStack {
+                            Text("Estimated Total")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(String(format: "~$%.2f", total))
+                                .fontWeight(.medium)
+                        }
+                        .font(.subheadline)
+                    }
+
+                    if side == "sell" {
+                        if let maxQty = maxSellQty {
+                            if maxQty == 0 {
+                                Text("You have no shares of \(symbol.uppercased()) to sell.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            } else {
+                                Text("You own \(maxQty) share\(maxQty == 1 ? "" : "s") of \(symbol.uppercased()).")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if !symbol.isEmpty {
+                            Text("You can only sell shares you own — the order will be rejected if you exceed your position.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -87,7 +139,36 @@ struct TradeSheet: View {
                 symbol = prefillSymbol
                 side = prefillSide
                 if let qty = prefillQty { qtyText = "\(qty)" }
+                if !symbol.isEmpty {
+                    Task { await fetchPriceAndPosition(for: symbol) }
+                }
             }
+            .onChange(of: symbol) { newSymbol in
+                let trimmed = newSymbol.trimmingCharacters(in: .whitespaces).uppercased()
+                guard trimmed.count >= 1 else {
+                    currentPrice = nil
+                    ownedQty = nil
+                    return
+                }
+                Task { await fetchPriceAndPosition(for: trimmed) }
+            }
+        }
+    }
+
+    private func fetchPriceAndPosition(for sym: String) async {
+        let upper = sym.uppercased()
+        guard !upper.isEmpty else { return }
+        isFetchingPrice = true
+        defer { isFetchingPrice = false }
+
+        // Fetch current price from predictions endpoint
+        if let prediction = try? await APIService.shared.getStockPrediction(symbol: upper) {
+            currentPrice = prediction.current_price
+        }
+
+        // Fetch owned quantity for sell validation
+        if let positions = try? await APIService.shared.getPositions() {
+            ownedQty = positions.first(where: { $0.symbol == upper })?.qty ?? 0
         }
     }
 
@@ -96,6 +177,13 @@ struct TradeSheet: View {
             errorMessage = "Enter a valid quantity"
             return
         }
+
+        // Warn if trying to sell more than owned
+        if side == "sell", let maxQty = maxSellQty, qty > maxQty {
+            errorMessage = "You only own \(maxQty) share\(maxQty == 1 ? "" : "s") of \(symbol.uppercased()). Reduce quantity or the order will be rejected."
+            return
+        }
+
         isSubmitting = true
         errorMessage = nil
         successMessage = nil
