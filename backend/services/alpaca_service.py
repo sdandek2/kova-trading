@@ -434,8 +434,39 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     from email.utils import parsedate_to_datetime
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    import re as _re
+    import html as _html
+
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KovaBot/1.0; +https://kova.app)"}
     target_symbols = symbols or ["AAPL", "MSFT", "GOOGL", "TSLA", "SPY", "NVDA"]
+
+    # Financial keyword filter — at least one must appear in the headline or summary
+    # to be included. Keeps pet food press releases and unrelated PRs out.
+    _FINANCE_KEYWORDS = {
+        "stock", "share", "market", "invest", "earn", "revenue", "profit", "loss",
+        "ipo", "sec", "fed", "rate", "bond", "etf", "fund", "quarter", "fiscal",
+        "dividend", "acquire", "merger", "guidance", "forecast", "analyst", "upgrade",
+        "downgrade", "buy", "sell", "trade", "portfolio", "equity", "nasdaq", "nyse",
+        "s&p", "dow", "bitcoin", "crypto", "economy", "gdp", "inflation", "cpi",
+        "earnings", "outlook", "financial", "capital", "asset", "valuation", "ipo",
+        "short", "rally", "correction", "bull", "bear", "volatility", "hedge",
+        "breakout", "momentum", "sector", "commodity", "oil", "gold", "yield",
+    }
+
+    def _is_financial(headline: str, summary: str) -> bool:
+        text = (headline + " " + summary).lower()
+        return any(kw in text for kw in _FINANCE_KEYWORDS)
+
+    def _clean_text(raw: str) -> str:
+        """Strip HTML tags and decode HTML entities from text."""
+        if not raw:
+            return ""
+        # Decode HTML entities (&amp; &#39; &lt; etc.)
+        decoded = _html.unescape(raw)
+        # Remove HTML tags
+        cleaned = _re.sub(r"<[^>]+>", "", decoded)
+        # Collapse extra whitespace
+        return " ".join(cleaned.split()).strip()
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -453,18 +484,22 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         try:
             root = ET.fromstring(xml_text)
             for item in root.findall(".//item"):
-                headline = (item.findtext("title") or "").strip()
+                headline = _clean_text(item.findtext("title") or "")
                 if not headline:
+                    continue
+                summary = _clean_text(item.findtext("description") or "")[:400]
+                # Skip non-financial press releases (pet food, medical devices, etc.)
+                if not _is_financial(headline, summary):
                     continue
                 articles.append({
                     "id": "",
                     "headline": headline,
-                    "summary": (item.findtext("description") or "").strip()[:500],
-                    "author": (
+                    "summary": summary,
+                    "author": _clean_text(
                         item.findtext("author")
                         or item.findtext("{http://purl.org/dc/elements/1.1/}creator")
                         or ""
-                    ).strip(),
+                    ),
                     "created_at": _parse_date(item.findtext("pubDate") or ""),
                     "url": (item.findtext("link") or "").strip(),
                     "symbols": symbol_hints,
@@ -481,13 +516,15 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         try:
             root = ET.fromstring(xml_text)
             for entry in root.findall(f"{{{NS}}}entry"):
-                headline = (entry.findtext(f"{{{NS}}}title") or "").strip()
+                headline = _clean_text(entry.findtext(f"{{{NS}}}title") or "")
                 if not headline:
                     continue
                 link_el = entry.find(f"{{{NS}}}link")
                 url = (link_el.get("href", "") if link_el is not None else "").strip()
                 updated = entry.findtext(f"{{{NS}}}updated") or ""
-                summary = (entry.findtext(f"{{{NS}}}summary") or "").strip()[:500]
+                summary = _clean_text(entry.findtext(f"{{{NS}}}summary") or "")[:400]
+                if not _is_financial(headline, summary):
+                    continue
                 articles.append({
                     "id": "",
                     "headline": headline,
@@ -548,8 +585,9 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         # Nasdaq Trader — halts, listing changes, market alerts
         ("https://www.nasdaqtrader.com/rss.aspx?feed=traderNews", "Nasdaq Trader", "rss", []),
 
-        # PR Newswire — financial press releases
-        ("https://www.prnewswire.com/rss/news-releases-list.rss", "PR Newswire", "rss", []),
+        # PR Newswire — financial & earnings specific feeds only (not the general feed which is too noisy)
+        ("https://www.prnewswire.com/rss/financial-news-releases-list.rss", "PR Newswire", "rss", []),
+        ("https://www.prnewswire.com/rss/earnings-releases-list.rss", "PR Newswire", "rss", []),
     ]
 
     # NOTE: Yahoo Finance per-symbol RSS feeds (finance.yahoo.com/rss/headline?s=AAPL)
@@ -582,13 +620,14 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
             req = NewsRequest(symbols=",".join(target_symbols), limit=20)
             news = nc.get_news(req)
         for article in news.news:
-            headline = article.headline or ""
+            headline = _clean_text(article.headline or "")
             if not headline:
                 continue
+            summary = _clean_text(article.summary or "")[:400]
             all_articles.append({
                 "id": str(article.id),
                 "headline": headline,
-                "summary": (article.summary or "")[:500],
+                "summary": summary,
                 "author": article.author or "",
                 "created_at": article.created_at.isoformat() if article.created_at else None,
                 "url": article.url or "",
