@@ -386,105 +386,207 @@ def is_market_open() -> bool:
     return clock.is_open
 
 
-def get_news(symbols: list[str] = None, limit: int = 20) -> list[dict]:
-    """Fetch latest news from Alpaca News API + Yahoo Finance RSS, deduplicated by headline."""
+def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
+    """
+    Fetch latest financial news in parallel from 10+ free sources:
+
+    Real-time / near real-time (no API key):
+      - SEC EDGAR 8-K filings (official material events — earnings, M&A, guidance)
+      - Yahoo Finance per-symbol RSS (targeted, ~minutes fresh)
+      - Yahoo Finance general index
+      - MarketWatch top stories + market pulse
+      - CNBC markets + investing
+      - Reuters business
+      - GlobeNewswire (earnings press releases)
+      - Nasdaq Trader (halts, listing alerts)
+      - PR Newswire (press releases)
+
+    Supplemental (may have delay):
+      - Alpaca / Benzinga (kept as fallback — symbol-tagged, useful even if delayed)
+
+    All sources run in parallel threads. Results are deduplicated by headline
+    and sorted newest-first.
+    """
     import httpx
     import xml.etree.ElementTree as ET
-    from alpaca.data.requests import NewsRequest
-    from alpaca.data.historical.news import NewsClient
+    from email.utils import parsedate_to_datetime
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    news_client = NewsClient(
-        settings.alpaca_api_key,
-        settings.alpaca_secret_key,
-    )
-
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KovaBot/1.0; +https://kova.app)"}
     target_symbols = symbols or ["AAPL", "MSFT", "GOOGL", "TSLA", "SPY", "NVDA"]
 
-    result = []
-    seen_headlines: set[str] = set()
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
-    # ── Alpaca News ──
+    def _parse_date(raw: str) -> str | None:
+        if not raw:
+            return None
+        try:
+            return parsedate_to_datetime(raw).isoformat()
+        except Exception:
+            return raw
+
+    def _parse_rss(xml_text: str, source: str, symbol_hints: list[str] = []) -> list[dict]:
+        """Parse standard RSS (item-based) XML."""
+        articles = []
+        try:
+            root = ET.fromstring(xml_text)
+            for item in root.findall(".//item"):
+                headline = (item.findtext("title") or "").strip()
+                if not headline:
+                    continue
+                articles.append({
+                    "id": "",
+                    "headline": headline,
+                    "summary": (item.findtext("description") or "").strip()[:500],
+                    "author": (
+                        item.findtext("author")
+                        or item.findtext("{http://purl.org/dc/elements/1.1/}creator")
+                        or ""
+                    ).strip(),
+                    "created_at": _parse_date(item.findtext("pubDate") or ""),
+                    "url": (item.findtext("link") or "").strip(),
+                    "symbols": symbol_hints,
+                    "source": source,
+                })
+        except Exception as e:
+            logger.warning(f"RSS parse error ({source}): {e}")
+        return articles
+
+    def _parse_atom(xml_text: str, source: str, symbol_hints: list[str] = []) -> list[dict]:
+        """Parse Atom feed (entry-based) XML — used by SEC EDGAR."""
+        articles = []
+        NS = "http://www.w3.org/2005/Atom"
+        try:
+            root = ET.fromstring(xml_text)
+            for entry in root.findall(f"{{{NS}}}entry"):
+                headline = (entry.findtext(f"{{{NS}}}title") or "").strip()
+                if not headline:
+                    continue
+                link_el = entry.find(f"{{{NS}}}link")
+                url = (link_el.get("href", "") if link_el is not None else "").strip()
+                updated = entry.findtext(f"{{{NS}}}updated") or ""
+                summary = (entry.findtext(f"{{{NS}}}summary") or "").strip()[:500]
+                articles.append({
+                    "id": "",
+                    "headline": headline,
+                    "summary": summary,
+                    "author": "",
+                    "created_at": updated or None,
+                    "url": url,
+                    "symbols": symbol_hints,
+                    "source": source,
+                })
+        except Exception as e:
+            logger.warning(f"Atom parse error ({source}): {e}")
+        return articles
+
+    def fetch(url: str, source: str, fmt: str = "rss",
+              symbol_hints: list[str] = [], timeout: float = 7.0) -> list[dict]:
+        try:
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True, headers=HEADERS)
+            resp.raise_for_status()
+            if fmt == "atom":
+                return _parse_atom(resp.text, source, symbol_hints)
+            return _parse_rss(resp.text, source, symbol_hints)
+        except Exception as e:
+            logger.warning(f"{source} fetch failed (non-fatal): {e}")
+            return []
+
+    # ── Build task list ───────────────────────────────────────────────────────
+
+    tasks = [
+        # SEC EDGAR — 8-K filings (earnings, M&A, material events). Updated every 10 min.
+        ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&dateb=&owner=include&count=20&output=atom",
+         "SEC EDGAR", "atom", []),
+
+        # Yahoo Finance — general market index
+        ("https://finance.yahoo.com/news/rssindex", "Yahoo Finance", "rss", []),
+
+        # MarketWatch — top stories
+        ("https://feeds.marketwatch.com/marketwatch/topstories/", "MarketWatch", "rss", []),
+
+        # MarketWatch — market pulse (breaking, shorter items)
+        ("https://feeds.marketwatch.com/marketwatch/marketpulse/", "MarketWatch", "rss", []),
+
+        # CNBC — markets
+        ("https://www.cnbc.com/id/100003114/device/rss/rss.html", "CNBC", "rss", []),
+
+        # CNBC — investing
+        ("https://www.cnbc.com/id/15839069/device/rss/rss.html", "CNBC", "rss", []),
+
+        # Reuters — business & finance
+        ("https://feeds.reuters.com/reuters/businessNews", "Reuters", "rss", []),
+
+        # GlobeNewswire — earnings press releases & M&A
+        ("https://www.globenewswire.com/RssFeed/subjectcode/23-Mergers+%26+Acquisitions+And+Alliance",
+         "GlobeNewswire", "rss", []),
+        ("https://www.globenewswire.com/RssFeed/subjectcode/10-Earnings",
+         "GlobeNewswire", "rss", []),
+
+        # Nasdaq Trader — halts, listing changes, market alerts
+        ("https://www.nasdaqtrader.com/rss.aspx?feed=traderNews", "Nasdaq Trader", "rss", []),
+
+        # PR Newswire — financial press releases
+        ("https://www.prnewswire.com/rss/news-releases-list.rss", "PR Newswire", "rss", []),
+    ]
+
+    # Yahoo Finance per-symbol (targeted, most relevant to watchlist)
+    for sym in target_symbols[:6]:
+        tasks.append((
+            f"https://finance.yahoo.com/rss/headline?s={sym}",
+            "Yahoo Finance", "rss", [sym],
+        ))
+
+    # ── Fetch all in parallel ─────────────────────────────────────────────────
+
+    all_articles: list[dict] = []
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {
+            pool.submit(fetch, url, source, fmt, hints): source
+            for url, source, fmt, hints in tasks
+        }
+        for future in as_completed(futures):
+            try:
+                all_articles.extend(future.result())
+            except Exception as e:
+                logger.warning(f"News future error: {e}")
+
+    # ── Alpaca / Benzinga (sequential — uses SDK, not httpx) ─────────────────
     try:
-        request = NewsRequest(
-            symbols=",".join(target_symbols),
-            limit=limit,
-            exclude_contentless=True,
-        )
-        news = news_client.get_news(request)
+        from alpaca.data.requests import NewsRequest
+        from alpaca.data.historical.news import NewsClient
+        nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
+        try:
+            req = NewsRequest(symbols=",".join(target_symbols), limit=20, exclude_contentless=True)
+            news = nc.get_news(req)
+        except TypeError:
+            req = NewsRequest(symbols=",".join(target_symbols), limit=20)
+            news = nc.get_news(req)
         for article in news.news:
             headline = article.headline or ""
-            if headline and headline not in seen_headlines:
-                seen_headlines.add(headline)
-                result.append({
-                    "id": str(article.id),
-                    "headline": headline,
-                    "summary": article.summary or "",
-                    "author": article.author or "",
-                    "created_at": article.created_at.isoformat() if article.created_at else None,
-                    "url": article.url or "",
-                    "symbols": article.symbols or [],
-                    "source": getattr(article, 'source', ''),
-                })
-    except TypeError:
-        # exclude_contentless not supported in this version — retry without it
-        try:
-            request = NewsRequest(
-                symbols=",".join(target_symbols),
-                limit=limit,
-            )
-            news = news_client.get_news(request)
-            for article in news.news:
-                headline = article.headline or ""
-                if headline and headline not in seen_headlines:
-                    seen_headlines.add(headline)
-                    result.append({
-                        "id": str(article.id),
-                        "headline": headline,
-                        "summary": article.summary or "",
-                        "author": article.author or "",
-                        "created_at": article.created_at.isoformat() if article.created_at else None,
-                        "url": article.url or "",
-                        "symbols": article.symbols or [],
-                        "source": getattr(article, 'source', ''),
-                    })
-        except Exception as e:
-            logger.error(f"Error fetching Alpaca news: {e}")
-    except Exception as e:
-        logger.error(f"Error fetching Alpaca news: {e}")
-
-    # ── Yahoo Finance RSS (supplemental) ──
-    try:
-        rss_url = "https://finance.yahoo.com/news/rssindex"
-        resp = httpx.get(rss_url, timeout=5.0, follow_redirects=True)
-        resp.raise_for_status()
-        root = ET.fromstring(resp.text)
-        ns = {"media": "http://search.yahoo.com/mrss/"}
-        items = root.findall(".//item")
-        for item in items:
-            headline = (item.findtext("title") or "").strip()
-            if not headline or headline in seen_headlines:
+            if not headline:
                 continue
-            seen_headlines.add(headline)
-            pub_date = item.findtext("pubDate") or ""
-            # Convert RSS date to ISO if possible
-            created_at = None
-            if pub_date:
-                try:
-                    from email.utils import parsedate_to_datetime
-                    created_at = parsedate_to_datetime(pub_date).isoformat()
-                except Exception:
-                    created_at = pub_date
-            result.append({
-                "id": "",
+            all_articles.append({
+                "id": str(article.id),
                 "headline": headline,
-                "summary": (item.findtext("description") or "").strip(),
-                "author": "",
-                "created_at": created_at,
-                "url": (item.findtext("link") or "").strip(),
-                "symbols": [],
-                "source": "Yahoo Finance",
+                "summary": (article.summary or "")[:500],
+                "author": article.author or "",
+                "created_at": article.created_at.isoformat() if article.created_at else None,
+                "url": article.url or "",
+                "symbols": article.symbols or [],
+                "source": getattr(article, "source", "Benzinga"),
             })
     except Exception as e:
-        logger.warning(f"Yahoo Finance RSS fetch failed (non-fatal): {e}")
+        logger.warning(f"Alpaca news fetch failed (non-fatal): {e}")
 
-    return result
+    # ── Deduplicate, sort newest-first, return top N ──────────────────────────
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for article in all_articles:
+        h = article["headline"].lower().strip()
+        if h not in seen:
+            seen.add(h)
+            unique.append(article)
+
+    unique.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+    return unique[:limit]
