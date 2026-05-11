@@ -80,6 +80,9 @@ struct WatchlistEditorView: View {
     }
 }
 
+/// A simple wrapping chip layout. Measures each item width using a fixed
+/// per-chip estimate, splits into rows, and renders with VStack+HStack.
+/// This avoids the ZStack/alignmentGuide clipping bug in the GeometryReader approach.
 struct FlowLayout<Item: Hashable, Content: View>: View {
     let items: [Item]
     let content: (Item) -> Content
@@ -90,29 +93,44 @@ struct FlowLayout<Item: Hashable, Content: View>: View {
     }
 
     var body: some View {
-        var width: CGFloat = 0
-        var rows: [[Item]] = [[]]
-
-        return GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                ForEach(items, id: \.self) { item in
-                    content(item)
-                        .alignmentGuide(.leading) { d in
-                            if width + d.width > geo.size.width {
-                                width = 0
-                                rows.append([])
-                            }
-                            let result = width
-                            width += d.width + 8
-                            return -result
+        GeometryReader { geo in
+            let rows = computeRows(availableWidth: geo.size.width)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(rows.indices, id: \.self) { rowIndex in
+                    HStack(spacing: 8) {
+                        ForEach(rows[rowIndex], id: \.self) { item in
+                            content(item)
                         }
-                        .alignmentGuide(.top) { _ in
-                            let row = rows.firstIndex(where: { $0.contains(item) }) ?? 0
-                            return -CGFloat(row) * 36
-                        }
+                    }
                 }
             }
         }
-        .frame(height: CGFloat(max(1, (items.count + 3) / 4) * 40))
+        .frame(height: CGFloat(max(1, computeRowCount()) * 40))
+    }
+
+    private func chipWidth(for item: Item) -> CGFloat {
+        // Approximate: 14px per char + 20px padding + 16px for the × button
+        let str = "\(item)"
+        return CGFloat(str.count) * 10 + 36
+    }
+
+    private func computeRowCount() -> Int {
+        // Estimate with a 300pt width
+        computeRows(availableWidth: 300).count
+    }
+
+    private func computeRows(availableWidth: CGFloat) -> [[Item]] {
+        var rows: [[Item]] = [[]]
+        var rowWidth: CGFloat = 0
+        for item in items {
+            let w = chipWidth(for: item) + 8 // +8 for spacing
+            if rowWidth + w > availableWidth && !rows[rows.count - 1].isEmpty {
+                rows.append([])
+                rowWidth = 0
+            }
+            rows[rows.count - 1].append(item)
+            rowWidth += w
+        }
+        return rows
     }
 }

@@ -7,7 +7,8 @@ struct PerformanceView: View {
 
     var body: some View {
         Group {
-            if isLoading && stats == nil {
+            if stats == nil && errorMessage == nil {
+                // Covers both initial render (before task fires) and in-progress load
                 LoadingView()
             } else if let error = errorMessage, stats == nil {
                 ErrorView(message: error) { await load() }

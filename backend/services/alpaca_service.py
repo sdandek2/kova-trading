@@ -530,12 +530,9 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         ("https://www.prnewswire.com/rss/news-releases-list.rss", "PR Newswire", "rss", []),
     ]
 
-    # Yahoo Finance per-symbol (targeted, most relevant to watchlist)
-    for sym in target_symbols[:6]:
-        tasks.append((
-            f"https://finance.yahoo.com/rss/headline?s={sym}",
-            "Yahoo Finance", "rss", [sym],
-        ))
+    # NOTE: Yahoo Finance per-symbol RSS feeds (finance.yahoo.com/rss/headline?s=AAPL)
+    # return the SAME general market articles regardless of the symbol parameter,
+    # causing mass duplicates. The general index feed above already covers Yahoo Finance.
 
     # ── Fetch all in parallel ─────────────────────────────────────────────────
 
@@ -579,14 +576,28 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     except Exception as e:
         logger.warning(f"Alpaca news fetch failed (non-fatal): {e}")
 
-    # ── Deduplicate, sort newest-first, return top N ──────────────────────────
-    seen: set[str] = set()
+    # ── Deduplicate by headline AND URL, assign stable IDs, sort newest-first ──
+    import hashlib
+    seen_headlines: set[str] = set()
+    seen_urls: set[str] = set()
     unique: list[dict] = []
     for article in all_articles:
         h = article["headline"].lower().strip()
-        if h not in seen:
-            seen.add(h)
-            unique.append(article)
+        url = (article.get("url") or "").strip()
+        # Skip if we've seen this headline or a non-empty URL already
+        if h in seen_headlines:
+            continue
+        if url and url in seen_urls:
+            continue
+        seen_headlines.add(h)
+        if url:
+            seen_urls.add(url)
+        # Generate a stable id if missing (hash of headline+source)
+        if not article.get("id"):
+            article["id"] = hashlib.md5(
+                f"{article['headline']}{article.get('source','')}".encode()
+            ).hexdigest()[:16]
+        unique.append(article)
 
     unique.sort(key=lambda a: a.get("created_at") or "", reverse=True)
     return unique[:limit]

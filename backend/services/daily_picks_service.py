@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 
 
 import anthropic
@@ -61,18 +61,16 @@ def get_daily_picks(force_refresh: bool = False) -> dict:
         result["market_regime"] = macro.get("market_regime", "unknown")
         result["geo_risk_level"] = geo.get("risk_level", "unknown")
 
-        # ── Step 2: Fetch recent news for catalysts ──
+        # ── Step 2: Fetch recent news from ALL sources for catalysts ──
         news_headlines = []
         try:
-            from alpaca.data.requests import NewsRequest
-            from alpaca.data.historical.news import NewsClient
-            nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-            news_resp = nc.get_news(NewsRequest(limit=50))
+            news_articles = alpaca_service.get_news(limit=30)
             news_headlines = [
-                f"  • [{', '.join(a.symbols[:3])}] {a.headline}"
-                for a in news_resp.news[:20]
-                if a.headline
+                f"  • [{art.get('source', '')}] [{', '.join(art.get('symbols', [])[:3])}] {art['headline']}"
+                for art in news_articles[:20]
+                if art.get("headline")
             ]
+            logger.info(f"Daily picks: fetched {len(news_articles)} news articles from multi-source feed")
         except Exception as e:
             logger.warning(f"Could not fetch news for daily picks: {e}")
 
@@ -215,10 +213,8 @@ Provide 5 short-term picks and 5 long-term picks. Be specific, actionable, and c
         result["error"] = str(e)
 
     # Cache until end of day (seconds remaining in the day)
-    now = datetime.now(timezone.utc)
-    seconds_until_midnight = int(
-        (datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-         + __import__('datetime').timedelta(days=1) - now).total_seconds()
-    )
+    now_utc = datetime.now(timezone.utc)
+    midnight_utc = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc) + timedelta(days=1)
+    seconds_until_midnight = int((midnight_utc - now_utc).total_seconds())
     cache_set(_picks_cache_key(), result, max(seconds_until_midnight, 3600))
     return result

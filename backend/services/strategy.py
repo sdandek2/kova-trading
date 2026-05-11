@@ -27,12 +27,16 @@ STRATEGIES = {
     "aggressive": {
         "key": "aggressive",
         "name": "Aggressive",
-        "max_position_pct": 0.20,       # max 20% of portfolio per trade
+        "max_position_pct": 0.25,       # max 25% of portfolio per trade
         "min_confidence": "medium",
         "prompt_modifier": (
-            "Maximise returns. Accept medium-confidence trades. "
-            "Actively use leveraged ETFs (SOXL, TQQQ, SPXL) and high-momentum stocks. "
-            "Take larger positions on strong signals. Prioritise growth over safety."
+            "MAXIMISE RETURNS — this is a high-conviction, high-aggression strategy. "
+            "Trade on ANY medium-or-better signal. Do NOT sit on the sidelines with 'hold' — always find the best available trade. "
+            "Actively use 3x leveraged ETFs (SOXL, TQQQ, SPXL, UPRO) for market-aligned momentum. "
+            "Prioritise stocks with the strongest 5-day momentum, RSI breakouts, and news catalysts. "
+            "Take FULL-SIZE positions on high-confidence signals. Accept medium-confidence trades at 75% size. "
+            "Speed matters — enter early on breakouts, not after the move. Profit targets are aggressive (10-20% moves). "
+            "Capital must work at all times — idle cash is a missed opportunity. Prioritise GROWTH over safety."
         ),
     },
 }

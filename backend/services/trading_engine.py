@@ -89,7 +89,30 @@ async def run_trading_cycle():
         logger.info(f"Universe: {len(universe)} stocks (including {len(user_watchlist)} from watchlist)")
         # Lightweight snapshot for broad scan (Step 1) — price + 5-day change only
         snapshot_light = alpaca_service.get_market_snapshot_light(universe)
-        sentiment = alpaca_service.get_sentiment_context(universe)
+
+        # ── Fetch multi-source news ONCE per cycle ──
+        # Used for both sentiment scoring AND passing headlines to the AI prompt
+        news_articles = []
+        try:
+            news_articles = alpaca_service.get_news(symbols=universe[:10], limit=30)
+            logger.info(f"Fetched {len(news_articles)} news articles from multi-source feed")
+        except Exception as e:
+            logger.warning(f"Could not fetch news: {e}")
+
+        # Derive sentiment from news: count articles mentioning each symbol
+        sentiment = {}
+        for art in news_articles:
+            for sym in art.get("symbols", []):
+                if sym in universe:
+                    sentiment[sym] = sentiment.get(sym, 0) + 1
+
+        # Top headlines for AI context (most recent 15)
+        news_headlines = [
+            f"[{art.get('source', '')}] [{', '.join(art.get('symbols', [])[:3])}] {art['headline']}"
+            for art in news_articles[:15]
+            if art.get("headline")
+        ]
+
         macro = get_macro_context()
         sector_info = get_sector_rotation()
         earnings_map = get_upcoming_earnings(universe)
@@ -141,6 +164,7 @@ async def run_trading_cycle():
             earnings_map=earnings_map,
             geo_context=geo,
             trend_forecast=trend_forecast,
+            news_headlines=news_headlines,
             full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
         )
 

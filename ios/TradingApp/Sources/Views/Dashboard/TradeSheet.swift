@@ -47,6 +47,16 @@ struct TradeSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    // Hint for company name input (not all-uppercase = needs Return to resolve)
+                    let trimmed = symbol.trimmingCharacters(in: .whitespaces)
+                    let isResolved = currentPrice != nil
+                    let looksLikeName = !trimmed.isEmpty && !isResolved && !isFetchingPrice
+                        && !(trimmed.count <= 5 && trimmed == trimmed.uppercased() && !trimmed.contains(" "))
+                    if looksLikeName {
+                        Text("Press Return ↵ to look up \"\(trimmed)\"")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
                 }
 
                 Section("Order") {
@@ -151,11 +161,14 @@ struct TradeSheet: View {
                     ownedQty = nil
                     return
                 }
-                // If it looks like a pure ticker (short, no spaces), fetch price immediately.
-                // If it looks like a company name, wait for the user to submit (onSubmit/resolveSymbol).
-                let looksLikeTicker = trimmed.count <= 5 && !trimmed.contains(" ")
+                // Only auto-fetch for all-uppercase tickers (e.g. "AAPL", "NVDA").
+                // Company names like "apple" or "Tesla" require pressing Return to resolve.
+                let looksLikeTicker = trimmed.count <= 5
+                    && !trimmed.contains(" ")
+                    && trimmed == trimmed.uppercased()
+                    && trimmed.allSatisfy({ $0.isLetter || $0.isNumber })
                 if looksLikeTicker {
-                    Task { await fetchPriceAndPosition(for: trimmed.uppercased()) }
+                    Task { await fetchPriceAndPosition(for: trimmed) }
                 }
             }
         }

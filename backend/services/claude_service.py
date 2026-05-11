@@ -25,6 +25,7 @@ def analyze_and_decide(
     earnings_map: dict = None,
     geo_context: dict = None,
     trend_forecast: str = "",
+    news_headlines: list = None,
     full_data_fetcher=None,
 ) -> TradeDecision:
     current_strategy = strategy_service.get_strategy()
@@ -109,24 +110,35 @@ Open positions: {positions_text}"""
     if trend_forecast:
         geo_text += f"\n{trend_forecast}\n"
 
-    step1_prompt = f"""You are an expert stock trader doing a broad market scan with full awareness of current geopolitical events and macro trends.
+    news_text = ""
+    if news_headlines:
+        headlines_formatted = "\n".join([f"  • {h}" for h in news_headlines])
+        news_text = f"""
+## Breaking News & Market Catalysts (live multi-source feed)
+{headlines_formatted}
+"""
+
+    step1_prompt = f"""You are an expert stock trader and portfolio manager executing an AGGRESSIVE growth strategy. Your mandate is to find the best trade RIGHT NOW.
 
 {portfolio_context}
-{macro_text}{geo_text}
+{macro_text}{geo_text}{news_text}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
 ## Indicator guide
-- RSI > 70: overbought | RSI < 30: oversold
-- MACD histogram positive+rising: bullish | negative+falling: bearish
-- [PENNY]: stock under $5 — high risk/reward
-- [NEWS:N]: mentioned in N news articles today — sentiment catalyst
-- SOXL/TQQQ/SPXL are 3x leveraged ETFs — amplified moves
+- RSI > 70: overbought | RSI < 30: oversold (RSI 50-70 with upward MACD = strong buy zone)
+- MACD histogram positive+rising: bullish momentum | negative+falling: bearish
+- [PENNY]: stock under $5 — high risk/reward, size accordingly
+- [NEWS:N]: mentioned in N recent news articles — sentiment catalyst (higher = stronger signal)
+- [EARNINGS:today/tomorrow]: avoid — binary risk; [EARNINGS:this_week]: small position only
+- SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — use when market regime is bullish
 
-Scan ALL stocks above. Consider geopolitical context and forward scenarios when selecting opportunities.
-Identify the TOP 3 best opportunities right now — stocks most likely to move in the next 1-5 days given BOTH technical signals AND the current macro/geopolitical backdrop.
+Scan ALL stocks above. Use ALL signals: technicals, news catalysts, momentum, macro alignment.
+Identify the TOP 5 best opportunities right now — stocks most likely to move in the next 1-5 days.
+Prioritize: strong news catalysts + technical breakout + macro tailwind (highest conviction).
+You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative across the board.
 
-For each, give: symbol, signal type (momentum/reversal/sentiment/breakout/geopolitical/defensive), and 1-sentence reason that incorporates current macro themes if relevant.
+For each, give: symbol, signal type (momentum/reversal/sentiment/breakout/geopolitical/news_catalyst/squeeze), and 1-sentence reason incorporating the specific catalyst driving it.
 
 Respond in JSON:
 {{"opportunities": [{{"symbol": "X", "signal": "momentum", "reason": "..."}}]}}"""
@@ -177,31 +189,35 @@ Respond in JSON:
             f"news mentions={(sentiment or {}).get(sym, 0)}"
         )
 
-    step2_prompt = f"""You are doing a deep dive on stock candidates for a trade, with full awareness of current geopolitical risks and the 1-5 day market outlook.
+    step2_prompt = f"""You are executing a deep analysis on your top stock candidates. Your mandate is AGGRESSIVE GROWTH — find the single best trade to make RIGHT NOW.
 
 {portfolio_context}
-{geo_text if geo_context else ""}
-## Candidates identified in broad scan:
+{geo_text if geo_context else ""}{news_text}
+## Candidates from broad scan:
 {opp_text}
 
-## Detailed technical data for candidates:
+## Detailed technical data:
 {chr(10).join(candidate_detail)}
 
 For each candidate, assess:
-1. Signal strength (strong/medium/weak) — both technical AND macro/geopolitical alignment
-2. Risk/reward ratio — account for current geopolitical risk level
-3. Does it fit the {current_strategy['name']} strategy AND the current macro regime?
-4. Would you trade it right now given the forward outlook (bull/base/bear scenarios above)?
+1. Signal strength (strong/medium/weak) — technical + news catalyst + macro/geopolitical alignment
+2. Risk/reward — minimum 2:1 expected. Account for geopolitical risk level.
+3. Strategy fit: {current_strategy['name']} — {current_strategy['prompt_modifier']}
+4. News catalyst check: does any breaking news above directly support or invalidate this trade?
+5. Timing: is NOW the right entry, or is the move already over?
 
 Geopolitical override rules:
 - If geo risk is HIGH or EXTREME: only trade inverse ETFs (SOXS, SQQQ, SPXS) or defensive safe havens; no aggressive longs
 - If a candidate is in the "sectors at risk" list: reduce confidence to low
 - If a candidate is in the "geopolitical opportunities" list: boost signal strength
+- If a candidate has direct positive news catalyst from the breaking news: boost to HIGH confidence
 
-Then pick the SINGLE BEST one to trade (or recommend hold if none are good enough).
+IMPORTANT: You MUST pick a trade if ANY candidate has medium or better signal strength. Only return hold if ALL candidates look weak AND market conditions are clearly unfavorable.
+
+Pick the SINGLE BEST candidate. Provide a specific quantity suggestion based on signal strength and position sizing rules.
 
 Respond in JSON:
-{{"best_symbol": "X or null", "action": "buy|sell|hold", "confidence": "high|medium|low", "quantity_suggestion": integer_or_null, "deep_analysis": "3-4 sentences on why this is the best trade now, including how geopolitical/macro context supports this decision"}}"""
+{{"best_symbol": "TICKER or null", "action": "buy|sell|hold", "confidence": "high|medium|low", "quantity_suggestion": integer_or_null, "deep_analysis": "3-4 sentences: why this specific stock NOW, what catalyst drives it, how news/macro support the trade, specific entry rationale"}}"""
 
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=600)
@@ -222,10 +238,13 @@ Respond in JSON:
     deep_analysis = step2_data.get("deep_analysis", "")
     qty_suggestion = step2_data.get("quantity_suggestion")
 
-    # Skip low confidence trades
-    if confidence == "low" or action == "hold" or not best_symbol:
+    # Skip low confidence trades — but respect per-strategy minimum
+    min_confidence = current_strategy.get("min_confidence", "medium")
+    confidence_rank = {"high": 2, "medium": 1, "low": 0}
+    if (confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 1)
+            or action == "hold" or not best_symbol):
         return TradeDecision(action="hold", symbol=None, quantity=None,
-                           reasoning=f"No high-confidence trade found. {deep_analysis}")
+                           reasoning=f"Confidence too low for {current_strategy['name']} strategy. {deep_analysis}")
 
     # ── Step 3: Final decision with quantity ──
     if action == "buy" and best_symbol and account_cash > 0:
@@ -236,8 +255,14 @@ Respond in JSON:
         if qty_suggestion:
             final_qty = min(qty_suggestion, max_shares)
         else:
-            # Size based on confidence: high=full, medium=half
-            size_pct = 1.0 if confidence == "high" else 0.5
+            # Size based on confidence and strategy aggressiveness
+            is_aggressive = current_strategy.get("key") == "aggressive"
+            if confidence == "high":
+                size_pct = 1.0
+            elif confidence == "medium":
+                size_pct = 0.75 if is_aggressive else 0.5
+            else:
+                size_pct = 0.25
             final_qty = max(1, int(max_shares * size_pct))
 
         if final_qty < 1 or price * final_qty > account_cash:
