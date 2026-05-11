@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
 _risk_settings = {
-    "daily_loss_limit_pct": 2.0,   # stop trading if down 2% today
-    "stop_loss_pct": 0.03,          # 3% stop loss on each trade
-    "take_profit_pct": 0.05,        # 5% take profit on each trade
+    "daily_loss_limit_pct": 3.0,   # stop trading if down 3% today (was 2% — too tight for aggressive)
+    "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
+    "take_profit_pct": 0.15,        # 15% TP fallback (Claude overrides per trade)
 }
 # No fixed watchlist — universe is built dynamically each cycle from top movers + actives
 
@@ -271,8 +271,9 @@ async def run_trading_cycle():
                 symbol=decision.symbol,
                 qty=decision.quantity,
                 side=decision.action,
-                stop_loss_pct=_risk_settings["stop_loss_pct"],
-                take_profit_pct=_risk_settings["take_profit_pct"],
+                stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                partial_exit=decision.partial_exit,
             )
             if order:
                 await manager.broadcast(

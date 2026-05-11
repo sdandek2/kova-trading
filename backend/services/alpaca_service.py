@@ -83,8 +83,15 @@ def get_orders(limit: int = 50) -> list[Order]:
     return result
 
 
-def submit_market_order(symbol: str, qty: int, side: str, stop_loss_pct: float = 0.03, take_profit_pct: float = 0.05) -> Optional[Order]:
-    from alpaca.trading.requests import TakeProfitRequest, StopLossRequest, TrailingStopOrderRequest
+def submit_market_order(
+    symbol: str,
+    qty: int,
+    side: str,
+    stop_loss_pct: float = 0.05,
+    take_profit_pct: float = 0.15,
+    partial_exit: bool = False,
+) -> Optional[Order]:
+    from alpaca.trading.requests import TakeProfitRequest, TrailingStopOrderRequest, LimitOrderRequest
     from alpaca.trading.enums import OrderClass
 
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -96,33 +103,74 @@ def submit_market_order(symbol: str, qty: int, side: str, stop_loss_pct: float =
             current_price = float(quotes[symbol].ask_price)
             take_profit_price = round(current_price * (1 + take_profit_pct), 2)
 
-            # Use bracket with trailing stop instead of fixed stop
-            # trail_percent moves the stop up automatically as price rises
-            request = MarketOrderRequest(
-                symbol=symbol,
-                qty=qty,
-                side=order_side,
-                time_in_force=TimeInForce.DAY,
-                order_class=OrderClass.OTO,  # One-triggers-other
-                take_profit=TakeProfitRequest(limit_price=take_profit_price),
-            )
-            # Submit main order first, then attach trailing stop
-            order = trading_client.submit_order(request)
-            logger.info(f"Submitted buy order with take-profit: {qty} {symbol} @ ~${current_price:.2f}, TP: ${take_profit_price:.2f}")
+            if partial_exit and qty >= 2:
+                # ── Partial exit strategy: sell half at TP, let other half ride ──
+                # Half 1: plain market buy for full qty
+                buy_req = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=order_side,
+                    time_in_force=TimeInForce.DAY,
+                )
+                order = trading_client.submit_order(buy_req)
+                logger.info(f"Partial-exit buy: {qty} {symbol} @ ~${current_price:.2f}")
 
-            # Submit trailing stop as separate order
-            trail_req = TrailingStopOrderRequest(
-                symbol=symbol,
-                qty=qty,
-                side=OrderSide.SELL,
-                time_in_force=TimeInForce.GTC,
-                trail_percent=stop_loss_pct * 100,  # e.g. 3.0 for 3%
-            )
-            try:
-                trading_client.submit_order(trail_req)
-                logger.info(f"Trailing stop set: {stop_loss_pct*100:.1f}% trail on {symbol}")
-            except Exception as te:
-                logger.warning(f"Could not set trailing stop (non-fatal): {te}")
+                half_qty = qty // 2
+                remaining_qty = qty - half_qty
+
+                # Half 2: limit sell for first half at TP price
+                try:
+                    limit_sell = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=half_qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC,
+                        limit_price=take_profit_price,
+                    )
+                    trading_client.submit_order(limit_sell)
+                    logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+                except Exception as e:
+                    logger.warning(f"Partial limit sell failed (non-fatal): {e}")
+
+                # Half 3: trailing stop on remaining shares — rides the winner
+                try:
+                    trail_req = TrailingStopOrderRequest(
+                        symbol=symbol,
+                        qty=remaining_qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC,
+                        trail_percent=stop_loss_pct * 100,
+                    )
+                    trading_client.submit_order(trail_req)
+                    logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail (rides the winner)")
+                except Exception as e:
+                    logger.warning(f"Trailing stop failed (non-fatal): {e}")
+
+            else:
+                # ── Standard exit: take-profit + trailing stop on full position ──
+                request = MarketOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=order_side,
+                    time_in_force=TimeInForce.DAY,
+                    order_class=OrderClass.OTO,
+                    take_profit=TakeProfitRequest(limit_price=take_profit_price),
+                )
+                order = trading_client.submit_order(request)
+                logger.info(f"Buy order: {qty} {symbol} @ ~${current_price:.2f} | TP: ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+
+                try:
+                    trail_req = TrailingStopOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC,
+                        trail_percent=stop_loss_pct * 100,
+                    )
+                    trading_client.submit_order(trail_req)
+                    logger.info(f"Trailing stop: {stop_loss_pct*100:.0f}% trail on {symbol}")
+                except Exception as te:
+                    logger.warning(f"Could not set trailing stop (non-fatal): {te}")
 
             return Order(
                 id=str(order.id),

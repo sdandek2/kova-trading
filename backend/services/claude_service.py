@@ -189,7 +189,10 @@ Respond in JSON:
             f"news mentions={(sentiment or {}).get(sym, 0)}"
         )
 
-    step2_prompt = f"""You are executing a deep analysis on your top stock candidates. Your mandate is AGGRESSIVE GROWTH — find the single best trade to make RIGHT NOW.
+    default_tp = current_strategy.get("default_take_profit_pct", 0.10)
+    default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
+
+    step2_prompt = f"""You are executing a deep analysis on your top stock candidates. Your mandate is AGGRESSIVE GROWTH — find the single best trade and set OPTIMAL exit targets to maximise profit.
 
 {portfolio_context}
 {geo_text if geo_context else ""}{news_text}
@@ -201,23 +204,35 @@ Respond in JSON:
 
 For each candidate, assess:
 1. Signal strength (strong/medium/weak) — technical + news catalyst + macro/geopolitical alignment
-2. Risk/reward — minimum 2:1 expected. Account for geopolitical risk level.
+2. Realistic upside — based on technicals, catalyst size, and comparable moves. Be specific (e.g. "NVDA has 18% upside to next resistance at $X")
 3. Strategy fit: {current_strategy['name']} — {current_strategy['prompt_modifier']}
-4. News catalyst check: does any breaking news above directly support or invalidate this trade?
+4. News catalyst check: does any breaking news directly support or invalidate this trade?
 5. Timing: is NOW the right entry, or is the move already over?
 
 Geopolitical override rules:
 - If geo risk is HIGH or EXTREME: only trade inverse ETFs (SOXS, SQQQ, SPXS) or defensive safe havens; no aggressive longs
 - If a candidate is in the "sectors at risk" list: reduce confidence to low
 - If a candidate is in the "geopolitical opportunities" list: boost signal strength
-- If a candidate has direct positive news catalyst from the breaking news: boost to HIGH confidence
+- If a candidate has direct positive news catalyst: boost to HIGH confidence
 
-IMPORTANT: You MUST pick a trade if ANY candidate has medium or better signal strength. Only return hold if ALL candidates look weak AND market conditions are clearly unfavorable.
+IMPORTANT: You MUST pick a trade if ANY candidate has medium or better signal strength.
 
-Pick the SINGLE BEST candidate. Provide a specific quantity suggestion based on signal strength and position sizing rules.
+## Exit Strategy Rules (CRITICAL — this is how we maximise profit):
+- take_profit_pct: How far this stock can realistically run. Base this on the actual thesis:
+  * Strong catalyst + technical breakout → 0.15-0.25 (15-25%)
+  * Momentum continuation → 0.10-0.15 (10-15%)
+  * Leveraged ETF (SOXL/TQQQ/SPXL) on strong day → 0.15-0.30 (15-30%)
+  * Weak signal → 0.08-0.10 (8-10%)
+  * DEFAULT if unsure: {default_tp} ({int(default_tp*100)}%)
+- stop_loss_pct: Trailing stop. Wider = lets winners breathe. Narrower = tighter protection:
+  * High conviction → 0.05-0.07 (5-7% trail — gives room to run)
+  * Medium conviction → 0.04-0.05
+  * Volatile stock / leveraged ETF → 0.06-0.08
+  * DEFAULT if unsure: {default_sl} ({int(default_sl*100)}%)
+- partial_exit: true if upside is 15%+. This sells 50% at the take_profit target and lets the other 50% compound further with the trailing stop. Use this for your highest-conviction plays.
 
 Respond in JSON:
-{{"best_symbol": "TICKER or null", "action": "buy|sell|hold", "confidence": "high|medium|low", "quantity_suggestion": integer_or_null, "deep_analysis": "3-4 sentences: why this specific stock NOW, what catalyst drives it, how news/macro support the trade, specific entry rationale"}}"""
+{{"best_symbol": "TICKER or null", "action": "buy|sell|hold", "confidence": "high|medium|low", "quantity_suggestion": integer_or_null, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "deep_analysis": "3-4 sentences: why this stock NOW, what specific catalyst, realistic upside target with price level, why exit strategy fits this trade"}}"""
 
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=600)
@@ -237,6 +252,15 @@ Respond in JSON:
     confidence = step2_data.get("confidence", "low")
     deep_analysis = step2_data.get("deep_analysis", "")
     qty_suggestion = step2_data.get("quantity_suggestion")
+    take_profit_pct = step2_data.get("take_profit_pct") or default_tp
+    stop_loss_pct = step2_data.get("stop_loss_pct") or default_sl
+    partial_exit = bool(step2_data.get("partial_exit", False))
+
+    # Clamp to sane ranges (never more than 40% TP or 10% stop)
+    take_profit_pct = max(0.05, min(float(take_profit_pct), 0.40))
+    stop_loss_pct = max(0.02, min(float(stop_loss_pct), 0.10))
+
+    logger.info(f"Exit strategy: TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}% trail | partial_exit={partial_exit}")
 
     # Skip low confidence trades — but respect per-strategy minimum
     min_confidence = current_strategy.get("min_confidence", "medium")
@@ -277,11 +301,19 @@ Respond in JSON:
     else:
         return TradeDecision(action="hold", symbol=None, quantity=None, reasoning=deep_analysis)
 
-    full_reasoning = f"[{confidence.upper()} CONFIDENCE] {deep_analysis} Candidates considered: {', '.join([o['symbol'] for o in opportunities[:3]])}."
+    full_reasoning = (
+        f"[{confidence.upper()} CONFIDENCE] {deep_analysis} "
+        f"Exit: TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}% trail"
+        f"{' | partial exit (50% at TP, 50% rides)' if partial_exit else ''}. "
+        f"Candidates: {', '.join([o['symbol'] for o in opportunities[:3]])}."
+    )
 
     return TradeDecision(
         action=action,
         symbol=best_symbol,
         quantity=final_qty,
         reasoning=full_reasoning,
+        take_profit_pct=take_profit_pct,
+        stop_loss_pct=stop_loss_pct,
+        partial_exit=partial_exit,
     )

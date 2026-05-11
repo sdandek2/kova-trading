@@ -24,10 +24,13 @@ class Order(BaseModel):
 
 
 class TradeDecision(BaseModel):
-    action: str  # "buy" | "sell" | "hold"
+    action: str                          # "buy" | "sell" | "hold"
     symbol: Optional[str] = None
     quantity: Optional[int] = None
     reasoning: str
+    take_profit_pct: Optional[float] = None   # e.g. 0.15 = 15% — Claude sets dynamically
+    stop_loss_pct: Optional[float] = None     # e.g. 0.05 = 5% trailing stop
+    partial_exit: bool = False                # sell 50% at TP, let other 50% ride
 
 
 class TradingStatus(BaseModel):
