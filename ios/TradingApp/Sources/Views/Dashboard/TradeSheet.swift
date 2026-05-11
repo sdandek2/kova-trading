@@ -33,10 +33,11 @@ struct TradeSheet: View {
             Form {
                 Section("Stock") {
                     HStack {
-                        TextField("Symbol (e.g. AAPL)", text: $symbol)
-                            .textInputAutocapitalization(.characters)
+                        TextField("Ticker or company (e.g. Apple, AAPL)", text: $symbol)
+                            .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .font(.headline)
+                            .onSubmit { Task { await resolveSymbol() } }
                         if isFetchingPrice {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -144,15 +145,30 @@ struct TradeSheet: View {
                 }
             }
             .onChange(of: symbol) { newSymbol in
-                let trimmed = newSymbol.trimmingCharacters(in: .whitespaces).uppercased()
-                guard trimmed.count >= 1 else {
+                let trimmed = newSymbol.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else {
                     currentPrice = nil
                     ownedQty = nil
                     return
                 }
-                Task { await fetchPriceAndPosition(for: trimmed) }
+                // If it looks like a pure ticker (short, no spaces), fetch price immediately.
+                // If it looks like a company name, wait for the user to submit (onSubmit/resolveSymbol).
+                let looksLikeTicker = trimmed.count <= 5 && !trimmed.contains(" ")
+                if looksLikeTicker {
+                    Task { await fetchPriceAndPosition(for: trimmed.uppercased()) }
+                }
             }
         }
+    }
+
+    /// If symbol looks like a company name, resolve it to a ticker first, then fetch price.
+    private func resolveSymbol() async {
+        let input = symbol.trimmingCharacters(in: .whitespaces)
+        guard !input.isEmpty else { return }
+        if let ticker = await APIService.shared.resolveToTicker(input), ticker != input.uppercased() {
+            symbol = ticker
+        }
+        await fetchPriceAndPosition(for: symbol.uppercased())
     }
 
     private func fetchPriceAndPosition(for sym: String) async {

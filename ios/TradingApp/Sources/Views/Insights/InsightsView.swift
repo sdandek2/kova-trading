@@ -88,22 +88,21 @@ struct InsightsView: View {
 struct PredictionSearchBar: View {
     @Binding var searchText: String
     var onSearch: (String) -> Void
+    @State private var isResolving = false
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search any stock (e.g. AAPL, NVDA)", text: $searchText)
+            TextField("Ticker or company name (e.g. Apple, NVDA)", text: $searchText)
                 .autocorrectionDisabled()
-                .textInputAutocapitalization(.characters)
-                .onSubmit {
-                    let sym = searchText.trimmingCharacters(in: .whitespaces)
-                    if !sym.isEmpty { onSearch(sym) }
-                }
-            if !searchText.isEmpty {
+                .textInputAutocapitalization(.never)
+                .onSubmit { Task { await resolve() } }
+            if isResolving {
+                ProgressView().scaleEffect(0.7)
+            } else if !searchText.isEmpty {
                 Button {
-                    let sym = searchText.trimmingCharacters(in: .whitespaces)
-                    if !sym.isEmpty { onSearch(sym) }
+                    Task { await resolve() }
                 } label: {
                     Text("Predict")
                         .font(.caption.weight(.semibold))
@@ -118,6 +117,15 @@ struct PredictionSearchBar: View {
         .padding(10)
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func resolve() async {
+        let input = searchText.trimmingCharacters(in: .whitespaces)
+        guard !input.isEmpty else { return }
+        isResolving = true
+        let ticker = await APIService.shared.resolveToTicker(input) ?? input.uppercased()
+        isResolving = false
+        onSearch(ticker)
     }
 }
 

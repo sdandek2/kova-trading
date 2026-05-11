@@ -112,6 +112,29 @@ class APIService {
         try await fetch("/api/predictions/\(symbol)", timeout: 90)
     }
 
+    /// Resolve a company name or partial ticker to a list of matching ticker symbols.
+    /// e.g. "Apple" → [TickerResult(symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ")]
+    func searchTicker(query: String) async throws -> [TickerResult] {
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [] }
+        let response: TickerSearchResponse = try await fetch("/api/predictions/search?q=\(encoded)", timeout: 10)
+        return response.results
+    }
+
+    /// Convenience: returns the top ticker symbol for a query, or nil if nothing found.
+    func resolveToTicker(_ input: String) async -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        // If it already looks like a ticker (short, no spaces), use it directly
+        if trimmed.count <= 5 && !trimmed.contains(" ") && trimmed == trimmed.uppercased() {
+            return trimmed
+        }
+        // Otherwise search by company name
+        if let results = try? await searchTicker(query: trimmed), let first = results.first {
+            return first.symbol
+        }
+        return trimmed.uppercased() // fallback: treat as ticker
+    }
+
     func getDailyPicks(refresh: Bool = false) async throws -> DailyPicksResponse {
         try await fetch("/api/picks/daily\(refresh ? "?refresh=true" : "")", timeout: 120)
     }

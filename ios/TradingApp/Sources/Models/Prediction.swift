@@ -46,6 +46,17 @@ struct SuggestionsResponse: Codable {
     let suggestions: [Suggestion]
 }
 
+struct TickerResult: Codable, Identifiable {
+    var id: String { symbol }
+    let symbol: String
+    let name: String
+    let exchange: String
+}
+
+struct TickerSearchResponse: Codable {
+    let results: [TickerResult]
+}
+
 struct Suggestion: Codable, Identifiable {
     var id: String { symbol }
     let symbol: String
