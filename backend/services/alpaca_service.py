@@ -570,17 +570,19 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KovaBot/1.0; +https://kova.app)"}
     target_symbols = symbols or ["AAPL", "MSFT", "GOOGL", "TSLA", "SPY", "NVDA"]
 
-    # Financial keyword filter — at least one must appear in the headline or summary
-    # to be included. Keeps pet food press releases and unrelated PRs out.
+    # Financial keyword filter — whole-word matching only to avoid substring false positives
+    # e.g. "market" must not match "marketing", "trade" must not match "STARTRADER"
     _FINANCE_KEYWORDS = {
-        "stock", "share", "market", "invest", "earn", "revenue", "profit", "loss",
-        "ipo", "sec", "fed", "rate", "bond", "etf", "fund", "quarter", "fiscal",
-        "dividend", "acquire", "merger", "guidance", "forecast", "analyst", "upgrade",
-        "downgrade", "buy", "sell", "trade", "portfolio", "equity", "nasdaq", "nyse",
-        "s&p", "dow", "bitcoin", "crypto", "economy", "gdp", "inflation", "cpi",
-        "earnings", "outlook", "financial", "capital", "asset", "valuation", "ipo",
-        "short", "rally", "correction", "bull", "bear", "volatility", "hedge",
-        "breakout", "momentum", "sector", "commodity", "oil", "gold", "yield",
+        "stock", "stocks", "shares", "market", "markets", "invest", "investing",
+        "investor", "investors", "earnings", "revenue", "profit", "loss", "ipo",
+        "sec", "fed", "rate", "rates", "bond", "bonds", "etf", "fund", "quarter",
+        "fiscal", "dividend", "dividends", "acquisition", "merger", "guidance",
+        "forecast", "analyst", "analysts", "upgrade", "downgrade", "equity",
+        "nasdaq", "nyse", "s&p", "dow", "bitcoin", "crypto", "economy", "gdp",
+        "inflation", "cpi", "financial", "capital", "valuation", "rally",
+        "correction", "bull", "bear", "volatility", "hedge", "sector", "commodity",
+        "oil", "gold", "yield", "yields", "trading", "portfolio", "buyback",
+        "quarterly", "annual", "outlook", "guidance", "short-selling",
     }
 
     def _is_financial(headline: str, summary: str) -> bool:
@@ -589,7 +591,10 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         _OTC_MARKERS = ["otc:", "(otc:", "otcqb", "otcqx", "pink sheet", "pinksheet"]
         if any(marker in text for marker in _OTC_MARKERS):
             return False
-        return any(kw in text for kw in _FINANCE_KEYWORDS)
+        # Whole-word matching — split text into tokens, check for exact keyword match
+        # This prevents "marketing" matching "market", "STARTRADER" matching "trade", etc.
+        words = set(_re.findall(r"[a-z&]+", text))
+        return bool(words & _FINANCE_KEYWORDS)
 
     def _clean_text(raw: str) -> str:
         """Strip HTML tags and decode HTML entities from text."""
@@ -719,9 +724,14 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         # Nasdaq Trader — halts, listing changes, market alerts
         ("https://www.nasdaqtrader.com/rss.aspx?feed=traderNews", "Nasdaq Trader", "rss", []),
 
-        # PR Newswire — financial & earnings specific feeds only (not the general feed which is too noisy)
-        ("https://www.prnewswire.com/rss/financial-news-releases-list.rss", "PR Newswire", "rss", []),
-        ("https://www.prnewswire.com/rss/earnings-releases-list.rss", "PR Newswire", "rss", []),
+        # Investing.com — broad market news, analyst calls, economic data
+        ("https://www.investing.com/rss/news.rss", "Investing.com", "rss", []),
+
+        # TheStreet — stock analysis and market commentary
+        ("https://www.thestreet.com/.rss/full", "TheStreet", "rss", []),
+
+        # Investors Business Daily — IBD market news (momentum/growth stock focused)
+        ("https://www.investors.com/feed/", "IBD", "rss", []),
     ]
 
     # NOTE: Yahoo Finance per-symbol RSS feeds (finance.yahoo.com/rss/headline?s=AAPL)
@@ -794,5 +804,11 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
             ).hexdigest()[:16]
         unique.append(article)
 
-    unique.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+    # Sort: symbol-tagged articles (Benzinga/Alpaca) first — most trading-relevant
+    # Within each group, sort by date newest-first
+    def _sort_key(a):
+        has_symbols = 1 if a.get("symbols") else 0
+        return (has_symbols, a.get("created_at") or "")
+
+    unique.sort(key=_sort_key, reverse=True)
     return unique[:limit]
