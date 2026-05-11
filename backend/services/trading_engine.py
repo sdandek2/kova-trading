@@ -336,17 +336,21 @@ async def run_trading_cycle():
                 )
                 from services.strategy import get_strategy
                 strat = get_strategy()
-                price = sym_data.get("current_price") or 1
-                vol_qty = volatility_adjusted_quantity(
-                    portfolio_value=account.portfolio_value,
-                    max_position_pct=strat["max_position_pct"],
-                    current_price=price,
-                    atr=atr,
-                )
-                # Use volatility-adjusted quantity, log the difference
-                if vol_qty != decision.quantity:
-                    logger.info(f"Volatility adjustment: Claude suggested {decision.quantity} shares, using {vol_qty} (ATR={atr:.2f})")
-                decision.quantity = vol_qty
+                price = sym_data.get("current_price")
+                if not price or price <= 0:
+                    # No valid price — keep Claude's suggested quantity rather than risk a bad calculation
+                    logger.warning(f"No valid price for {decision.symbol} — keeping Claude's quantity ({decision.quantity})")
+                else:
+                    vol_qty = volatility_adjusted_quantity(
+                        portfolio_value=account.portfolio_value,
+                        max_position_pct=strat["max_position_pct"],
+                        current_price=price,
+                        atr=atr,
+                    )
+                    # Use volatility-adjusted quantity, log the difference
+                    if vol_qty != decision.quantity:
+                        logger.info(f"Volatility adjustment: Claude suggested {decision.quantity} shares, using {vol_qty} (ATR={atr:.2f})")
+                    decision.quantity = vol_qty
 
                 # ── Scale-in: enter gradually rather than all at once ──
                 existing_pos = next((p for p in positions if p.symbol == decision.symbol), None)
@@ -395,10 +399,13 @@ async def _trading_loop():
     global _next_run_at
     from datetime import timedelta
     _cleanup_counter = 0
+    _premarket_scanned_date = None  # track which date we last ran the pre-market scan
     while _is_running:
-        # Run pre-market scan if market is about to open (13:00-14:00 UTC = 9-10 AM EST)
+        # Run pre-market scan once per day at 13:00-14:00 UTC (9-10 AM EST)
         now_utc = datetime.now(timezone.utc)
-        if 13 <= now_utc.hour < 14:
+        today = now_utc.date()
+        if 13 <= now_utc.hour < 14 and _premarket_scanned_date != today:
+            _premarket_scanned_date = today
             await run_premarket_scan()
 
         await run_trading_cycle()

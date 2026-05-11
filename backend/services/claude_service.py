@@ -375,7 +375,7 @@ Respond in JSON:
         if not pos:
             return TradeDecision(action="hold", symbol=None, quantity=None,
                                reasoning=f"No position in {best_symbol} to sell.")
-        final_qty = int(pos.qty)
+        final_qty = max(1, round(float(pos.qty)))
     else:
         return TradeDecision(action="hold", symbol=None, quantity=None, reasoning=deep_analysis)
 

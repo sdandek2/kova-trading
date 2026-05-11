@@ -27,7 +27,7 @@ STOCK_SECTOR_MAP = {
     # Energy
     "XOM": "Energy", "CVX": "Energy", "COP": "Energy",
     # Consumer
-    "TSLA": "Consumer", "AMZN": "Consumer", "HD": "Consumer", "NKE": "Consumer",
+    "TSLA": "Consumer", "HD": "Consumer", "NKE": "Consumer",
     # Broad market
     "SPY": "Broad", "QQQ": "Tech", "IWM": "Broad",
     # Crypto-related

@@ -48,7 +48,7 @@ def _get_conn():
 
 
 def _ensure_table(conn):
-    """Create the ai_cache table if it doesn't exist."""
+    """Create required tables if they don't exist."""
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ai_cache (
@@ -56,6 +56,22 @@ def _ensure_table(conn):
                 data        JSONB NOT NULL,
                 cached_at   TIMESTAMPTZ NOT NULL,
                 expires_at  TIMESTAMPTZ NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trade_log (
+                id              SERIAL PRIMARY KEY,
+                timestamp       TIMESTAMPTZ NOT NULL,
+                action          TEXT NOT NULL,
+                symbol          TEXT,
+                quantity        INTEGER,
+                reasoning       TEXT,
+                confidence      TEXT,
+                market_regime   TEXT,
+                geo_risk        TEXT,
+                take_profit_pct FLOAT,
+                stop_loss_pct   FLOAT,
+                partial_exit    BOOLEAN DEFAULT FALSE
             )
         """)
 

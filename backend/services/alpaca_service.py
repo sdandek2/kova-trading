@@ -97,15 +97,27 @@ def submit_market_order(
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
     if side == "buy":
+        # Plain fallback request — used if advanced order fails
+        request = MarketOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+        )
         try:
+            from alpaca.trading.requests import StopLossRequest
             quote_request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quotes = data_client.get_stock_latest_quote(quote_request)
-            current_price = float(quotes[symbol].ask_price)
+            current_price = float(quotes[symbol].ask_price or 0)
+
+            if current_price <= 0:
+                raise ValueError(f"Invalid ask price for {symbol}: {current_price} — using plain market order")
+
             take_profit_price = round(current_price * (1 + take_profit_pct), 2)
+            stop_price = round(current_price * (1 - stop_loss_pct), 2)
 
             if partial_exit and qty >= 2:
-                # ── Partial exit strategy: sell half at TP, let other half ride ──
-                # Half 1: plain market buy for full qty
+                # ── Partial exit strategy: sell half at TP, let other half ride with trailing stop ──
                 buy_req = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
@@ -118,7 +130,7 @@ def submit_market_order(
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
 
-                # Half 2: limit sell for first half at TP price
+                # First half: limit sell at TP price
                 try:
                     limit_sell = LimitOrderRequest(
                         symbol=symbol,
@@ -132,7 +144,7 @@ def submit_market_order(
                 except Exception as e:
                     logger.warning(f"Partial limit sell failed (non-fatal): {e}")
 
-                # Half 3: trailing stop on remaining shares — rides the winner
+                # Second half: trailing stop to ride the winner
                 try:
                     trail_req = TrailingStopOrderRequest(
                         symbol=symbol,
@@ -142,35 +154,27 @@ def submit_market_order(
                         trail_percent=stop_loss_pct * 100,
                     )
                     trading_client.submit_order(trail_req)
-                    logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail (rides the winner)")
+                    logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
                 except Exception as e:
                     logger.warning(f"Trailing stop failed (non-fatal): {e}")
 
             else:
-                # ── Standard exit: take-profit + trailing stop on full position ──
-                request = MarketOrderRequest(
+                # ── Standard exit: BRACKET order (TP + SL in one atomic order — no duplicate sells) ──
+                bracket_req = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=order_side,
                     time_in_force=TimeInForce.DAY,
-                    order_class=OrderClass.OTO,
+                    order_class=OrderClass.BRACKET,
                     take_profit=TakeProfitRequest(limit_price=take_profit_price),
+                    stop_loss=StopLossRequest(stop_price=stop_price),
                 )
-                order = trading_client.submit_order(request)
-                logger.info(f"Buy order: {qty} {symbol} @ ~${current_price:.2f} | TP: ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
-
-                try:
-                    trail_req = TrailingStopOrderRequest(
-                        symbol=symbol,
-                        qty=qty,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.GTC,
-                        trail_percent=stop_loss_pct * 100,
-                    )
-                    trading_client.submit_order(trail_req)
-                    logger.info(f"Trailing stop: {stop_loss_pct*100:.0f}% trail on {symbol}")
-                except Exception as te:
-                    logger.warning(f"Could not set trailing stop (non-fatal): {te}")
+                order = trading_client.submit_order(bracket_req)
+                logger.info(
+                    f"Bracket buy: {qty} {symbol} @ ~${current_price:.2f} | "
+                    f"TP: ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%) | "
+                    f"SL: ${stop_price:.2f} (-{stop_loss_pct*100:.0f}%)"
+                )
 
             return Order(
                 id=str(order.id),
@@ -183,12 +187,6 @@ def submit_market_order(
             )
         except Exception as e:
             logger.warning(f"Advanced order failed, using plain market order: {e}")
-            request = MarketOrderRequest(
-                symbol=symbol,
-                qty=qty,
-                side=order_side,
-                time_in_force=TimeInForce.DAY,
-            )
     else:
         request = MarketOrderRequest(
             symbol=symbol,
@@ -246,7 +244,9 @@ def get_market_snapshot(symbols: list[str]) -> dict:
             high_prices = [float(b.high) for b in symbol_bars]
             low_prices = [float(b.low) for b in symbol_bars]
             five_day_change = None
-            if closing_prices and len(closing_prices) >= 2:
+            if closing_prices and len(closing_prices) >= 6:
+                five_day_change = round((closing_prices[-1] - closing_prices[-6]) / closing_prices[-6] * 100, 2)
+            elif closing_prices and len(closing_prices) >= 2:
                 five_day_change = round((closing_prices[-1] - closing_prices[0]) / closing_prices[0] * 100, 2)
 
             volume = int(symbol_bars[-1].volume) if symbol_bars else 0
@@ -406,7 +406,11 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
 
             symbol_bars = bars_dict.get(symbol, [])
             five_day_change = None
-            if symbol_bars and len(symbol_bars) >= 2:
+            if symbol_bars and len(symbol_bars) >= 6:
+                oldest_5d = float(symbol_bars[-6].close)
+                newest = float(symbol_bars[-1].close)
+                five_day_change = round((newest - oldest_5d) / oldest_5d * 100, 2) if oldest_5d else None
+            elif symbol_bars and len(symbol_bars) >= 2:
                 oldest = float(symbol_bars[0].close)
                 newest = float(symbol_bars[-1].close)
                 five_day_change = round((newest - oldest) / oldest * 100, 2) if oldest else None

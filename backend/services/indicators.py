@@ -74,6 +74,9 @@ def compute_atr(highs: list[float], lows: list[float], closes: list[float], peri
     """Average True Range — measures volatility."""
     if len(closes) < period + 1:
         return 0.0
+    # Guard: mismatched list lengths crash the loop — return 0 so caller uses fallback sizing
+    if len(highs) != len(closes) or len(lows) != len(closes):
+        return 0.0
 
     true_ranges = []
     for i in range(1, len(closes)):
