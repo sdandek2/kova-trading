@@ -126,7 +126,11 @@ struct DailyPicksView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(picks) { pick in
-                        DailyPickCard(pick: pick, accentColor: accentColor) {
+                        DailyPickCard(
+                            pick: pick,
+                            accentColor: accentColor,
+                            livePrice: vm.livePrices[pick.symbol]
+                        ) {
                             selectedSymbol = pick.symbol
                             showPrediction = true
                         }
@@ -204,11 +208,15 @@ struct DailyPicksView: View {
 struct DailyPickCard: View {
     let pick: DailyPick
     let accentColor: Color
+    var livePrice: Double? = nil   // real-time price injected by parent
     var onTap: () -> Void
     @State private var showTrade = false
 
+    /// Authoritative price: live first, fall back to AI estimate
+    private var displayPrice: Double? { livePrice ?? pick.current_price_approx }
+
     private var suggestedQty: Int {
-        guard let price = pick.current_price_approx, price > 0 else { return 1 }
+        guard let price = displayPrice, price > 0 else { return 1 }
         let budget: Double = pick.confidence == "high" ? 1000 : 600
         return max(1, Int(budget / price))
     }
@@ -220,10 +228,15 @@ struct DailyPickCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(pick.symbol)
                         .font(.title3.weight(.bold))
-                    if let price = pick.current_price_approx {
-                        Text(String(format: "~$%.2f", price))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if let price = displayPrice {
+                        HStack(spacing: 4) {
+                            Text(String(format: "$%.2f", price))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if livePrice != nil {
+                                Circle().fill(Color.green).frame(width: 5, height: 5)
+                            }
+                        }
                     }
                 }
                 Spacer()

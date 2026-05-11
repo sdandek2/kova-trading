@@ -57,7 +57,10 @@ struct InsightsView: View {
                                 .padding(.horizontal)
                         } else {
                             ForEach(vm.suggestions) { suggestion in
-                                SuggestionCard(suggestion: suggestion) {
+                                SuggestionCard(
+                                    suggestion: suggestion,
+                                    livePrice: vm.livePrices[suggestion.symbol]
+                                ) {
                                     selectedSymbol = suggestion.symbol
                                     showPrediction = true
                                 }
@@ -133,11 +136,15 @@ struct PredictionSearchBar: View {
 
 struct SuggestionCard: View {
     let suggestion: Suggestion
+    var livePrice: Double? = nil   // real-time price injected by parent
     var onTap: () -> Void
     @State private var showTrade = false
 
+    /// Authoritative price: live first, fall back to cached suggestion price
+    private var displayPrice: Double? { livePrice ?? suggestion.current_price }
+
     private var suggestedQty: Int {
-        guard let price = suggestion.current_price, price > 0 else { return 1 }
+        guard let price = displayPrice, price > 0 else { return 1 }
         let budget: Double = suggestion.risk_level == "low" ? 1000 : suggestion.risk_level == "high" ? 400 : 700
         return max(1, Int(budget / price))
     }
@@ -152,10 +159,14 @@ struct SuggestionCard: View {
                 riskChip
             }
 
-                if let price = suggestion.current_price {
+                if let price = displayPrice {
                     HStack(spacing: 12) {
                         Text(String(format: "$%.2f", price))
                             .font(.subheadline.weight(.medium))
+                        if livePrice != nil {
+                            // Green dot signals this is a live price, not a cached estimate
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                        }
                         if let chg = suggestion.five_day_change_pct {
                             Text(String(format: "%@%.1f%% 5d", chg >= 0 ? "+" : "", chg))
                                 .font(.caption)

@@ -190,8 +190,11 @@ struct TradeSheet: View {
         isFetchingPrice = true
         defer { isFetchingPrice = false }
 
-        // Fetch current price from predictions endpoint
-        if let prediction = try? await APIService.shared.getStockPrediction(symbol: upper) {
+        // Fetch real-time price from Alpaca live quote (always fresh)
+        // Falls back to prediction cache if live quote unavailable
+        if let livePrice = await APIService.shared.getLivePrice(symbol: upper) {
+            currentPrice = livePrice
+        } else if let prediction = try? await APIService.shared.getStockPrediction(symbol: upper) {
             currentPrice = prediction.current_price
         }
 

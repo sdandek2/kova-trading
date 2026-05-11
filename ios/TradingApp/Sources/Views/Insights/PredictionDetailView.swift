@@ -28,7 +28,10 @@ struct PredictionDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 80)
             } else if let p = vm.prediction {
-                PredictionContent(prediction: p)
+                PredictionContent(
+                    prediction: p,
+                    livePrice: vm.livePrices[symbol]
+                )
             }
         }
         .navigationTitle(symbol)
@@ -43,6 +46,7 @@ struct PredictionDetailView: View {
 
 struct PredictionContent: View {
     let prediction: StockPrediction
+    var livePrice: Double? = nil   // real-time override from Alpaca
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -85,10 +89,19 @@ struct PredictionContent: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(prediction.symbol)
                     .font(.largeTitle.weight(.bold))
-                if let price = prediction.current_price {
-                    Text(String(format: "$%.2f", price))
-                        .font(.title2.weight(.medium))
-                        .foregroundStyle(.primary)
+                // Show live price (green dot) if available, else fall back to cached
+                if let price = livePrice ?? prediction.current_price {
+                    HStack(spacing: 6) {
+                        Text(String(format: "$%.2f", price))
+                            .font(.title2.weight(.medium))
+                            .foregroundStyle(.primary)
+                        if livePrice != nil {
+                            HStack(spacing: 3) {
+                                Circle().fill(Color.green).frame(width: 7, height: 7)
+                                Text("LIVE").font(.caption2.weight(.bold)).foregroundStyle(.green)
+                            }
+                        }
+                    }
                 }
             }
             Spacer()

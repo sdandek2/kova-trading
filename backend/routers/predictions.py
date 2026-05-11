@@ -1,6 +1,7 @@
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 from services.prediction_service import get_stock_prediction, get_top_suggestions
+from services import alpaca_service
 
 router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 
@@ -42,6 +43,33 @@ def search_ticker(q: str = Query(..., min_length=1, description="Company name or
         })
 
     return {"results": results}
+
+
+@router.get("/price/{symbol}")
+def live_price(symbol: str):
+    """Real-time bid/ask midpoint for a symbol — always fresh from Alpaca."""
+    symbol = symbol.upper().strip()
+    if not symbol or len(symbol) > 10:
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    price = alpaca_service.get_live_price(symbol)
+    if price is None:
+        raise HTTPException(status_code=404, detail=f"No live quote available for {symbol}")
+    return {"symbol": symbol, "price": price}
+
+
+@router.get("/prices")
+def live_prices_batch(symbols: str = Query(..., description="Comma-separated tickers, e.g. AAPL,NVDA,TSLA")):
+    """Batch real-time prices for up to 20 symbols in one call."""
+    from concurrent.futures import ThreadPoolExecutor
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()][:20]
+    result: dict[str, float] = {}
+    def _fetch(sym: str):
+        price = alpaca_service.get_live_price(sym)
+        if price is not None:
+            result[sym] = price
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_fetch, syms))
+    return {"prices": result}
 
 
 @router.get("/{symbol}")

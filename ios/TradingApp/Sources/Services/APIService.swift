@@ -112,6 +112,22 @@ class APIService {
         try await fetch("/api/predictions/\(symbol)", timeout: 90)
     }
 
+    /// Real-time bid/ask midpoint from Alpaca — always fresh, never cached.
+    func getLivePrice(symbol: String) async -> Double? {
+        struct PriceResponse: Decodable { let price: Double }
+        return try? await (fetch("/api/predictions/price/\(symbol)", timeout: 5) as PriceResponse).price
+    }
+
+    /// Batch real-time prices for multiple symbols in one round-trip.
+    func getLivePrices(symbols: [String]) async -> [String: Double] {
+        struct BatchResponse: Decodable { let prices: [String: Double] }
+        guard !symbols.isEmpty else { return [:] }
+        let joined = symbols.joined(separator: ",")
+        guard let encoded = joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return [:] }
+        let response = try? await (fetch("/api/predictions/prices?symbols=\(encoded)", timeout: 8) as BatchResponse)
+        return response?.prices ?? [:]
+    }
+
     /// Resolve a company name or partial ticker to a list of matching ticker symbols.
     /// e.g. "Apple" → [TickerResult(symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ")]
     func searchTicker(query: String) async throws -> [TickerResult] {

@@ -381,6 +381,28 @@ def get_sentiment_context(symbols: list[str]) -> dict[str, int]:
     return dict(counts)
 
 
+def get_live_price(symbol: str) -> Optional[float]:
+    """Fetch the real-time bid/ask midpoint for a symbol from Alpaca."""
+    try:
+        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quotes = data_client.get_stock_latest_quote(req)
+        quote = quotes.get(symbol)
+        if not quote:
+            return None
+        bid = float(quote.bid_price or 0)
+        ask = float(quote.ask_price or 0)
+        if bid > 0 and ask > 0:
+            return round((bid + ask) / 2, 2)
+        if ask > 0:
+            return round(ask, 2)
+        if bid > 0:
+            return round(bid, 2)
+        return None
+    except Exception as e:
+        logger.warning(f"Could not fetch live price for {symbol}: {e}")
+        return None
+
+
 def is_market_open() -> bool:
     clock = trading_client.get_clock()
     return clock.is_open
