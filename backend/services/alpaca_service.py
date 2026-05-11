@@ -503,6 +503,10 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
 
     def _is_financial(headline: str, summary: str) -> bool:
         text = (headline + " " + summary).lower()
+        # Reject OTC/pink sheet micro-caps — not tradeable on major exchanges
+        _OTC_MARKERS = ["otc:", "(otc:", "otcqb", "otcqx", "pink sheet", "pinksheet"]
+        if any(marker in text for marker in _OTC_MARKERS):
+            return False
         return any(kw in text for kw in _FINANCE_KEYWORDS)
 
     def _clean_text(raw: str) -> str:
