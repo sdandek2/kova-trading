@@ -127,29 +127,28 @@ Today is {date.today().strftime('%A, %B %d, %Y')}.
 
 ---
 
-Your task: Identify the BEST opportunities across THREE categories.
+Your task: Pick the BEST 8-10 trades for maximum profit today — whatever mix of long, short, and inverse ETF gives the highest conviction. Let the market conditions drive the allocation:
 
-**SHORT-TERM picks (1-2 weeks, LONG direction):**
-Focus on: technical breakouts, momentum continuation, upcoming catalysts (earnings, FDA, product launch), news-driven sentiment plays, short squeeze candidates, sector rotation beneficiaries. These should be high-velocity moves.
+- **Strong bull day** → mostly short-term longs, 1-2 bearish hedges
+- **Strong bear day** → mostly bearish plays (shorts + inverse ETFs), minimal longs
+- **Mixed/choppy day** → balanced mix, focus on uncorrelated plays
+- **Sector rotation** → long the hot sector, short the one rolling over
 
-**LONG-TERM picks (1-3 months, LONG direction):**
-Focus on: structural tailwinds, macro/geopolitical beneficiaries, strong sector leadership, stocks building a base before a big move, undervalued relative to peers. These are higher-conviction, lower-risk compounders.
+**LONG picks** (direction: "long"):
+- Short-term (1-2 weeks): breakouts, momentum, catalysts, sentiment plays, short squeezes
+- Long-term (1-3 months): structural tailwinds, macro beneficiaries, sector leaders
 
-**BEARISH plays (profit when market/stock falls):**
-Two sub-types:
-1. **SHORT candidates** (individual stocks to short-sell): Overextended stocks with deteriorating fundamentals, failed breakouts, negative catalysts, sector headwinds, or technical breakdowns. Must have high float, no near-term squeeze risk, and no imminent earnings (earnings are unpredictable).
-2. **INVERSE ETFs** (always use direction: "inverse_etf"): Best for broad market/sector weakness. Include options like SQQQ (3x short QQQ), SPXU (3x short S&P), SOXS (3x short semis), SDOW (3x short Dow), TZA (3x short small-cap). Prefer these when the whole market looks weak.
+**BEARISH plays** (profit when price falls):
+- SHORT candidates (direction: "short"): overextended stocks, failed breakouts, negative catalysts, sector headwinds. Must have high float, no squeeze risk, no imminent earnings.
+- INVERSE ETFs (direction: "inverse_etf"): SQQQ, SPXU, SOXS, SDOW, TZA — use when broad market or a whole sector looks weak.
 
-Include bearish plays especially if market_regime is bearish/risk-off or VIX is elevated. If conditions are bullish, still include 2-3 defensive plays as hedges.
+**AVOID list**: stocks/sectors that are dangerous right now.
 
-**AVOID list:**
-Stocks/sectors that look dangerous right now — overextended, facing headwinds, earnings risk, geopolitical exposure.
-
-For each pick, be SPECIFIC and BOLD. Don't give generic answers. State exactly why this stock, why now, what drives it, and what could go wrong.
+For every pick: be SPECIFIC and BOLD. State exactly why this stock, why now, what drives it, what could go wrong.
 
 Respond ONLY in JSON:
 {{
-  "summary": "2-3 sentence overall market assessment and what kind of day/week it will be for traders",
+  "summary": "2-3 sentence overall market assessment, what kind of day it is for traders, and what the optimal strategy mix is today",
   "short_term": [
     {{
       "symbol": "XXXX",
@@ -162,7 +161,7 @@ Respond ONLY in JSON:
       "confidence": "high|medium",
       "thesis": "2-3 sentences: specific reason this stock moves NOW, what catalyst drives it, why the timing is right",
       "entry_zone": "buy below $X or on dip to $Y",
-      "invalidation": "what would make this thesis wrong (e.g. closes below $X, macro shift)",
+      "invalidation": "what would make this thesis wrong",
       "key_risk": "single biggest risk to this trade"
     }}
   ],
@@ -192,7 +191,7 @@ Respond ONLY in JSON:
       "target_price": 15.00,
       "time_horizon": "3-7 days",
       "confidence": "high|medium",
-      "thesis": "2-3 sentences: why this falls, what the bearish catalyst is, why now is the right time to short or buy the inverse",
+      "thesis": "2-3 sentences: why this falls, what the bearish catalyst is, why now is the right time",
       "entry_zone": "short above $X / buy inverse ETF at $Y",
       "invalidation": "what would make this bearish thesis wrong",
       "key_risk": "single biggest risk (e.g. short squeeze, unexpected bounce)"
@@ -206,7 +205,7 @@ Respond ONLY in JSON:
   ]
 }}
 
-Provide 5 short-term picks, 5 long-term picks, and 3 bearish plays (mix of inverse ETFs and short candidates based on current conditions). Be specific, actionable, and conviction-driven."""
+Total picks: 8-10 across all three categories. Allocate based on today's market conditions — maximize profit potential, not category balance. Be specific, actionable, and conviction-driven."""
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
