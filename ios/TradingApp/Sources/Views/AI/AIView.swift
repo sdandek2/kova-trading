@@ -17,6 +17,8 @@ struct AIView: View {
 
                             StrategyPickerView()
 
+                            TradingFloorView()
+
                             WatchlistEditorView()
 
                             NavigationLink("View Performance Stats") {

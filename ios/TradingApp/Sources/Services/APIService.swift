@@ -208,4 +208,18 @@ class APIService {
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["watchlist": symbols])
         let (_, _) = try await URLSession.shared.data(for: request)
     }
+
+    func getRiskSettings() async throws -> RiskSettings {
+        return try await fetch("/api/risk/settings")
+    }
+
+    func setRiskSettings(_ settings: RiskSettings) async throws {
+        guard let url = URL(string: baseURL + "/api/risk/settings") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        request.httpBody = try? JSONEncoder().encode(settings)
+        let (_, _) = try await URLSession.shared.data(for: request)
+    }
 }

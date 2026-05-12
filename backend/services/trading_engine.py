@@ -17,11 +17,32 @@ logger = logging.getLogger(__name__)
 
 TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
-_risk_settings = {
-    "daily_loss_limit_pct": 3.0,   # stop trading if down 3% today (was 2% — too tight for aggressive)
+_RISK_CACHE_KEY = "user_pref:risk_settings"
+_RISK_DEFAULTS = {
+    "daily_loss_limit_pct": 3.0,   # stop trading if down this % today
     "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.15,        # 15% TP fallback (Claude overrides per trade)
+    "min_daily_trades": 2,          # trigger afternoon pressure if below this by cutoff hour
+    "afternoon_pressure_hour": 14,  # EST hour (24h) — e.g. 14 = 2:00 PM EST
 }
+
+
+def _load_risk_settings() -> dict:
+    """Load risk settings from persistent cache, falling back to defaults."""
+    from services.db import cache_get
+    cached = cache_get(_RISK_CACHE_KEY)
+    if isinstance(cached, dict):
+        # Merge with defaults so new keys are always present
+        return {**_RISK_DEFAULTS, **cached}
+    return _RISK_DEFAULTS.copy()
+
+
+def _save_risk_settings(settings: dict) -> None:
+    from services.db import cache_set
+    cache_set(_RISK_CACHE_KEY, settings, 365 * 24 * 3600)  # 1 year TTL
+
+
+_risk_settings = _load_risk_settings()
 # No fixed watchlist — universe is built dynamically each cycle from top movers + actives
 
 _is_running = False
@@ -29,6 +50,7 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
+_daily_trade_count: dict = {}  # date → int, tracks trades executed per day
 
 
 def get_status() -> TradingStatus:
@@ -240,7 +262,30 @@ async def run_trading_cycle():
                         },
                     })
 
-        decision = claude_service.analyze_and_decide(
+        # ── Time-of-day filter: skip chaotic opening 15 minutes ──
+        from services.entry_timing import is_good_trading_window
+        window_ok, window_reason = is_good_trading_window()
+        if not window_ok:
+            logger.info(f"Trading window: {window_reason} — skipping cycle")
+            return
+
+        # ── Daily trade floor: configurable via /api/risk/settings ──
+        now_utc = datetime.now(timezone.utc)
+        trades_today = _daily_trade_count.get(now_utc.date(), 0)
+        min_trades = int(_risk_settings.get("min_daily_trades", 2))
+        # afternoon_pressure_hour is in EST; UTC offset is +4 (EDT) or +5 (EST)
+        # Using +4 (EDT, summer) as default — close enough for this purpose
+        pressure_hour_est = int(_risk_settings.get("afternoon_pressure_hour", 14))
+        pressure_hour_utc = pressure_hour_est + 4
+        afternoon_pressure = (now_utc.hour >= pressure_hour_utc and trades_today < min_trades)
+        if afternoon_pressure:
+            logger.info(f"Afternoon pressure: only {trades_today}/{min_trades} trades today — lowering thresholds")
+
+        from services.strategy import get_strategy
+        strat = get_strategy()
+        strategy_key = strat["key"]
+
+        decisions = claude_service.analyze_and_decide(
             market_snapshot=snapshot_light,
             positions=positions,
             account_cash=account.cash,
@@ -256,47 +301,40 @@ async def run_trading_cycle():
             sector_context=sector_context,
             recent_trades=recent_trades,
             earnings_plays=earnings_plays,
+            afternoon_pressure=afternoon_pressure,
         )
 
         _last_analysis_at = datetime.now(timezone.utc)
-        _latest_analysis = AIAnalysis(
-            reasoning=decision.reasoning,
-            last_action=decision.action,
-            symbol=decision.symbol,
-            timestamp=_last_analysis_at,
-        )
 
-        # Persist so the analysis survives Railway restarts
-        cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
+        # Broadcast + log each decision
+        for decision in decisions:
+            _latest_analysis = AIAnalysis(
+                reasoning=decision.reasoning,
+                last_action=decision.action,
+                symbol=decision.symbol,
+                timestamp=_last_analysis_at,
+            )
+            cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
+            log_trade_decision({
+                "timestamp":       _last_analysis_at,
+                "action":          decision.action,
+                "symbol":          decision.symbol,
+                "quantity":        decision.quantity,
+                "reasoning":       decision.reasoning,
+                "confidence":      None,
+                "market_regime":   macro.get("market_regime"),
+                "geo_risk":        geo.get("risk_level"),
+                "take_profit_pct": decision.take_profit_pct,
+                "stop_loss_pct":   decision.stop_loss_pct,
+                "partial_exit":    decision.partial_exit,
+            })
+            logger.info(f"AI decision: {decision.action} {decision.symbol} x{decision.quantity}")
+            await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
 
-        # Log the AI decision for future performance analysis
-        log_trade_decision({
-            "timestamp":      _last_analysis_at,
-            "action":         decision.action,
-            "symbol":         decision.symbol,
-            "quantity":       decision.quantity,
-            "reasoning":      decision.reasoning,
-            "confidence":     getattr(decision, "confidence", None),
-            "market_regime":  macro.get("market_regime"),
-            "geo_risk":       geo.get("risk_level"),
-            "take_profit_pct": decision.take_profit_pct,
-            "stop_loss_pct":   decision.stop_loss_pct,
-            "partial_exit":    decision.partial_exit,
-        })
+            if decision.action not in ("buy", "sell") or not decision.symbol or not decision.quantity:
+                continue
 
-        logger.info(f"AI decision: {decision.action} {decision.symbol} x{decision.quantity}")
-        logger.info(f"Reasoning: {decision.reasoning}")
-
-        await manager.broadcast(
-            {
-                "type": "ai_analysis",
-                "data": _latest_analysis.model_dump(mode="json"),
-            }
-        )
-
-        if decision.action in ("buy", "sell") and decision.symbol and decision.quantity:
-            # ── Entry confirmation: verify price action supports the signal ──
-            # Fetch deep data for the chosen symbol if not already in light snapshot
+            # ── Entry confirmation (strategy-aware) ──
             deep = alpaca_service.get_market_snapshot([decision.symbol])
             sym_data = deep.get(decision.symbol) or snapshot_light.get(decision.symbol, {})
             closing_prices = sym_data.get("closing_prices", [])
@@ -307,62 +345,51 @@ async def run_trading_cycle():
                 action=decision.action,
                 closing_prices=closing_prices,
                 current_price=current_price,
+                strategy_key=strategy_key,
+                positions_count=len(positions),
             )
 
             if not confirmed:
-                logger.info(f"Entry rejected by confirmation: {confirm_reason}")
-                _latest_analysis = AIAnalysis(
-                    reasoning=(
-                        f"Signal detected but entry not confirmed: {confirm_reason}. "
-                        f"Original analysis: {decision.reasoning}"
-                    ),
-                    last_action="waiting",
-                    symbol=decision.symbol,
-                    timestamp=datetime.now(timezone.utc),
-                )
-                await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
-                return  # Skip trade execution, wait for next cycle
+                logger.info(f"Entry rejected: {confirm_reason}")
+                await manager.broadcast({"type": "ai_analysis", "data": {
+                    "reasoning": f"Entry not confirmed: {confirm_reason}",
+                    "last_action": "waiting", "symbol": decision.symbol,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }})
+                continue  # Try next decision, don't abort the whole cycle
 
             if decision.action == "buy":
-                # Override quantity with volatility-adjusted sizing
+                # Volatility-adjusted sizing
                 atr = compute_atr(
                     highs=sym_data.get("high_prices", []),
                     lows=sym_data.get("low_prices", []),
                     closes=closing_prices,
                 )
-                from services.strategy import get_strategy
-                strat = get_strategy()
                 price = sym_data.get("current_price")
-                if not price or price <= 0:
-                    # No valid price — keep Claude's suggested quantity rather than risk a bad calculation
-                    logger.warning(f"No valid price for {decision.symbol} — keeping Claude's quantity ({decision.quantity})")
-                else:
+                if price and price > 0:
                     vol_qty = volatility_adjusted_quantity(
                         portfolio_value=account.portfolio_value,
                         max_position_pct=strat["max_position_pct"],
                         current_price=price,
                         atr=atr,
                     )
-                    # Use volatility-adjusted quantity, log the difference
                     if vol_qty != decision.quantity:
-                        logger.info(f"Volatility adjustment: Claude suggested {decision.quantity} shares, using {vol_qty} (ATR={atr:.2f})")
+                        logger.info(f"Vol-adjust: {decision.symbol} {decision.quantity}→{vol_qty} shares (ATR={atr:.2f})")
                     decision.quantity = vol_qty
 
-                # ── Scale-in: enter gradually rather than all at once ──
+                # Scale-in (strategy-aware — aggressive takes full position)
                 existing_pos = next((p for p in positions if p.symbol == decision.symbol), None)
                 existing_qty = float(existing_pos.qty) if existing_pos else 0
-
                 scaled_qty = get_scale_in_quantity(
                     base_quantity=decision.quantity,
                     confidence="high",
                     existing_position_qty=existing_qty,
                     max_total_qty=decision.quantity,
+                    strategy_key=strategy_key,
                 )
                 if scaled_qty != decision.quantity:
-                    logger.info(
-                        f"Scale-in: buying {scaled_qty} of {decision.quantity} planned shares of {decision.symbol}"
-                    )
-                    decision.quantity = scaled_qty
+                    logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
+                decision.quantity = scaled_qty
 
             order = alpaca_service.submit_market_order(
                 symbol=decision.symbol,
@@ -373,19 +400,13 @@ async def run_trading_cycle():
                 partial_exit=decision.partial_exit,
             )
             if order:
-                await manager.broadcast(
-                    {
-                        "type": "order_filled",
-                        "data": order.model_dump(mode="json"),
-                    }
-                )
+                # Track daily trade count
+                today = datetime.now(timezone.utc).date()
+                _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
+                logger.info(f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} | trades today: {_daily_trade_count[today]}")
+                await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
                 updated_positions = alpaca_service.get_positions()
-                await manager.broadcast(
-                    {
-                        "type": "position_update",
-                        "data": [p.model_dump(mode="json") for p in updated_positions],
-                    }
-                )
+                await manager.broadcast({"type": "position_update", "data": [p.model_dump(mode="json") for p in updated_positions]})
 
     except Exception as e:
         logger.error(f"Trading cycle error: {e}", exc_info=True)
