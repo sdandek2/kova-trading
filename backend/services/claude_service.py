@@ -349,11 +349,10 @@ Respond with ONLY this JSON — no explanation, no markdown, no other text:
         )
     rotation_text = "\n".join(rotation_lines) if rotation_lines else "  None"
 
-    cash_tight = account_cash < portfolio_value * 0.05  # less than 5% cash = tight
     rotation_note = f"""
 ## Portfolio Rotation (capital efficiency)
 Available cash: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio)
-{"⚠️ CASH IS TIGHT — consider rotating a weak position to fund a high-conviction opportunity." if cash_tight else "Cash is adequate — rotation optional but allowed."}
+Use your judgment — if a high-conviction opportunity exists but cash is insufficient, consider rotating out of a weak/flat position to fund it.
 
 Current positions with momentum assessment:
 {rotation_text}
