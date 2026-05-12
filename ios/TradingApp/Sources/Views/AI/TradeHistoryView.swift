@@ -79,10 +79,10 @@ struct PerformanceSummaryCard: View {
 
             HStack(spacing: 0) {
                 StatPill(label: "Trades", value: "\(summary.total_trades)", color: .primary)
-                StatPill(label: "Win Rate", value: "\(summary.win_rate_pct, specifier: "%.0f")%",
+                StatPill(label: "Win Rate", value: String(format: "%.0f%%", summary.win_rate_pct),
                          color: summary.win_rate_pct >= 50 ? .green : .red)
                 StatPill(label: "Total P&L",
-                         value: "$\(summary.total_realized_pl >= 0 ? "+" : "")\(summary.total_realized_pl, specifier: "%.0f")",
+                         value: String(format: "$%@%.0f", summary.total_realized_pl >= 0 ? "+" : "", summary.total_realized_pl),
                          color: summary.total_realized_pl >= 0 ? .green : .red)
             }
 
@@ -193,7 +193,7 @@ struct TradeDetailSheet: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(trade.symbol).font(.largeTitle).fontWeight(.bold)
-                            if let reason = trade.exit_reason {
+                            if trade.exit_reason != nil {
                                 Text(trade.exitReasonLabel)
                                     .font(.subheadline).foregroundStyle(.secondary)
                             }
@@ -216,9 +216,9 @@ struct TradeDetailSheet: View {
 
                     // Trade details
                     VStack(spacing: 0) {
-                        DetailRow(label: "Entry Price", value: trade.entry_price.map { "$\($0, specifier: "%.2f")" } ?? "—")
+                        DetailRow(label: "Entry Price", value: trade.entry_price.map { String(format: "$%.2f", $0) } ?? "—")
                         Divider().padding(.leading, 16)
-                        DetailRow(label: "Exit Price", value: trade.exit_price.map { "$\($0, specifier: "%.2f")" } ?? "—")
+                        DetailRow(label: "Exit Price", value: trade.exit_price.map { String(format: "$%.2f", $0) } ?? "—")
                         Divider().padding(.leading, 16)
                         DetailRow(label: "Quantity", value: trade.quantity.map { "\($0) shares" } ?? "—")
                         Divider().padding(.leading, 16)
