@@ -242,11 +242,12 @@ Respond with ONLY this JSON — no explanation, no markdown, no other text:
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
         logger.error(f"Step 1 failed: {e}. Raw response: {step1_raw[:300] if 'step1_raw' in locals() else 'none'}")
-        opportunities = []
+        return [TradeDecision(action="hold", symbol=None, quantity=None,
+                              reasoning=f"Market scan error (Step 1 technical failure: {str(e)[:80]}). Holding — will retry next cycle.")]
 
     if not opportunities:
         return [TradeDecision(action="hold", symbol=None, quantity=None,
-                              reasoning="Market scan found no clear opportunities. Holding.")]
+                              reasoning="Market scan complete — no clear entry signals this cycle. All candidates in neutral territory or insufficient catalyst. Holding.")]
 
     # ── Step 2: Deep dive — evaluate ALL candidates, approve up to 3 trades ──
     top_symbols = [o["symbol"] for o in opportunities[:5]]
@@ -509,11 +510,15 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
                 continue
             final_qty = max(1, round(float(pos.qty)))
             # Add estimated proceeds to remaining_cash so a subsequent buy in
-            # the same cycle can use the freed capital (rotation)
+            # the same cycle can use the freed capital (rotation).
+            # Use 90% of proceeds as a safety buffer — Alpaca settles T+1 so the
+            # full amount isn't immediately available, which causes negative cash
+            # if the bot buys the full rotated amount in the same cycle.
             price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or pos.current_price
             proceeds = price * final_qty
-            remaining_cash += proceeds
-            logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} cash (now ${remaining_cash:,.0f} available)")
+            buffered_proceeds = proceeds * 0.90
+            remaining_cash += buffered_proceeds
+            logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} gross / +${buffered_proceeds:,.0f} usable (90% buffer) → remaining cash ${remaining_cash:,.0f}")
         else:
             continue
 
