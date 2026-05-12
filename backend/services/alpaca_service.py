@@ -108,24 +108,35 @@ def submit_market_order(
             from alpaca.trading.requests import StopLossRequest
             quote_request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quotes = data_client.get_stock_latest_quote(quote_request)
-            current_price = float(quotes[symbol].ask_price or 0)
+            quote = quotes[symbol]
+            ask_price = float(quote.ask_price or 0)
+            bid_price = float(quote.bid_price or 0)
 
-            if current_price <= 0:
-                raise ValueError(f"Invalid ask price for {symbol}: {current_price} — using plain market order")
+            if ask_price <= 0:
+                raise ValueError(f"Invalid ask price for {symbol}: {ask_price} — using plain market order")
+
+            # ── LIMIT ORDER: midpoint + 0.2% buffer ──
+            # Avoids paying full ask spread while still getting filled in normal conditions.
+            # 0.2% buffer ensures we're competitive without overpaying on wide-spread stocks.
+            midpoint = round((bid_price + ask_price) / 2, 2) if bid_price > 0 else ask_price
+            limit_price = round(midpoint * 1.002, 2)  # 0.2% above midpoint
+            current_price = ask_price  # use ask for TP/SL calculation
 
             take_profit_price = round(current_price * (1 + take_profit_pct), 2)
             stop_price = round(current_price * (1 - stop_loss_pct), 2)
 
             if partial_exit and qty >= 2:
                 # ── Partial exit strategy: sell half at TP, let other half ride with trailing stop ──
-                buy_req = MarketOrderRequest(
+                # Buy with limit order for better fill
+                buy_req = LimitOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=order_side,
                     time_in_force=TimeInForce.DAY,
+                    limit_price=limit_price,
                 )
                 order = trading_client.submit_order(buy_req)
-                logger.info(f"Partial-exit buy: {qty} {symbol} @ ~${current_price:.2f}")
+                logger.info(f"Partial-exit limit buy: {qty} {symbol} @ limit ${limit_price:.2f} (ask ${ask_price:.2f})")
 
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
@@ -159,19 +170,21 @@ def submit_market_order(
                     logger.warning(f"Trailing stop failed (non-fatal): {e}")
 
             else:
-                # ── Standard exit: BRACKET order (TP + SL in one atomic order — no duplicate sells) ──
-                bracket_req = MarketOrderRequest(
+                # ── Standard exit: LIMIT BRACKET order (limit entry + TP + SL) ──
+                # Limit order gets better fills than market; bracket legs protect the position.
+                bracket_req = LimitOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=order_side,
                     time_in_force=TimeInForce.DAY,
                     order_class=OrderClass.BRACKET,
+                    limit_price=limit_price,
                     take_profit=TakeProfitRequest(limit_price=take_profit_price),
                     stop_loss=StopLossRequest(stop_price=stop_price),
                 )
                 order = trading_client.submit_order(bracket_req)
                 logger.info(
-                    f"Bracket buy: {qty} {symbol} @ ~${current_price:.2f} | "
+                    f"Limit bracket buy: {qty} {symbol} @ limit ${limit_price:.2f} (ask ${ask_price:.2f}) | "
                     f"TP: ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%) | "
                     f"SL: ${stop_price:.2f} (-{stop_loss_pct*100:.0f}%)"
                 )

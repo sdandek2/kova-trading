@@ -50,7 +50,8 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
-_daily_trade_count: dict = {}  # date → int, tracks trades executed per day
+_daily_trade_count: dict = {}          # date → int, tracks trades executed per day
+_position_high_watermarks: dict = {}   # symbol → peak price seen while holding position
 
 
 def get_status() -> TradingStatus:
@@ -150,16 +151,23 @@ async def run_trading_cycle():
             logger.info("Market is closed. Skipping cycle.")
             return
 
-        # Circuit breaker: stop if down more than daily loss limit
+        # Circuit breaker: block new buys if down more than daily loss limit.
+        # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
         account = alpaca_service.get_account()
-        if account.day_pl_percent < -_risk_settings["daily_loss_limit_pct"]:
-            logger.warning(f"Daily loss limit hit ({account.day_pl_percent:.2f}%). Stopping trading.")
-            stop()
+        circuit_breaker_active = account.day_pl_percent < -_risk_settings["daily_loss_limit_pct"]
+        if circuit_breaker_active:
+            logger.warning(
+                f"⛔ Circuit breaker active: down {account.day_pl_percent:.2f}% today "
+                f"(limit: -{_risk_settings['daily_loss_limit_pct']}%). "
+                f"New buys blocked — exits and scale-outs still allowed."
+            )
             await manager.broadcast({
                 "type": "circuit_breaker",
-                "data": {"reason": f"Daily loss limit of {_risk_settings['daily_loss_limit_pct']}% hit", "day_pl_percent": account.day_pl_percent}
+                "data": {
+                    "reason": f"Daily loss limit of {_risk_settings['daily_loss_limit_pct']}% hit — new buys blocked",
+                    "day_pl_percent": account.day_pl_percent,
+                }
             })
-            return
 
         positions = alpaca_service.get_positions()
         universe = alpaca_service.get_tradeable_universe()
@@ -215,6 +223,11 @@ async def run_trading_cycle():
 
         earnings_map = get_upcoming_earnings(universe)
 
+        # Fetch strategy early — needed for scale-out logic and entry confirmation
+        from services.strategy import get_strategy as _get_strategy
+        strat = _get_strategy()
+        strategy_key = strat["key"]
+
         # Earnings play candidates — small pre-earnings run-up plays
         from services.earnings import get_earnings_play_candidates
         earnings_plays = []
@@ -230,6 +243,18 @@ async def run_trading_cycle():
         logger.info(f"Macro: {macro['market_regime']} | VIX: {macro['vix_level']} | SPY: {macro['spy_trend']}")
         logger.info(f"Geopolitical risk: {geo['risk_level'].upper()} (score={geo['risk_score']}) | Themes: {geo['dominant_themes']}")
 
+        # ── Update high watermarks for all open positions ──
+        held_symbols = {p.symbol for p in positions}
+        for position in positions:
+            cp = position.current_price
+            prev_high = _position_high_watermarks.get(position.symbol, 0)
+            if cp > prev_high:
+                _position_high_watermarks[position.symbol] = cp
+        # Clean up watermarks for positions that were closed
+        for sym in list(_position_high_watermarks.keys()):
+            if sym not in held_symbols:
+                del _position_high_watermarks[sym]
+
         # ── Scale-out: review existing positions for partial profit-taking / loss cuts ──
         for position in positions:
             sym_data = snapshot_light.get(position.symbol, {})
@@ -240,6 +265,10 @@ async def run_trading_cycle():
                 position_unrealized_pl_percent=position.unrealized_pl_percent,
                 rsi=rsi,
                 symbol=position.symbol,
+                strategy_key=strategy_key,
+                high_watermark=_position_high_watermarks.get(position.symbol),
+                current_price=position.current_price,
+                trail_pct=_risk_settings.get("stop_loss_pct", 0.05),
             )
 
             if scale_out:
@@ -280,10 +309,6 @@ async def run_trading_cycle():
         afternoon_pressure = (now_utc.hour >= pressure_hour_utc and trades_today < min_trades)
         if afternoon_pressure:
             logger.info(f"Afternoon pressure: only {trades_today}/{min_trades} trades today — lowering thresholds")
-
-        from services.strategy import get_strategy
-        strat = get_strategy()
-        strategy_key = strat["key"]
 
         decisions = claude_service.analyze_and_decide(
             market_snapshot=snapshot_light,
@@ -332,6 +357,27 @@ async def run_trading_cycle():
             await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
 
             if decision.action not in ("buy", "sell") or not decision.symbol or not decision.quantity:
+                continue
+
+            # ── Circuit breaker: block new buys when daily loss limit hit ──
+            if decision.action == "buy" and circuit_breaker_active:
+                logger.info(f"Circuit breaker: skipping BUY {decision.symbol} — daily loss limit active")
+                continue
+
+            # ── Hard earnings block: never buy into earnings today/tomorrow ──
+            # Gap risk on an earnings miss can blow through any stop loss.
+            # Claude is informed about earnings flags but this is the enforcement layer.
+            if decision.action == "buy" and earnings_map and earnings_map.get(decision.symbol) == "today/tomorrow":
+                logger.warning(
+                    f"EARNINGS BLOCK: skipping BUY {decision.symbol} — earnings today/tomorrow, "
+                    f"gap risk too high. Wait until after the report."
+                )
+                await manager.broadcast({"type": "ai_analysis", "data": {
+                    "reasoning": f"Earnings block: {decision.symbol} reports today/tomorrow — binary gap risk. Skipping buy, will re-evaluate after report.",
+                    "last_action": "waiting",
+                    "symbol": decision.symbol,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }})
                 continue
 
             # ── Entry confirmation (strategy-aware) ──

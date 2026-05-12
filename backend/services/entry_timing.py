@@ -125,14 +125,32 @@ def should_scale_out(
     rsi: float,
     symbol: str,
     strategy_key: str = "balanced",
+    high_watermark: float = None,
+    current_price: float = None,
+    trail_pct: float = 0.05,
 ) -> tuple[bool, float, str]:
     """
-    Partial profit-taking and loss-cutting rules.
+    Partial profit-taking and loss-cutting rules, with trailing stop support.
+
+    Trailing stop logic:
+    - Tracks the peak price of each position (high_watermark)
+    - If price drops trail_pct% from peak while still in profit → exit to lock in gains
+    - Only triggers after position is profitable — doesn't replace the hard stop loss
 
     AGGRESSIVE: Let winners run longer before taking profits.
     Tighter loss-cutting to redeploy cash into better opportunities.
     """
     is_aggressive = strategy_key == "aggressive"
+
+    # ── Trailing stop: exit if price drops trail_pct% from peak while in profit ──
+    if high_watermark and current_price and high_watermark > 0 and position_unrealized_pl_percent > 2.0:
+        drop_from_peak = (high_watermark - current_price) / high_watermark
+        if drop_from_peak >= trail_pct:
+            return True, 1.0, (
+                f"{symbol} trailing stop hit: dropped {drop_from_peak*100:.1f}% from peak "
+                f"${high_watermark:.2f} → ${current_price:.2f} "
+                f"(trail={trail_pct*100:.0f}%, still up {position_unrealized_pl_percent:.1f}% from entry) — locking in gains"
+            )
 
     if is_aggressive:
         # Let winners breathe more — only trim at 20%+, cut hard at 6%+ loss

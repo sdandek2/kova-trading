@@ -236,12 +236,34 @@ Respond in JSON with ONLY these two fields per entry:
         data = deep_data.get(sym) or market_snapshot.get(sym, {})
         closing_prices = data.get("closing_prices", [])
         indicators = compute_all(closing_prices) if closing_prices else {}
+        rsi = indicators.get("rsi", "N/A")
+        macd_hist = indicators.get("macd", {}).get("histogram", "N/A")
+        ma20 = indicators.get("moving_averages", {}).get("ma20", "N/A")
+        price = data.get("current_price")
+        rel_vol = data.get("relative_volume", 1.0)
+        news_count = (sentiment or {}).get(sym, 0)
+        earnings_timing = (earnings_map or {}).get(sym)
+
+        # RSI interpretation for Claude
+        if rsi != "N/A":
+            if rsi < 30: rsi_tag = f"RSI={rsi:.0f}[OVERSOLD]"
+            elif rsi > 70: rsi_tag = f"RSI={rsi:.0f}[OVERBOUGHT]"
+            else: rsi_tag = f"RSI={rsi:.0f}[NEUTRAL]"
+        else:
+            rsi_tag = "RSI=N/A"
+
+        # Volume context
+        vol_tag = f"RelVol={rel_vol:.1f}x"
+        if rel_vol >= 2.0: vol_tag += "[HIGH]"
+        elif rel_vol < 0.8: vol_tag += "[LOW]"
+
+        # Earnings warning embedded in detail
+        earnings_tag = f" ⚠️EARNINGS={earnings_timing}" if earnings_timing else ""
+
         line = (
-            f"{sym} [{opp.get('signal','')}]: price=${data.get('current_price')}, "
-            f"RSI={indicators.get('rsi','N/A')}, 5d={data.get('five_day_change_pct','N/A')}%, "
-            f"MA20=${indicators.get('moving_averages',{}).get('ma20','N/A')}, "
-            f"MACD={indicators.get('macd',{}).get('histogram','N/A')}, "
-            f"news={(sentiment or {}).get(sym, 0)}"
+            f"{sym} [{opp.get('signal','')}]{earnings_tag}: price=${price}, "
+            f"{rsi_tag}, MACD={macd_hist}, MA20=${ma20}, "
+            f"{vol_tag}, news={news_count}"
         )
         if intraday_summary.get(sym):
             line += f", {intraday_summary[sym]}"
@@ -334,8 +356,10 @@ Respond in JSON — only include approved trades (skip = omit from list):
             if existing_sector_count >= 1 and sym_sector not in ("Unknown", "Broad"):
                 logger.info(f"Skipping {sym} — already buying another {sym_sector} stock this cycle")
                 continue
-            if len(held_in_sector) >= 2 and sym_sector not in ("Unknown", "Broad"):
-                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector}")
+            # Strict sector cap: max 1 position per sector at a time.
+            # Prevents correlated positions all moving against us on a sector dip.
+            if len(held_in_sector) >= 1 and sym_sector not in ("Unknown", "Broad"):
+                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (1-per-sector rule)")
                 continue
             sectors_bought.append(sym_sector)
         except Exception:
