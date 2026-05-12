@@ -63,3 +63,39 @@ def get_macro():
     macro = get_macro_context()
     macro["sector_rotation"] = get_sector_rotation()
     return macro
+
+
+@router.get("/premarket")
+def get_premarket():
+    """
+    Return the latest pre-market scan result.
+    Runs automatically 9:00-9:30 AM EST each trading day.
+    Returns top stocks by news sentiment + macro regime + headlines.
+    """
+    from services.db import cache_get
+    data = cache_get("premarket_scan")
+    if not data:
+        return {
+            "available": False,
+            "message": "Pre-market scan runs at 9:00-9:30 AM EST before market open.",
+            "scanned_at": None,
+            "macro_regime": None,
+            "top_stocks": [],
+            "headlines": [],
+        }
+
+    # Sort sentiment dict into ranked list
+    sentiment = data.get("sentiment", {})
+    top_stocks = sorted(
+        [{"symbol": sym, "mentions": cnt} for sym, cnt in sentiment.items()],
+        key=lambda x: x["mentions"],
+        reverse=True,
+    )[:10]
+
+    return {
+        "available": True,
+        "scanned_at": data.get("scanned_at"),
+        "macro_regime": data.get("macro_regime"),
+        "top_stocks": top_stocks,
+        "headlines": data.get("headlines", [])[:10],
+    }

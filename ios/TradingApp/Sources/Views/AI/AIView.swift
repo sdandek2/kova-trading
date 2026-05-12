@@ -13,6 +13,8 @@ struct AIView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 16) {
+                            PreMarketView()
+
                             BotControlView(vm: vm)
 
                             StrategyPickerView()

@@ -39,7 +39,7 @@ class APIService {
         return d
     }()
 
-    private func fetch<T: Decodable>(_ path: String, method: String = "GET", timeout: TimeInterval = 10) async throws -> T {
+    func fetch<T: Decodable>(_ path: String, method: String = "GET", timeout: TimeInterval = 10) async throws -> T {
         guard let url = URL(string: baseURL + path) else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
