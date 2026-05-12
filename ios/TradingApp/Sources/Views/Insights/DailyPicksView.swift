@@ -286,7 +286,7 @@ struct DailyPickCard: View {
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Color.orange)
+                                .background(Color.red)
                                 .clipShape(Capsule())
                         }
                     }

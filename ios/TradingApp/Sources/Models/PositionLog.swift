@@ -3,6 +3,7 @@ import Foundation
 struct PositionLog: Decodable, Identifiable {
     var id: String { "\(symbol)-\(exit_time ?? entry_time ?? "")" }
     let symbol: String
+    let side: String?             // "long" | "short" — from DB side column
     let entry_time: String?
     let exit_time: String?
     let entry_price: Double?
@@ -25,7 +26,7 @@ struct PositionLog: Decodable, Identifiable {
         return m == 0 ? "\(h)h" : "\(h)h \(m)m"
     }
 
-    var isShort: Bool { strategy?.contains("short") == true }
+    var isShort: Bool { side == "short" || (side == nil && strategy?.contains("short") == true) }
 
     var exitReasonLabel: String {
         switch exit_reason {
