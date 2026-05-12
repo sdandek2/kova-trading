@@ -65,7 +65,7 @@ struct PortfolioChartView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: selectedPeriod) { _, newPeriod in
+            .onChange(of: selectedPeriod) { newPeriod in
                 onPeriodChange?(newPeriod)
             }
         }
