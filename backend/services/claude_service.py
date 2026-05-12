@@ -196,7 +196,7 @@ These ETFs profit when the market FALLS. Use them aggressively today:
 Buy inverse ETFs exactly like regular stocks — they profit automatically as the index falls.
 """
 
-    step1_prompt = f"""You are an expert stock trader executing an AGGRESSIVE strategy that profits in BOTH bullish AND bearish markets. Your mandate is to find the best trade RIGHT NOW.
+    step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
 {macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
@@ -208,29 +208,36 @@ Buy inverse ETFs exactly like regular stocks — they profit automatically as th
 - MACD histogram positive+rising: bullish momentum | negative+falling: bearish
 - [PENNY]: stock under $5 — high risk/reward, size accordingly
 - [NEWS:N]: mentioned in N recent news articles — sentiment catalyst (higher = stronger signal)
-- [EARNINGS:today/tomorrow]: AVOID shorts — binary risk; earnings stocks can also run hard pre-report
-- SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — use when market regime is bullish
-- SQQQ/SPXU/SOXS/SDOW/TZA are inverse ETFs — use when market regime is bearish
-- [SECTOR:signal:pct%]: sector momentum — BULLISH sector boosts conviction for longs, BEARISH sector = short opportunity
+- [EARNINGS:today/tomorrow]: AVOID — binary risk around earnings reports
+- SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — suitable when market regime is bullish
+- SQQQ/SPXU/SOXS/SDOW/TZA are inverse ETFs — suitable when market regime is bearish
+- [SECTOR:signal:pct%]: sector momentum — BULLISH sector supports longs, BEARISH sector supports shorts
 - [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
-Scan ALL stocks above. Find the TOP 5 opportunities — both LONG (buy) and SHORT plays.
-- BULLISH regime: prioritize longs + leveraged ETFs
-- BEARISH regime: prioritize inverse ETFs + short sells (RSI > 72 + bearish sector = prime short)
-- NEUTRAL: mix of longs and opportunistic shorts
+Scan the stocks above. Identify the TOP 5 best opportunities based on technicals and macro context.
+- BULLISH regime: favor longs and leveraged ETFs
+- BEARISH regime: favor inverse ETFs and short candidates (RSI > 72 + bearish sector)
+- NEUTRAL: balanced mix
 Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
-You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative.
 
-Return ONLY symbol and signal type:
-{{"opportunities": [{{"symbol": "X", "signal": "momentum"}}]}}"""
+Respond with ONLY this JSON — no explanation, no markdown, no other text:
+{{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}]}}"""
 
     try:
         step1_raw = ask_ai(step1_prompt, max_tokens=512)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
-                step1_raw = raw = step1_raw[4:]
-        step1_data = json.loads(step1_raw.strip())
+                step1_raw = step1_raw[4:]
+        try:
+            step1_data = json.loads(step1_raw.strip())
+        except json.JSONDecodeError:
+            import re as _re
+            match = _re.search(r'\{.*\}', step1_raw, _re.DOTALL)
+            if match:
+                step1_data = json.loads(match.group())
+            else:
+                raise ValueError(f"Could not extract JSON from Step 1 response: {step1_raw[:200]}")
         opportunities = step1_data.get("opportunities", [])
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
