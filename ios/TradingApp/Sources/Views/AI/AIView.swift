@@ -344,18 +344,16 @@ private struct RiskStepperRow: View {
                     Text(hint).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Stepper(
-                    value: $value,
-                    in: range,
-                    onEditingChanged: { editing in if !editing { onChange() } }
-                ) {
+                HStack(spacing: 8) {
                     Text("\(value) \(unit)")
                         .font(.subheadline).fontWeight(.semibold)
                         .foregroundStyle(.blue)
                         .monospacedDigit()
                         .frame(minWidth: 60, alignment: .trailing)
+                    Stepper("", value: $value, in: range,
+                            onEditingChanged: { editing in if !editing { onChange() } })
+                        .labelsHidden()
                 }
-                .labelsHidden()
             }
         }
         .padding(.horizontal, 16)
