@@ -4,6 +4,7 @@ struct AIView: View {
     @StateObject private var vm = TradingViewModel()
     @State private var circuitBreakerDayPl: Double? = nil
     @State private var circuitBreakerLimit: Double = 3.0
+    @State private var cycleIntervalSeconds: Int = 600  // default 10 min, refreshed on load
 
     var body: some View {
         NavigationStack {
@@ -29,14 +30,36 @@ struct AIView: View {
                             // ── Latest AI decision ──
                             if let analysis = vm.analysis {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    HStack {
+                                    HStack(alignment: .top) {
                                         Text("Latest AI Decision")
                                             .font(.headline)
                                         Spacer()
-                                        if let ts = analysis.timestamp {
-                                            Text(ts, style: .relative)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                        VStack(alignment: .trailing, spacing: 3) {
+                                            if let ts = analysis.timestamp {
+                                                Text(ts, style: .relative)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            if let ts = analysis.timestamp {
+                                                let nextRun = ts.addingTimeInterval(TimeInterval(cycleIntervalSeconds))
+                                                if nextRun > Date() {
+                                                    HStack(spacing: 3) {
+                                                        Image(systemName: "clock.arrow.circlepath")
+                                                            .font(.caption2)
+                                                        Text("Next in ") + Text(nextRun, style: .relative)
+                                                    }
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.blue)
+                                                } else {
+                                                    HStack(spacing: 3) {
+                                                        Image(systemName: "clock.arrow.circlepath")
+                                                            .font(.caption2)
+                                                        Text("Running soon…")
+                                                            .font(.caption2)
+                                                    }
+                                                    .foregroundStyle(.orange)
+                                                }
+                                            }
                                         }
                                     }
 
@@ -133,6 +156,9 @@ struct AIView: View {
         .task {
             await vm.load()
             await loadCircuitBreakerStatus()
+            if let settings = try? await APIService.shared.getRiskSettings() {
+                cycleIntervalSeconds = settings.cycle_interval_seconds
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .circuitBreakerFired)) { note in
             if let dayPl = note.userInfo?["day_pl_percent"] as? Double {
