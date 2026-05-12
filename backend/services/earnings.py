@@ -16,7 +16,9 @@ def get_upcoming_earnings(symbols: list[str]) -> dict[str, str]:
     earnings_map = {}
     try:
         nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        news = nc.get_news(NewsRequest(symbols=symbols, limit=100))
+        # NewsRequest expects symbols as a comma-separated string, not a list
+        symbols_str = ",".join(symbols[:50]) if symbols else ""
+        news = nc.get_news(NewsRequest(symbols=symbols_str, limit=100))
 
         earnings_keywords = [
             "earnings", "eps", "quarterly results", "q1", "q2", "q3", "q4",

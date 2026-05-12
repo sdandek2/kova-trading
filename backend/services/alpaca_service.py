@@ -387,20 +387,27 @@ def get_market_snapshot(symbols: list[str]) -> dict:
 def get_portfolio_history(period: str = "1W") -> list[dict]:
     """Return portfolio equity history for charting."""
     try:
-        # alpaca-py >= 0.20 uses get_portfolio_history with direct kwargs
-        history = trading_client.get_portfolio_history(
-            period=period,
-            timeframe="1D",
-        )
+        import requests as _requests
+        # Use Alpaca REST API directly — alpaca-py TradingClient
+        # doesn't expose get_portfolio_history in all versions
+        base = "https://paper-api.alpaca.markets"
+        headers = {
+            "APCA-API-KEY-ID": settings.alpaca_api_key,
+            "APCA-API-SECRET-KEY": settings.alpaca_secret_key,
+        }
+        params = {"period": period, "timeframe": "1D", "extended_hours": "false"}
+        resp = _requests.get(f"{base}/v2/account/portfolio/history", headers=headers, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
         result = []
-        for i, timestamp in enumerate(history.timestamp):
-            equity = history.equity[i]
+        for i, timestamp in enumerate(data.get("timestamp", [])):
+            equity = data["equity"][i]
             if equity is not None:
                 result.append({
                     "timestamp": timestamp,
                     "equity": float(equity),
-                    "profit_loss": float(history.profit_loss[i]) if history.profit_loss[i] else 0.0,
-                    "profit_loss_pct": float(history.profit_loss_pct[i]) if history.profit_loss_pct[i] else 0.0,
+                    "profit_loss": float(data["profit_loss"][i]) if data["profit_loss"][i] else 0.0,
+                    "profit_loss_pct": float(data["profit_loss_pct"][i]) if data["profit_loss_pct"][i] else 0.0,
                 })
         return result
     except Exception as e:
