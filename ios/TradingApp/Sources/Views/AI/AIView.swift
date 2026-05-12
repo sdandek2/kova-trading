@@ -247,26 +247,7 @@ struct RiskSettingsCard: View {
                         unit: "%"
                     ) { saveSettings() }
 
-                    // ── Activity Targets ──
-                    RiskSectionHeader(title: "ACTIVITY TARGETS")
 
-                    RiskStepperRow(
-                        label: "Min Daily Trades",
-                        hint: "Bot lowers its conviction threshold in the afternoon if fewer trades by this hour.",
-                        value: $settings.min_daily_trades,
-                        range: 1...10,
-                        unit: "trades"
-                    ) { saveSettings() }
-
-                    Divider().padding(.leading, 16)
-
-                    RiskStepperRow(
-                        label: "Afternoon Pressure Hour",
-                        hint: "If min daily trades not met by this hour (EST), the bot becomes more aggressive.",
-                        value: $settings.afternoon_pressure_hour,
-                        range: 12...15,
-                        unit: ":00 EST"
-                    ) { saveSettings() }
                 }
 
                 if let err = saveError {
