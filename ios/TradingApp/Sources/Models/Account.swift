@@ -20,14 +20,17 @@ struct Position: Codable, Identifiable {
     var id: String { symbol }
     let symbol: String
     let qty: Double
+    let side: String          // "long" | "short"
     let avgEntryPrice: Double
     let currentPrice: Double
     let unrealizedPl: Double
     let unrealizedPlPercent: Double
     let marketValue: Double
 
+    var isShort: Bool { side == "short" }
+
     enum CodingKeys: String, CodingKey {
-        case symbol, qty
+        case symbol, qty, side
         case avgEntryPrice = "avg_entry_price"
         case currentPrice = "current_price"
         case unrealizedPl = "unrealized_pl"

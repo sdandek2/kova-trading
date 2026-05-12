@@ -22,6 +22,9 @@ struct AIView: View {
 
                             PreMarketView()
 
+                            // ── Active short positions (only shown when bot has open shorts) ──
+                            OpenShortsCard()
+
                             BotControlView(vm: vm)
 
                             StrategyPickerView()
@@ -136,4 +139,102 @@ struct AIView: View {
 
 extension Notification.Name {
     static let circuitBreakerFired = Notification.Name("circuitBreakerFired")
+}
+
+// MARK: - Open Shorts Card
+
+struct OpenShortsCard: View {
+    @State private var shorts: [Position] = []
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if !isLoading && !shorts.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header
+                    HStack(spacing: 10) {
+                        ZStack {
+                            Circle().fill(Color.orange.opacity(0.15)).frame(width: 36, height: 36)
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundStyle(.orange).font(.system(size: 16))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Active Short Positions")
+                                .font(.headline).foregroundStyle(.primary)
+                            Text("\(shorts.count) open short\(shorts.count == 1 ? "" : "s")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        // Total unrealized P&L across all shorts
+                        let totalPl = shorts.reduce(0) { $0 + $1.unrealizedPl }
+                        Text("\(totalPl >= 0 ? "+" : "")$\(String(format: "%.0f", totalPl))")
+                            .font(.subheadline).fontWeight(.bold)
+                            .foregroundStyle(totalPl >= 0 ? .green : .red)
+                    }
+                    .padding()
+
+                    Divider().padding(.horizontal)
+
+                    ForEach(shorts) { position in
+                        ShortPositionRow(position: position)
+                        if position.id != shorts.last?.id {
+                            Divider().padding(.leading, 52)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
+            }
+        }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        let positions = (try? await APIService.shared.getPositions()) ?? []
+        shorts = positions.filter { $0.isShort }
+        isLoading = false
+    }
+}
+
+struct ShortPositionRow: View {
+    let position: Position
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Direction indicator
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.orange)
+                .frame(width: 4)
+                .padding(.vertical, 8)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(position.symbol)
+                        .font(.subheadline).fontWeight(.semibold)
+                    Text("SHORT")
+                        .font(.caption2).fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange)
+                        .clipShape(Capsule())
+                    Spacer()
+                    // P&L %
+                    Text("\(position.unrealizedPlPercent >= 0 ? "+" : "")\(String(format: "%.1f", position.unrealizedPlPercent))%")
+                        .font(.subheadline).fontWeight(.bold)
+                        .foregroundStyle(position.unrealizedPlPercent >= 0 ? .green : .red)
+                }
+                HStack(spacing: 8) {
+                    Text("Entry $\(String(format: "%.2f", position.avgEntryPrice)) → Now $\(String(format: "%.2f", position.currentPrice))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Int(position.qty)) shares")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
 }

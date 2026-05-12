@@ -104,6 +104,7 @@ def _ensure_table(conn):
             CREATE TABLE IF NOT EXISTS position_log (
                 id                   SERIAL PRIMARY KEY,
                 symbol               TEXT NOT NULL,
+                side                 VARCHAR(10) DEFAULT 'long',
                 entry_time           TIMESTAMPTZ,
                 exit_time            TIMESTAMPTZ,
                 entry_price          FLOAT,
@@ -117,6 +118,11 @@ def _ensure_table(conn):
                 claude_reasoning     TEXT,
                 market_regime        TEXT
             )
+        """)
+        # Migration: add side column to existing tables that predate this column
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS side VARCHAR(10) DEFAULT 'long'
         """)
         # ── NEW: circuit_breaker_log ────────────────────────────────────────
         # Every time the daily loss limit fires, record when and why.
@@ -455,9 +461,10 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 
 def log_position_open(symbol: str, entry_price: float, quantity: int,
                       strategy: str = None, claude_reasoning: str = None,
-                      market_regime: str = None) -> Optional[int]:
+                      market_regime: str = None, side: str = "long") -> Optional[int]:
     """
     Record that a new position was opened.
+    side: "long" | "short"
     Returns the row id so the caller can update it on close, or None on failure.
     """
     try:
@@ -467,11 +474,11 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO position_log
-                    (symbol, entry_time, entry_price, quantity, strategy,
+                    (symbol, side, entry_time, entry_price, quantity, strategy,
                      claude_reasoning, market_regime)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (symbol, datetime.now(timezone.utc), entry_price, quantity,
+            """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
                   strategy, claude_reasoning, market_regime))
             row = cur.fetchone()
             return row[0] if row else None
@@ -522,7 +529,11 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 ep = ep or entry_price or 0
                 qty = qty or quantity or 0
                 et = et or entry_time or now
-                realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, side)
+                # Read side from DB row (populated by log_position_open); fall back to caller param
+                cur.execute("SELECT side FROM position_log WHERE id = %s", (pos_id,))
+                side_row = cur.fetchone()
+                db_side = (side_row[0] if side_row and side_row[0] else side) or "long"
+                realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, db_side)
                 hold_mins = int((now - et).total_seconds() / 60) if et else None
                 cur.execute("""
                     UPDATE position_log SET

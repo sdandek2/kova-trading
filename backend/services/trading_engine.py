@@ -635,6 +635,7 @@ async def run_trading_cycle():
                         strategy=f"{strategy_key}_short",
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
+                        side="short",
                     )
                     # Seed low watermark for new short position
                     _short_low_watermarks[decision.symbol] = fill_price
@@ -653,6 +654,7 @@ async def run_trading_cycle():
                         strategy=strategy_key,
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
+                        side="long",
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price
