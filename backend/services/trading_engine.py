@@ -29,6 +29,8 @@ _RISK_DEFAULTS = {
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
     "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM EST — more time to catch up
+    "max_trades_per_cycle": 3,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
+    "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
 }
 
 
@@ -476,6 +478,10 @@ async def run_trading_cycle():
         if afternoon_pressure:
             logger.info(f"Afternoon pressure: only {trades_today}/{min_trades} trades today — lowering thresholds")
 
+        # Per-cycle counter for new opens (buy/short). Sells, covers, and trailing stops never count.
+        _cycle_open_count = 0
+        _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 3))
+
         decisions = claude_service.analyze_and_decide(
             market_snapshot=snapshot_light,
             positions=positions,
@@ -552,6 +558,21 @@ async def run_trading_cycle():
                 }})
                 continue
 
+            # ── Cycle trade cap: limit new opens per cycle (sells/covers never blocked) ──
+            if decision.action in ("buy", "short"):
+                if _cycle_open_count >= _max_trades_this_cycle:
+                    logger.info(
+                        f"Cycle cap ({_max_trades_this_cycle}) reached — skipping "
+                        f"{decision.action.upper()} {decision.symbol}"
+                    )
+                    log_bot_activity(
+                        "trade_cap",
+                        f"Max {_max_trades_this_cycle} new opens/cycle reached — skipping "
+                        f"{decision.action.upper()} {decision.symbol}",
+                        symbol=decision.symbol, cycle_id=_current_cycle_id,
+                    )
+                    continue
+
             # ── Entry confirmation (strategy-aware) ──
             deep = alpaca_service.get_market_snapshot([decision.symbol])
             sym_data = deep.get(decision.symbol) or snapshot_light.get(decision.symbol, {})
@@ -587,9 +608,24 @@ async def run_trading_cycle():
                 )
                 price = sym_data.get("current_price")
                 if price and price > 0:
+                    # Penny stock guard: stocks under $5 get a smaller max position %
+                    # to prevent massive share counts from inflating notional risk.
+                    # e.g. $3.56 stock × normal 30% of $100k = 8,427 shares → too concentrated.
+                    # With max_penny_position_pct=3%, same stock → 843 shares (~$3k) instead.
+                    is_penny = price < 5.0
+                    if is_penny:
+                        penny_pct = _risk_settings.get("max_penny_position_pct", 3.0) / 100.0
+                        effective_max_pct = penny_pct
+                        logger.info(
+                            f"Penny stock guard: {decision.symbol} @ ${price:.2f} < $5 — "
+                            f"capping position at {penny_pct*100:.1f}% (was {strat['max_position_pct']*100:.0f}%)"
+                        )
+                    else:
+                        effective_max_pct = strat["max_position_pct"]
+
                     vol_qty = volatility_adjusted_quantity(
                         portfolio_value=account.portfolio_value,
-                        max_position_pct=strat["max_position_pct"],
+                        max_position_pct=effective_max_pct,
                         current_price=price,
                         atr=atr,
                         risk_per_trade_pct=strat.get("risk_per_trade_pct", 0.01),
@@ -630,10 +666,15 @@ async def run_trading_cycle():
                     partial_exit=decision.partial_exit,
                 )
             if order:
-                # Track daily trade count
+                # Track daily trade count and per-cycle open count
                 today = datetime.now(timezone.utc).date()
                 _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
-                logger.info(f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} | trades today: {_daily_trade_count[today]}")
+                if decision.action in ("buy", "short"):
+                    _cycle_open_count += 1
+                logger.info(
+                    f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} "
+                    f"| trades today: {_daily_trade_count[today]} | cycle opens: {_cycle_open_count}/{_max_trades_this_cycle}"
+                )
 
                 # Log position open / close to position_log
                 fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)

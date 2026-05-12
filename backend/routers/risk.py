@@ -12,6 +12,8 @@ class RiskSettings(BaseModel):
     take_profit_pct: float
     min_daily_trades: Optional[int] = 3
     afternoon_pressure_hour: Optional[int] = 13   # EST hour, e.g. 13 = 1:00 PM
+    max_trades_per_cycle: Optional[int] = 3       # max new buys/shorts per cycle; sells/covers never blocked
+    max_penny_position_pct: Optional[float] = 3.0 # max position size % for stocks under $5 (vs normal sizing)
 
 
 @router.get("/settings", response_model=RiskSettings)

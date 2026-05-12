@@ -33,6 +33,9 @@ struct AIView: View {
 
                             WatchlistEditorView()
 
+                            // ── Risk controls ──
+                            RiskSettingsCard()
+
                             // ── Real-time bot activity log ──
                             BotActivityView()
 
@@ -139,6 +142,254 @@ struct AIView: View {
 
 extension Notification.Name {
     static let circuitBreakerFired = Notification.Name("circuitBreakerFired")
+}
+
+// MARK: - Risk Settings Card
+
+struct RiskSettingsCard: View {
+    @State private var settings: RiskSettings = .defaults
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var saveError: String? = nil
+    @State private var saveSuccess = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(Color.blue.opacity(0.12)).frame(width: 36, height: 36)
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(.blue).font(.system(size: 16))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Risk Controls")
+                        .font(.headline).foregroundStyle(.primary)
+                    Text("Saved to cloud · takes effect next cycle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isSaving {
+                    ProgressView().scaleEffect(0.8)
+                } else if saveSuccess {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding()
+
+            Divider().padding(.horizontal)
+
+            if isLoading {
+                ProgressView().frame(maxWidth: .infinity).padding()
+            } else {
+                VStack(spacing: 0) {
+                    // ── New: Trade Throttle ──
+                    RiskSectionHeader(title: "TRADE THROTTLE")
+
+                    RiskStepperRow(
+                        label: "Max Trades Per Cycle",
+                        hint: "Limits new buys/shorts per 10-min cycle. Sells & covers always go through.",
+                        value: $settings.max_trades_per_cycle,
+                        range: 1...10,
+                        unit: "trades"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskPercentSliderRow(
+                        label: "Penny Stock Position Cap",
+                        hint: "Max portfolio % for stocks under $5. Prevents 7,000-share PLUG situations.",
+                        value: $settings.max_penny_position_pct,
+                        range: 1.0...15.0,
+                        step: 0.5,
+                        unit: "%"
+                    ) { saveSettings() }
+
+                    // ── Loss Protection ──
+                    RiskSectionHeader(title: "LOSS PROTECTION")
+
+                    RiskPercentSliderRow(
+                        label: "Daily Loss Circuit Breaker",
+                        hint: "Blocks new buys/shorts for the day if portfolio drops this much. Sells still work.",
+                        value: $settings.daily_loss_limit_pct,
+                        range: 1.0...15.0,
+                        step: 0.5,
+                        unit: "%"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskPercentSliderRow(
+                        label: "Stop Loss",
+                        hint: "Trailing stop fallback. Claude sets per-trade stops; this is the floor.",
+                        value: Binding(
+                            get: { settings.stop_loss_pct * 100 },
+                            set: { settings.stop_loss_pct = $0 / 100 }
+                        ),
+                        range: 1.0...20.0,
+                        step: 0.5,
+                        unit: "%"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskPercentSliderRow(
+                        label: "Take Profit",
+                        hint: "Profit target fallback. Claude overrides this per trade with a tighter target.",
+                        value: Binding(
+                            get: { settings.take_profit_pct * 100 },
+                            set: { settings.take_profit_pct = $0 / 100 }
+                        ),
+                        range: 5.0...50.0,
+                        step: 1.0,
+                        unit: "%"
+                    ) { saveSettings() }
+
+                    // ── Activity Targets ──
+                    RiskSectionHeader(title: "ACTIVITY TARGETS")
+
+                    RiskStepperRow(
+                        label: "Min Daily Trades",
+                        hint: "Bot lowers its conviction threshold in the afternoon if fewer trades by this hour.",
+                        value: $settings.min_daily_trades,
+                        range: 1...10,
+                        unit: "trades"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskStepperRow(
+                        label: "Afternoon Pressure Hour",
+                        hint: "If min daily trades not met by this hour (EST), the bot becomes more aggressive.",
+                        value: $settings.afternoon_pressure_hour,
+                        range: 12...15,
+                        unit: ":00 EST"
+                    ) { saveSettings() }
+                }
+
+                if let err = saveError {
+                    Text(err)
+                        .font(.caption).foregroundStyle(.red)
+                        .padding(.horizontal).padding(.bottom, 8)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
+        .task { await loadSettings() }
+    }
+
+    private func loadSettings() async {
+        isLoading = true
+        if let loaded = try? await APIService.shared.getRiskSettings() {
+            settings = loaded
+        }
+        isLoading = false
+    }
+
+    private func saveSettings() {
+        guard !isSaving else { return }
+        isSaving = true
+        saveError = nil
+        saveSuccess = false
+        let snapshot = settings
+        Task {
+            do {
+                try await APIService.shared.setRiskSettings(snapshot)
+                await MainActor.run {
+                    isSaving = false
+                    saveSuccess = true
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await MainActor.run { saveSuccess = false }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    saveError = "Save failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Risk Settings Subviews
+
+private struct RiskSectionHeader: View {
+    let title: String
+    var body: some View {
+        Text(title)
+            .font(.caption2).fontWeight(.semibold)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RiskStepperRow: View {
+    let label: String
+    let hint: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let unit: String
+    let onChange: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.subheadline).fontWeight(.medium)
+                    Text(hint).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Stepper(
+                    value: $value,
+                    in: range,
+                    onEditingChanged: { editing in if !editing { onChange() } }
+                ) {
+                    Text("\(value) \(unit)")
+                        .font(.subheadline).fontWeight(.semibold)
+                        .foregroundStyle(.blue)
+                        .monospacedDigit()
+                        .frame(minWidth: 60, alignment: .trailing)
+                }
+                .labelsHidden()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+}
+
+private struct RiskPercentSliderRow: View {
+    let label: String
+    let hint: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let unit: String
+    let onChange: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label).font(.subheadline).fontWeight(.medium)
+                Spacer()
+                Text(String(format: value.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f%@" : "%.1f%@", value, unit))
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundStyle(.blue)
+                    .monospacedDigit()
+            }
+            Slider(value: $value, in: range, step: step) { editing in
+                if !editing { onChange() }
+            }
+            Text(hint).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
 }
 
 // MARK: - Open Shorts Card
