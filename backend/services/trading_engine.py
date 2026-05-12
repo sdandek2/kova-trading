@@ -658,6 +658,20 @@ async def run_trading_cycle():
                     logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
                 decision.quantity = scaled_qty
 
+            # ── Pre-sell: cancel any open orders on this symbol ──
+            # Rotation sells (and scale-outs) fail with "insufficient qty available"
+            # when a GTC bracket/limit sell order from the original entry is still open,
+            # holding shares in reserve. Cancel those first so Alpaca frees the qty.
+            if decision.action in ("sell",):
+                try:
+                    open_orders = alpaca_service.get_orders(limit=20)
+                    for o in open_orders:
+                        if o.symbol == decision.symbol and o.status in ("new", "partially_filled", "accepted"):
+                            alpaca_service.cancel_order(o.id)
+                            logger.info(f"Pre-sell cancel: {o.id} ({o.side}) on {decision.symbol} to free qty for rotation")
+                except Exception as ce:
+                    logger.warning(f"Pre-sell cancel failed for {decision.symbol} (non-fatal): {ce}")
+
             # Route to correct order executor
             if decision.action == "short":
                 order = alpaca_service.submit_short_order(
