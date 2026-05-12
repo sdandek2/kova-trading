@@ -177,6 +177,45 @@ These stocks have earnings coming this week. Consider a small position (5% max) 
 {headlines_formatted}
 """
 
+    # ── EOD Feedback: inject yesterday's learnings into today's prompts ──
+    # Wrapped in try/except — if anything fails, trading continues unaffected.
+    eod_step1_context = ""
+    eod_step2_context = ""
+    try:
+        from services.eod_analysis_service import get_latest_eod_report
+        eod = get_latest_eod_report()
+        if eod and isinstance(eod, dict) and eod.get("analysis"):
+            a = eod["analysis"]
+            # Truncate fields so we never bloat the prompt unexpectedly
+            key_insight = (a.get("key_insight") or "")[:300].strip()
+            risk_note   = (a.get("risk_note")   or "")[:200].strip()
+            watchlist   = a.get("tomorrow_watchlist") or []
+            eod_date    = eod.get("date", "recent")
+
+            if key_insight or risk_note or watchlist:
+                watch_lines = "\n".join(
+                    f"  • {w.get('symbol','?')}: {str(w.get('thesis',''))[:100]} [{w.get('action','watch').upper()}]"
+                    for w in (watchlist[:4] if isinstance(watchlist, list) else [])
+                )
+                eod_step1_context = f"""
+## Previous Day's Learning ({eod_date} — incorporate into today's scan)
+- Key insight: {key_insight or 'N/A'}
+- Risk flag: {risk_note or 'None'}
+Apply these learnings: avoid patterns that failed yesterday, prioritize patterns that succeeded.
+"""
+                eod_step2_context = f"""
+## Previous Day's Learning + Priority Watchlist ({eod_date})
+- Key insight: {key_insight or 'N/A'}
+- Risk flag: {risk_note or 'None'}
+- Yesterday's watchlist (prioritize if signals confirm today):
+{watch_lines if watch_lines else '  None'}
+Factor these into your trade approvals — confirm or override based on today's technicals.
+"""
+                logger.info(f"EOD feedback injected: date={eod_date}, insight={len(key_insight)}c, watchlist={len(watchlist)} tickers")
+    except Exception as _eod_exc:
+        # Never block trading — EOD context is a bonus, not a requirement
+        logger.debug(f"EOD feedback load skipped (non-fatal): {_eod_exc}")
+
     # ── Inject inverse ETFs on bearish days ──
     regime = (macro or {}).get("market_regime", "")
     vix = (macro or {}).get("vix_level", "low")
@@ -199,7 +238,7 @@ Buy inverse ETFs exactly like regular stocks — they profit automatically as th
     step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
-{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
+{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
@@ -369,7 +408,7 @@ ROTATION RULES:
 
     step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
 {pressure_note}
-{performance_text}
+{eod_step2_context}{performance_text}
 {portfolio_context}
 Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
 {"⚠️ PORTFOLIO THIN — only " + str(positions_count) + " positions open. Prioritise building positions." if positions_count < 3 else ""}
