@@ -173,14 +173,33 @@ struct SuggestionCard: View {
                                 .foregroundStyle(chg >= 0 ? .green : .red)
                         }
                         if let upside = suggestion.upside_pct {
-                            Text(String(format: "↑%.0f%% upside", upside))
+                            Text(suggestion.isBearish
+                                 ? String(format: "↓%.0f%% profit", upside)
+                                 : String(format: "↑%.0f%% upside", upside))
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(suggestion.isBearish ? .red : .blue)
                         }
                     }
                 }
 
-                horizonBadge
+                HStack(spacing: 6) {
+                    horizonBadge
+                    if suggestion.isInverseETF {
+                        Text("INVERSE")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.red)
+                            .clipShape(Capsule())
+                    } else if suggestion.isShort {
+                        Text("SHORT")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange)
+                            .clipShape(Capsule())
+                    }
+                }
 
                 Text(suggestion.short_term_thesis)
                     .font(.caption)
@@ -207,12 +226,12 @@ struct SuggestionCard: View {
                     Button {
                         showTrade = true
                     } label: {
-                        Text("Buy")
+                        Text(suggestion.isShort ? "Short" : "Buy")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
-                            .background(Color.green)
+                            .background(suggestion.isShort ? Color.red : Color.green)
                             .clipShape(Capsule())
                     }
                 }
@@ -225,7 +244,7 @@ struct SuggestionCard: View {
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .sheet(isPresented: $showTrade) {
-            TradeSheet(prefillSymbol: suggestion.symbol, prefillSide: "buy", prefillQty: suggestedQty)
+            TradeSheet(prefillSymbol: suggestion.symbol, prefillSide: suggestion.prefillSide, prefillQty: suggestedQty)
         }
     }
 

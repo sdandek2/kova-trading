@@ -249,26 +249,37 @@ def get_top_suggestions(n: int = 8) -> list[dict]:
 ## Available Stocks (price + 5-day momentum)
 {universe_text}
 
-Select the TOP {n} stocks/ETFs that offer the best opportunity RIGHT NOW considering:
+Select the TOP {n} stocks/ETFs that offer the best opportunity RIGHT NOW. Let market conditions drive direction:
+- Bull regime: mostly longs, 1-2 bearish hedges
+- Bear regime: mostly shorts/inverse ETFs, minimal longs
+- Mixed: balanced mix
+
+Consider:
 1. Current price momentum (5-day change)
 2. Alignment with macro regime (bull/bear/volatile)
 3. Geopolitical tailwinds or safe-haven status
 4. Risk/reward for both short-term (1 week) and long-term (1-3 months)
 
-For each pick, provide a short-term and long-term thesis.
+Direction rules:
+- direction "long": regular buy — stock expected to rise
+- direction "short": short-sell candidate — overextended, breakdown, sector headwind, high float, NO imminent earnings
+- direction "inverse_etf": buy an inverse ETF (SQQQ, SPXU, SOXS, SDOW, TZA) — use when broad market/sector is weak
+
+For short and inverse_etf picks: upside_pct = expected downside profit %, short_term_thesis = why it falls.
 
 Respond ONLY in JSON:
 {{
   "suggestions": [
     {{
       "symbol": "XXXX",
-      "type": "momentum|defensive|geopolitical|contrarian|etf",
+      "type": "momentum|defensive|geopolitical|contrarian|etf|short_candidate|inverse_etf|breakdown",
+      "direction": "long|short|inverse_etf",
       "horizon": "short_term|long_term|both",
       "short_term_thesis": "1-2 sentences for next 1-2 weeks",
       "long_term_thesis": "1-2 sentences for next 1-3 months",
       "risk_level": "low|medium|high",
-      "entry_note": "what to watch before buying (e.g. confirm above MA20)",
-      "upside_pct": estimated_upside_percentage_as_number
+      "entry_note": "what to watch before entering (e.g. confirm above MA20 / short below $X)",
+      "upside_pct": estimated_profit_percentage_as_number
     }}
   ]
 }}"""

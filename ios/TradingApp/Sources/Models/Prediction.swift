@@ -136,7 +136,8 @@ struct TickerSearchResponse: Codable {
 struct Suggestion: Codable, Identifiable {
     var id: String { symbol }
     let symbol: String
-    let type: String                 // momentum | defensive | geopolitical | contrarian | etf
+    let type: String                 // momentum | defensive | geopolitical | contrarian | etf | short_candidate | inverse_etf | breakdown
+    let direction: String?           // "long" | "short" | "inverse_etf" — nil means long for backward compat
     let horizon: String              // short_term | long_term | both
     let short_term_thesis: String
     let long_term_thesis: String
@@ -145,4 +146,10 @@ struct Suggestion: Codable, Identifiable {
     let upside_pct: Double?
     let current_price: Double?
     let five_day_change_pct: Double?
+
+    var tradeDirection: String { direction ?? "long" }
+    var isShort: Bool { tradeDirection == "short" }
+    var isInverseETF: Bool { tradeDirection == "inverse_etf" }
+    var isBearish: Bool { isShort || isInverseETF }
+    var prefillSide: String { isShort ? "short" : "buy" }
 }
