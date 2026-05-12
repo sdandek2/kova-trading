@@ -10,8 +10,8 @@ class RiskSettings(BaseModel):
     daily_loss_limit_pct: float
     stop_loss_pct: float
     take_profit_pct: float
-    min_daily_trades: Optional[int] = 2
-    afternoon_pressure_hour: Optional[int] = 14   # EST hour, e.g. 14 = 2:00 PM
+    min_daily_trades: Optional[int] = 3
+    afternoon_pressure_hour: Optional[int] = 13   # EST hour, e.g. 13 = 1:00 PM
 
 
 @router.get("/settings", response_model=RiskSettings)
