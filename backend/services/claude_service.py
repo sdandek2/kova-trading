@@ -425,6 +425,11 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
     remaining_cash = account_cash
     sectors_bought = []
 
+    # Sort sells first so rotation proceeds are added to remaining_cash
+    # before any subsequent buy checks affordability — regardless of Claude's output order
+    _step3_priority = {"sell": 0, "buy": 1, "short": 1, "hold": 2}
+    approved = sorted(approved, key=lambda t: _step3_priority.get(t.get("action", "hold"), 2))
+
     for trade in approved[:3]:  # max 3 per cycle
         sym = trade.get("symbol")
         action = trade.get("action", "hold")
@@ -466,7 +471,16 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or 0
             if price <= 0:
                 continue
-            max_shares = int(max_position / price)
+            # Apply penny stock cap in Step 3 so cash reservation is correctly sized.
+            # trading_engine.py applies the same cap for final ATR-adjusted sizing.
+            if action == "buy" and price < 5.0:
+                from services.db import cache_get as _cg
+                _rs = _cg("user_pref:risk_settings") or {}
+                _penny_pct = float(_rs.get("max_penny_position_pct", 3.0)) / 100.0
+                effective_max_position = portfolio_value * _penny_pct
+            else:
+                effective_max_position = max_position
+            max_shares = int(effective_max_position / price)
             is_aggressive = current_strategy.get("key") == "aggressive"
             if qty_suggestion:
                 final_qty = min(int(qty_suggestion), max_shares)

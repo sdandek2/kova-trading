@@ -564,6 +564,8 @@ async def run_trading_cycle():
                 continue
 
             # ── Cycle trade cap: limit new opens per cycle (sells/covers never blocked) ──
+            # Slot is consumed HERE (before submission) so failed orders still use a slot
+            # and don't allow infinite retries within the same cycle.
             if decision.action in ("buy", "short"):
                 if _cycle_open_count >= _max_trades_this_cycle:
                     logger.info(
@@ -577,6 +579,8 @@ async def run_trading_cycle():
                         symbol=decision.symbol, cycle_id=_current_cycle_id,
                     )
                     continue
+                # Reserve the slot now — even if the order later fails, the slot is spent
+                _cycle_open_count += 1
 
             # ── Entry confirmation (strategy-aware) ──
             deep = alpaca_service.get_market_snapshot([decision.symbol])
@@ -671,11 +675,9 @@ async def run_trading_cycle():
                     partial_exit=decision.partial_exit,
                 )
             if order:
-                # Track daily trade count and per-cycle open count
+                # Track daily trade count (_cycle_open_count already incremented above)
                 today = datetime.now(timezone.utc).date()
                 _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
-                if decision.action in ("buy", "short"):
-                    _cycle_open_count += 1
                 logger.info(
                     f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} "
                     f"| trades today: {_daily_trade_count[today]} | cycle opens: {_cycle_open_count}/{_max_trades_this_cycle}"
