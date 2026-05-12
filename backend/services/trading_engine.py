@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from models.trade import TradingStatus, AIAnalysis
@@ -312,7 +312,7 @@ async def run_trading_cycle():
                     recent_orders = alpaca_service.get_orders(limit=20)
                     for o in recent_orders:
                         if o.symbol == sym and o.side == "sell" and o.filled_avg_price:
-                            exit_price = o.filled_avg_price
+                            exit_price = float(o.filled_avg_price)
                             break
                 except Exception:
                     pass
@@ -571,8 +571,8 @@ async def run_trading_cycle():
                 logger.info(f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} | trades today: {_daily_trade_count[today]}")
 
                 # Log position open / close to position_log
-                fill_price = order.filled_avg_price or sym_data.get("current_price") or 0
-                if decision.action == "buy" and fill_price:
+                fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)
+                if decision.action == "buy" and fill_price > 0:
                     log_position_open(
                         symbol=decision.symbol,
                         entry_price=fill_price,

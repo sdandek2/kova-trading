@@ -219,8 +219,8 @@ Respond in JSON with ONLY these two fields per entry:
         opportunities = []
 
     if not opportunities:
-        return TradeDecision(action="hold", symbol=None, quantity=None,
-                           reasoning="Market scan found no clear opportunities. Holding.")
+        return [TradeDecision(action="hold", symbol=None, quantity=None,
+                              reasoning="Market scan found no clear opportunities. Holding.")]
 
     # ── Step 2: Deep dive — evaluate ALL candidates, approve up to 3 trades ──
     top_symbols = [o["symbol"] for o in opportunities[:5]]

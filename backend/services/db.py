@@ -608,7 +608,13 @@ def get_trade_performance_summary() -> dict:
             """)
             row = cur.fetchone()
             if not row or not row[0]:
-                return {}
+                return {
+                    "total_trades": 0, "wins": 0, "losses": 0,
+                    "win_rate_pct": 0.0, "avg_pl_pct": 0.0,
+                    "avg_win_pct": 0.0, "avg_loss_pct": 0.0,
+                    "total_realized_pl": 0.0,
+                    "best_symbols": [], "worst_symbols": [],
+                }
             total, wins, losses, avg_pct, avg_win, avg_loss, total_pl = row
             win_rate = round(wins / total * 100, 1) if total else 0
 
