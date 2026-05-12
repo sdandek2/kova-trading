@@ -53,6 +53,8 @@
 		D5E6F7A8B9C0D5E6F7A8B9C0 /* TradeHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */; };
 		D6E7F8A9B0C1D6E7F8A9B0C1 /* BotActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */; };
 		D7E8F9A0B1C2D7E8F9A0B1C2 /* CircuitBreakerBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */; };
+		F1E2D3C4B5A6F1E2D3C4B5A6 /* EODReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */; };
+		F2E3D4C5B6A7F2E3D4C5B6A7 /* EODReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -104,6 +106,8 @@
 		E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradeHistoryView.swift; path = Sources/Views/AI/TradeHistoryView.swift; sourceTree = "<group>"; };
 		E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotActivityView.swift; path = Sources/Views/AI/BotActivityView.swift; sourceTree = "<group>"; };
 		E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CircuitBreakerBanner.swift; path = Sources/Views/Common/CircuitBreakerBanner.swift; sourceTree = "<group>"; };
+		A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EODReport.swift; path = Sources/Models/EODReport.swift; sourceTree = "<group>"; };
+		A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EODReportView.swift; path = Sources/Views/AI/EODReportView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -168,6 +172,8 @@
 				E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */,
 				E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */,
 				E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */,
+				A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */,
+				A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */,
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
@@ -304,6 +310,8 @@
 				D5E6F7A8B9C0D5E6F7A8B9C0 /* TradeHistoryView.swift in Sources */,
 				D6E7F8A9B0C1D6E7F8A9B0C1 /* BotActivityView.swift in Sources */,
 				D7E8F9A0B1C2D7E8F9A0B1C2 /* CircuitBreakerBanner.swift in Sources */,
+				F1E2D3C4B5A6F1E2D3C4B5A6 /* EODReport.swift in Sources */,
+				F2E3D4C5B6A7F2E3D4C5B6A7 /* EODReportView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
