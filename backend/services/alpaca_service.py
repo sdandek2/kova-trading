@@ -294,17 +294,20 @@ def submit_short_order(
             f"stop +{stop_loss_pct*100:.0f}% (engine-monitored)"
         )
 
-        # GTC limit buy to cover at take-profit price
+        # DAY limit buy to cover at take-profit price.
+        # Using DAY (not GTC) so the cover order expires harmlessly at market close
+        # if the short entry limit never filled — prevents orphaned buy orders from
+        # accidentally opening a long position on a future trading day.
         try:
             cover_req = LimitOrderRequest(
                 symbol=symbol,
                 qty=qty,
                 side=OrderSide.BUY,
-                time_in_force=TimeInForce.GTC,
+                time_in_force=TimeInForce.DAY,
                 limit_price=cover_target,
             )
             trading_client.submit_order(cover_req)
-            logger.info(f"Cover order placed for {symbol} at ${cover_target:.2f}")
+            logger.info(f"Cover order placed for {symbol} at ${cover_target:.2f} (DAY)")
         except Exception as e:
             logger.warning(f"Cover order failed (non-fatal, engine will monitor): {e}")
 
