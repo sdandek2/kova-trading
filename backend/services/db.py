@@ -97,6 +97,51 @@ def _ensure_table(conn):
                 strategy  TEXT NOT NULL
             )
         """)
+        # ── NEW: position_log ───────────────────────────────────────────────
+        # Tracks full round-trip of each position: open → close with realized P&L.
+        # This is the ground truth for "did this trade actually make money?"
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS position_log (
+                id                   SERIAL PRIMARY KEY,
+                symbol               TEXT NOT NULL,
+                entry_time           TIMESTAMPTZ,
+                exit_time            TIMESTAMPTZ,
+                entry_price          FLOAT,
+                exit_price           FLOAT,
+                quantity             INTEGER,
+                realized_pl          FLOAT,
+                realized_pl_pct      FLOAT,
+                hold_duration_mins   INTEGER,
+                exit_reason          TEXT,
+                strategy             TEXT,
+                claude_reasoning     TEXT,
+                market_regime        TEXT
+            )
+        """)
+        # ── NEW: circuit_breaker_log ────────────────────────────────────────
+        # Every time the daily loss limit fires, record when and why.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS circuit_breaker_log (
+                id              SERIAL PRIMARY KEY,
+                triggered_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                day_pl_percent  FLOAT,
+                portfolio_value FLOAT,
+                limit_pct       FLOAT
+            )
+        """)
+        # ── NEW: bot_activity_log ───────────────────────────────────────────
+        # Per-cycle audit trail: what did the bot scan, approve, reject, and why.
+        # Powers the real-time activity feed in the iOS app.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bot_activity_log (
+                id          SERIAL PRIMARY KEY,
+                timestamp   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                cycle_id    TEXT,
+                event_type  TEXT NOT NULL,
+                symbol      TEXT,
+                message     TEXT NOT NULL
+            )
+        """)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -403,6 +448,292 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
             logger.info(f"cleanup_old_trade_logs: removed {deleted} rows older than {days} days")
     except Exception as e:
         logger.warning(f"cleanup_old_trade_logs failed ({e}), skipping.")
+
+
+# ── position_log helpers ───────────────────────────────────────────────────
+
+
+def log_position_open(symbol: str, entry_price: float, quantity: int,
+                      strategy: str = None, claude_reasoning: str = None,
+                      market_regime: str = None) -> Optional[int]:
+    """
+    Record that a new position was opened.
+    Returns the row id so the caller can update it on close, or None on failure.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return None
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO position_log
+                    (symbol, entry_time, entry_price, quantity, strategy,
+                     claude_reasoning, market_regime)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (symbol, datetime.now(timezone.utc), entry_price, quantity,
+                  strategy, claude_reasoning, market_regime))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        logger.warning(f"log_position_open failed ({e})")
+        return None
+
+
+def log_position_close(symbol: str, exit_price: float, exit_reason: str,
+                       entry_price: float = None, quantity: int = None,
+                       entry_time: datetime = None) -> None:
+    """
+    Update the most recent open position_log row for *symbol* with exit data.
+    Also handles the case where no open row exists (logs a standalone closed row).
+    Never raises.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        now = datetime.now(timezone.utc)
+        with conn.cursor() as cur:
+            # Find the most recent open row (no exit_time yet)
+            cur.execute("""
+                SELECT id, entry_price, quantity, entry_time
+                FROM position_log
+                WHERE symbol = %s AND exit_time IS NULL
+                ORDER BY entry_time DESC NULLS LAST
+                LIMIT 1
+            """, (symbol,))
+            row = cur.fetchone()
+
+            if row:
+                pos_id, ep, qty, et = row
+                ep = ep or entry_price or 0
+                qty = qty or quantity or 0
+                et = et or entry_time or now
+                realized_pl = (exit_price - ep) * qty if ep and qty else None
+                realized_pl_pct = ((exit_price - ep) / ep * 100) if ep else None
+                hold_mins = int((now - et).total_seconds() / 60) if et else None
+                cur.execute("""
+                    UPDATE position_log SET
+                        exit_time         = %s,
+                        exit_price        = %s,
+                        realized_pl       = %s,
+                        realized_pl_pct   = %s,
+                        hold_duration_mins = %s,
+                        exit_reason       = %s
+                    WHERE id = %s
+                """, (now, exit_price, realized_pl, realized_pl_pct,
+                      hold_mins, exit_reason, pos_id))
+            else:
+                # No open row — insert a closed record directly
+                ep = entry_price or 0
+                qty = quantity or 0
+                realized_pl = (exit_price - ep) * qty if ep else None
+                realized_pl_pct = ((exit_price - ep) / ep * 100) if ep else None
+                cur.execute("""
+                    INSERT INTO position_log
+                        (symbol, entry_time, exit_time, entry_price, exit_price,
+                         quantity, realized_pl, realized_pl_pct, exit_reason)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (symbol, entry_time or now, now, ep, exit_price,
+                      qty, realized_pl, realized_pl_pct, exit_reason))
+        logger.info(f"log_position_close: {symbol} exit=${exit_price:.2f} reason={exit_reason}")
+    except Exception as e:
+        logger.warning(f"log_position_close failed ({e})")
+
+
+def get_position_history(limit: int = 50) -> list[dict]:
+    """
+    Return the most recent closed trades from position_log, newest first.
+    Only returns rows with an exit_time (completed round-trips).
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, entry_time, exit_time, entry_price, exit_price,
+                       quantity, realized_pl, realized_pl_pct, hold_duration_mins,
+                       exit_reason, strategy, claude_reasoning, market_regime
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                ORDER BY exit_time DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+        return [
+            {
+                "symbol":            r[0],
+                "entry_time":        r[1].isoformat() if r[1] else None,
+                "exit_time":         r[2].isoformat() if r[2] else None,
+                "entry_price":       r[3],
+                "exit_price":        r[4],
+                "quantity":          r[5],
+                "realized_pl":       r[6],
+                "realized_pl_pct":   r[7],
+                "hold_duration_mins": r[8],
+                "exit_reason":       r[9],
+                "strategy":          r[10],
+                "claude_reasoning":  r[11],
+                "market_regime":     r[12],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"get_position_history failed ({e})")
+        return []
+
+
+def get_trade_performance_summary() -> dict:
+    """
+    Aggregate stats across all closed trades in position_log.
+    Returns win rate, avg P&L, best/worst symbols — fed to Claude as context.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE realized_pl > 0) AS wins,
+                    COUNT(*) FILTER (WHERE realized_pl < 0) AS losses,
+                    ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pl_pct,
+                    ROUND(AVG(realized_pl_pct) FILTER (WHERE realized_pl > 0)::numeric, 2) AS avg_win_pct,
+                    ROUND(AVG(realized_pl_pct) FILTER (WHERE realized_pl < 0)::numeric, 2) AS avg_loss_pct,
+                    ROUND(SUM(realized_pl)::numeric, 2) AS total_realized_pl
+                FROM position_log
+                WHERE exit_time IS NOT NULL AND realized_pl IS NOT NULL
+            """)
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return {}
+            total, wins, losses, avg_pct, avg_win, avg_loss, total_pl = row
+            win_rate = round(wins / total * 100, 1) if total else 0
+
+            # Best and worst symbols
+            cur.execute("""
+                SELECT symbol, ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pct
+                FROM position_log
+                WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
+                GROUP BY symbol HAVING COUNT(*) >= 2
+                ORDER BY avg_pct DESC LIMIT 3
+            """)
+            best = [{"symbol": r[0], "avg_pct": float(r[1])} for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT symbol, ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pct
+                FROM position_log
+                WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
+                GROUP BY symbol HAVING COUNT(*) >= 2
+                ORDER BY avg_pct ASC LIMIT 3
+            """)
+            worst = [{"symbol": r[0], "avg_pct": float(r[1])} for r in cur.fetchall()]
+
+            return {
+                "total_trades":    int(total),
+                "wins":            int(wins),
+                "losses":          int(losses),
+                "win_rate_pct":    win_rate,
+                "avg_pl_pct":      float(avg_pct or 0),
+                "avg_win_pct":     float(avg_win or 0),
+                "avg_loss_pct":    float(avg_loss or 0),
+                "total_realized_pl": float(total_pl or 0),
+                "best_symbols":    best,
+                "worst_symbols":   worst,
+            }
+    except Exception as e:
+        logger.warning(f"get_trade_performance_summary failed ({e})")
+        return {}
+
+
+# ── circuit_breaker_log helpers ────────────────────────────────────────────
+
+
+def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
+                        limit_pct: float) -> None:
+    """Record a circuit breaker trigger. Never raises."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO circuit_breaker_log
+                    (triggered_at, day_pl_percent, portfolio_value, limit_pct)
+                VALUES (%s, %s, %s, %s)
+            """, (datetime.now(timezone.utc), day_pl_percent,
+                  portfolio_value, limit_pct))
+        logger.info(f"log_circuit_breaker: day_pl={day_pl_percent:.2f}% portfolio=${portfolio_value:,.2f}")
+    except Exception as e:
+        logger.warning(f"log_circuit_breaker failed ({e})")
+
+
+# ── bot_activity_log helpers ───────────────────────────────────────────────
+
+
+def log_bot_activity(event_type: str, message: str,
+                     symbol: str = None, cycle_id: str = None) -> None:
+    """
+    Log a single bot activity event. Never raises.
+    event_type: 'scan', 'approved', 'rejected', 'earnings_block',
+                'circuit_breaker', 'trailing_stop', 'scale_out', 'entry_rejected'
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_activity_log (timestamp, cycle_id, event_type, symbol, message)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (datetime.now(timezone.utc), cycle_id, event_type, symbol, message))
+    except Exception as e:
+        logger.warning(f"log_bot_activity failed ({e})")
+
+
+def get_bot_activity_log(limit: int = 50) -> list[dict]:
+    """Return recent bot activity events, newest first."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT timestamp, cycle_id, event_type, symbol, message
+                FROM bot_activity_log
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+        return [
+            {
+                "timestamp":  r[0].isoformat() if r[0] else None,
+                "cycle_id":   r[1],
+                "event_type": r[2],
+                "symbol":     r[3],
+                "message":    r[4],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"get_bot_activity_log failed ({e})")
+        return []
+
+
+def cleanup_old_bot_activity(days: int = 30) -> None:
+    """Prune bot_activity_log older than *days* days. Never raises."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM bot_activity_log WHERE timestamp < %s", (cutoff,))
+        logger.debug(f"cleanup_old_bot_activity: pruned entries before {cutoff.date()}")
+    except Exception as e:
+        logger.warning(f"cleanup_old_bot_activity failed ({e})")
 
 
 def cleanup_expired_cache() -> None:

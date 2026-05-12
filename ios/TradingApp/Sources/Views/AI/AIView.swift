@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AIView: View {
     @StateObject private var vm = TradingViewModel()
+    @State private var circuitBreakerDayPl: Double? = nil
+    @State private var circuitBreakerLimit: Double = 3.0
 
     var body: some View {
         NavigationStack {
@@ -13,6 +15,11 @@ struct AIView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 16) {
+                            // ── Circuit breaker banner (only shown when active) ──
+                            if let dayPl = circuitBreakerDayPl, dayPl < -circuitBreakerLimit {
+                                CircuitBreakerBanner(dayPlPercent: dayPl, limitPct: circuitBreakerLimit)
+                            }
+
                             PreMarketView()
 
                             BotControlView(vm: vm)
@@ -23,13 +30,30 @@ struct AIView: View {
 
                             WatchlistEditorView()
 
-                            NavigationLink("View Performance Stats") {
-                                PerformanceView()
-                                    .navigationTitle("Performance")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .frame(maxWidth: .infinity)
+                            // ── Real-time bot activity log ──
+                            BotActivityView()
 
+                            // ── Navigation buttons ──
+                            HStack(spacing: 12) {
+                                NavigationLink {
+                                    TradeHistoryView()
+                                } label: {
+                                    Label("Trade History", systemImage: "chart.bar.xaxis")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+
+                                NavigationLink {
+                                    PerformanceView()
+                                        .navigationTitle("Performance")
+                                } label: {
+                                    Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+
+                            // ── Latest AI decision ──
                             if let analysis = vm.analysis {
                                 VStack(alignment: .leading, spacing: 12) {
                                     HStack {
@@ -90,6 +114,26 @@ struct AIView: View {
             }
             .navigationTitle("AI Agent")
         }
-        .task { await vm.load() }
+        .task {
+            await vm.load()
+            await loadCircuitBreakerStatus()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .circuitBreakerFired)) { note in
+            if let dayPl = note.userInfo?["day_pl_percent"] as? Double {
+                circuitBreakerDayPl = dayPl
+            }
+        }
     }
+
+    private func loadCircuitBreakerStatus() async {
+        // Check account P&L and risk settings to set circuit breaker state
+        if let riskSettings = try? await APIService.shared.getRiskSettings() {
+            circuitBreakerLimit = riskSettings.daily_loss_limit_pct
+        }
+        // Account P&L comes from the dashboard VM; rely on WebSocket for live updates
+    }
+}
+
+extension Notification.Name {
+    static let circuitBreakerFired = Notification.Name("circuitBreakerFired")
 }

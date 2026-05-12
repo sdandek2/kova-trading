@@ -222,4 +222,21 @@ class APIService {
         request.httpBody = try? JSONEncoder().encode(settings)
         let (_, _) = try await URLSession.shared.data(for: request)
     }
+
+    func getPositionHistory(limit: Int = 50) async throws -> [PositionLog] {
+        try await fetch("/api/positions/history?limit=\(limit)")
+    }
+
+    func getPerformanceSummary() async throws -> PerformanceSummary {
+        try await fetch("/api/positions/performance")
+    }
+
+    func getWatermarks() async throws -> [String: Double] {
+        let response: [String: [String: Double]] = try await fetch("/api/positions/watermarks")
+        return response["watermarks"] ?? [:]
+    }
+
+    func getBotActivity(limit: Int = 50) async throws -> [BotActivity] {
+        try await fetch("/api/trading/activity?limit=\(limit)")
+    }
 }

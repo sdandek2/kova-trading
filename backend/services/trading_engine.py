@@ -5,7 +5,12 @@ from typing import Optional
 
 from models.trade import TradingStatus, AIAnalysis
 from services import alpaca_service, claude_service
-from services.db import cache_get, cache_set, log_trade_decision
+from services.db import (
+    cache_get, cache_set, log_trade_decision,
+    log_position_open, log_position_close,
+    log_circuit_breaker, log_bot_activity,
+    get_trade_performance_summary,
+)
 from services.indicators import compute_atr, compute_rsi, volatility_adjusted_quantity
 from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out
 from services.earnings import get_upcoming_earnings
@@ -43,7 +48,8 @@ def _save_risk_settings(settings: dict) -> None:
 
 
 _risk_settings = _load_risk_settings()
-# No fixed watchlist — universe is built dynamically each cycle from top movers + actives
+# Restore trailing-stop watermarks from last session (survives server restarts)
+_position_high_watermarks = {}  # populated after _load_watermarks is defined below
 
 _is_running = False
 _last_analysis_at: Optional[datetime] = None
@@ -52,6 +58,22 @@ _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
 _daily_trade_count: dict = {}          # date → int, tracks trades executed per day
 _position_high_watermarks: dict = {}   # symbol → peak price seen while holding position
+_previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time} for close detection
+_current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
+
+
+def _load_watermarks() -> dict:
+    """Restore watermarks from persistent cache after a server restart."""
+    cached = cache_get("position_watermarks")
+    return cached if isinstance(cached, dict) else {}
+
+
+def _save_watermarks() -> None:
+    cache_set("position_watermarks", _position_high_watermarks, 86400)  # 24h TTL
+
+
+# Restore watermarks now that helpers are defined
+_position_high_watermarks = _load_watermarks()
 
 
 def get_status() -> TradingStatus:
@@ -142,9 +164,12 @@ async def run_premarket_scan():
 
 
 async def run_trading_cycle():
-    global _last_analysis_at, _next_run_at, _latest_analysis
+    global _last_analysis_at, _next_run_at, _latest_analysis, \
+           _position_high_watermarks, _previous_positions, _current_cycle_id
+    import uuid
+    _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
-    logger.info("Running trading cycle...")
+    logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
 
     try:
         if not alpaca_service.is_market_open():
@@ -161,6 +186,14 @@ async def run_trading_cycle():
                 f"(limit: -{_risk_settings['daily_loss_limit_pct']}%). "
                 f"New buys blocked — exits and scale-outs still allowed."
             )
+            log_circuit_breaker(
+                day_pl_percent=account.day_pl_percent,
+                portfolio_value=account.portfolio_value,
+                limit_pct=_risk_settings["daily_loss_limit_pct"],
+            )
+            log_bot_activity("circuit_breaker",
+                             f"Daily loss limit hit: down {account.day_pl_percent:.2f}% (limit -{_risk_settings['daily_loss_limit_pct']}%). New buys blocked.",
+                             cycle_id=_current_cycle_id)
             await manager.broadcast({
                 "type": "circuit_breaker",
                 "data": {
@@ -243,6 +276,45 @@ async def run_trading_cycle():
         logger.info(f"Macro: {macro['market_regime']} | VIX: {macro['vix_level']} | SPY: {macro['spy_trend']}")
         logger.info(f"Geopolitical risk: {geo['risk_level'].upper()} (score={geo['risk_score']}) | Themes: {geo['dominant_themes']}")
 
+        # ── Detect position closes: symbols that were held last cycle but are gone now ──
+        current_symbols = {p.symbol for p in positions}
+        for sym, prev in _previous_positions.items():
+            if sym not in current_symbols:
+                # Position was closed — determine exit price from Alpaca orders
+                exit_price = prev.get("avg_entry_price", 0)  # fallback
+                try:
+                    recent_orders = alpaca_service.get_orders(limit=20)
+                    for o in recent_orders:
+                        if o.symbol == sym and o.side == "sell" and o.filled_avg_price:
+                            exit_price = o.filled_avg_price
+                            break
+                except Exception:
+                    pass
+                log_position_close(
+                    symbol=sym,
+                    exit_price=exit_price,
+                    exit_reason=prev.get("exit_reason", "unknown"),
+                    entry_price=prev.get("avg_entry_price"),
+                    quantity=prev.get("qty"),
+                    entry_time=prev.get("entry_time"),
+                )
+                log_bot_activity("position_closed",
+                                 f"Position closed: {sym} exit=${exit_price:.2f} reason={prev.get('exit_reason','unknown')}",
+                                 symbol=sym, cycle_id=_current_cycle_id)
+                if sym in _position_high_watermarks:
+                    del _position_high_watermarks[sym]
+
+        # Update _previous_positions for next cycle
+        _previous_positions = {
+            p.symbol: {
+                "qty": int(float(p.qty)),
+                "avg_entry_price": p.avg_entry_price,
+                "entry_time": datetime.now(timezone.utc),  # approximate if not tracked
+                "exit_reason": "unknown",
+            }
+            for p in positions
+        }
+
         # ── Update high watermarks for all open positions ──
         held_symbols = {p.symbol for p in positions}
         for position in positions:
@@ -254,6 +326,8 @@ async def run_trading_cycle():
         for sym in list(_position_high_watermarks.keys()):
             if sym not in held_symbols:
                 del _position_high_watermarks[sym]
+        # Persist watermarks so trailing stops survive server restarts
+        _save_watermarks()
 
         # ── Scale-out: review existing positions for partial profit-taking / loss cuts ──
         for position in positions:
@@ -274,6 +348,17 @@ async def run_trading_cycle():
             if scale_out:
                 sell_qty = max(1, int(float(position.qty) * fraction))
                 logger.info(f"Scale-out triggered: {reason} — selling {sell_qty} shares")
+                # Tag exit reason so position_close detection knows why
+                if position.symbol in _previous_positions:
+                    _previous_positions[position.symbol]["exit_reason"] = (
+                        "trailing_stop" if "trailing stop" in reason.lower()
+                        else "take_profit" if "profit" in reason.lower()
+                        else "loss_cut"
+                    )
+                log_bot_activity(
+                    "scale_out", reason,
+                    symbol=position.symbol, cycle_id=_current_cycle_id
+                )
                 order = alpaca_service.submit_market_order(
                     symbol=position.symbol,
                     qty=sell_qty,
@@ -362,6 +447,9 @@ async def run_trading_cycle():
             # ── Circuit breaker: block new buys when daily loss limit hit ──
             if decision.action == "buy" and circuit_breaker_active:
                 logger.info(f"Circuit breaker: skipping BUY {decision.symbol} — daily loss limit active")
+                log_bot_activity("circuit_breaker",
+                                 f"BUY {decision.symbol} blocked — daily loss limit active",
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
                 continue
 
             # ── Hard earnings block: never buy into earnings today/tomorrow ──
@@ -372,6 +460,9 @@ async def run_trading_cycle():
                     f"EARNINGS BLOCK: skipping BUY {decision.symbol} — earnings today/tomorrow, "
                     f"gap risk too high. Wait until after the report."
                 )
+                log_bot_activity("earnings_block",
+                                 f"BUY {decision.symbol} blocked — earnings today/tomorrow, gap risk too high",
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
                 await manager.broadcast({"type": "ai_analysis", "data": {
                     "reasoning": f"Earnings block: {decision.symbol} reports today/tomorrow — binary gap risk. Skipping buy, will re-evaluate after report.",
                     "last_action": "waiting",
@@ -397,6 +488,8 @@ async def run_trading_cycle():
 
             if not confirmed:
                 logger.info(f"Entry rejected: {confirm_reason}")
+                log_bot_activity("entry_rejected", confirm_reason,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
                 await manager.broadcast({"type": "ai_analysis", "data": {
                     "reasoning": f"Entry not confirmed: {confirm_reason}",
                     "last_action": "waiting", "symbol": decision.symbol,
@@ -450,6 +543,43 @@ async def run_trading_cycle():
                 today = datetime.now(timezone.utc).date()
                 _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
                 logger.info(f"✅ Order executed: {decision.action.upper()} {decision.symbol} x{decision.quantity} | trades today: {_daily_trade_count[today]}")
+
+                # Log position open / close to position_log
+                fill_price = order.filled_avg_price or sym_data.get("current_price") or 0
+                if decision.action == "buy" and fill_price:
+                    log_position_open(
+                        symbol=decision.symbol,
+                        entry_price=fill_price,
+                        quantity=decision.quantity,
+                        strategy=strategy_key,
+                        claude_reasoning=decision.reasoning,
+                        market_regime=macro.get("market_regime"),
+                    )
+                    # Seed watermark for new position
+                    _position_high_watermarks[decision.symbol] = fill_price
+                    _save_watermarks()
+                    # Tag in previous_positions so close detection knows entry price
+                    _previous_positions[decision.symbol] = {
+                        "qty": decision.quantity,
+                        "avg_entry_price": fill_price,
+                        "entry_time": datetime.now(timezone.utc),
+                        "exit_reason": "unknown",
+                    }
+                elif decision.action == "sell" and fill_price:
+                    if decision.symbol in _previous_positions:
+                        _previous_positions[decision.symbol]["exit_reason"] = "ai_sell"
+                    log_position_close(
+                        symbol=decision.symbol,
+                        exit_price=fill_price,
+                        exit_reason="ai_sell",
+                    )
+
+                log_bot_activity(
+                    "approved",
+                    f"{decision.action.upper()} {decision.symbol} x{decision.quantity} @ ${fill_price:.2f} — {decision.reasoning[:120]}",
+                    symbol=decision.symbol, cycle_id=_current_cycle_id,
+                )
+
                 await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
                 updated_positions = alpaca_service.get_positions()
                 await manager.broadcast({"type": "position_update", "data": [p.model_dump(mode="json") for p in updated_positions]})
@@ -556,9 +686,10 @@ async def _trading_loop():
         _cleanup_counter += 1
         if _cleanup_counter >= 144:
             _cleanup_counter = 0
-            from services.db import cleanup_old_trade_logs, cleanup_expired_cache
+            from services.db import cleanup_old_trade_logs, cleanup_expired_cache, cleanup_old_bot_activity
             cleanup_old_trade_logs(days=90)
             cleanup_expired_cache()
+            cleanup_old_bot_activity(days=30)
             logger.info("DB cleanup complete.")
 
         # Sleep longer when market is closed (nights / weekends)

@@ -5,6 +5,17 @@ from services import trading_engine
 router = APIRouter(prefix="/api/trading", tags=["trading"])
 
 
+@router.get("/activity")
+def get_bot_activity(limit: int = Query(50, ge=1, le=200)):
+    """
+    Return recent bot activity events: scans, approvals, rejections,
+    earnings blocks, circuit breakers, trailing stop triggers.
+    Powers the real-time activity log in the iOS app.
+    """
+    from services.db import get_bot_activity_log
+    return get_bot_activity_log(limit=limit)
+
+
 @router.get("/status", response_model=TradingStatus)
 def get_status():
     return trading_engine.get_status()

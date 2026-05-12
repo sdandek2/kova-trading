@@ -80,6 +80,25 @@ def analyze_and_decide(
 Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
 Open positions: {positions_text}"""
 
+    # ── Realized P&L performance summary — helps Claude avoid repeat losers ──
+    performance_text = ""
+    try:
+        from services.db import get_trade_performance_summary
+        perf = get_trade_performance_summary()
+        if perf and perf.get("total_trades", 0) >= 3:
+            best_syms = ", ".join([f"{s['symbol']}(+{s['avg_pct']}%)" for s in perf.get("best_symbols", [])])
+            worst_syms = ", ".join([f"{s['symbol']}({s['avg_pct']}%)" for s in perf.get("worst_symbols", [])])
+            performance_text = f"""
+## Realized Trade Performance (your actual results — use this to improve)
+- Total closed trades: {perf['total_trades']} | Win rate: {perf['win_rate_pct']}% | Total realized P&L: ${perf['total_realized_pl']:+,.2f}
+- Avg win: +{perf['avg_win_pct']}% | Avg loss: {perf['avg_loss_pct']}%
+- Best symbols historically: {best_syms or 'not enough data'}
+- Worst symbols historically: {worst_syms or 'not enough data'}
+Note: Avoid re-entering worst symbols unless fundamentals have materially changed. Increase size on best symbols when they re-appear with strong signals.
+"""
+    except Exception:
+        pass
+
     # ── Trade feedback: last 10 decisions ──
     trade_feedback_text = ""
     if recent_trades:
@@ -278,7 +297,7 @@ Respond in JSON with ONLY these two fields per entry:
 
     step2_prompt = f"""You are building a high-performance trading portfolio. Evaluate EACH candidate independently and approve the best 1-3 trades this cycle.
 {pressure_note}
-
+{performance_text}
 {portfolio_context}
 Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
 {"⚠️ PORTFOLIO THIN — only {positions_count} positions open. Prioritise building positions." if positions_count < 3 else ""}

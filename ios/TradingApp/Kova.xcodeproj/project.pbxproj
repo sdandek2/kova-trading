@@ -49,6 +49,10 @@
 		A1B2C3D4E5F6A1B2C3D4E5F6 /* RiskSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */; };
 		A2B3C4D5E6F7A2B3C4D5E6F7 /* TradingFloorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */; };
 		A3B4C5D6E7F8A3B4C5D6E7F8 /* PreMarketView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */; };
+		D4E5F6A7B8C9D4E5F6A7B8C9 /* PositionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F6A7B8C9D0E5F6A7B8C9D0 /* PositionLog.swift */; };
+		D5E6F7A8B9C0D5E6F7A8B9C0 /* TradeHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */; };
+		D6E7F8A9B0C1D6E7F8A9B0C1 /* BotActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */; };
+		D7E8F9A0B1C2D7E8F9A0B1C2 /* CircuitBreakerBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -96,6 +100,10 @@
 		B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RiskSettings.swift; path = Sources/Models/RiskSettings.swift; sourceTree = "<group>"; };
 		B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradingFloorView.swift; path = Sources/Views/AI/TradingFloorView.swift; sourceTree = "<group>"; };
 		B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PreMarketView.swift; path = Sources/Views/AI/PreMarketView.swift; sourceTree = "<group>"; };
+		E5F6A7B8C9D0E5F6A7B8C9D0 /* PositionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PositionLog.swift; path = Sources/Models/PositionLog.swift; sourceTree = "<group>"; };
+		E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradeHistoryView.swift; path = Sources/Views/AI/TradeHistoryView.swift; sourceTree = "<group>"; };
+		E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotActivityView.swift; path = Sources/Views/AI/BotActivityView.swift; sourceTree = "<group>"; };
+		E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CircuitBreakerBanner.swift; path = Sources/Views/Common/CircuitBreakerBanner.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -156,6 +164,10 @@
 				B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */,
 				B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */,
 				B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */,
+				E5F6A7B8C9D0E5F6A7B8C9D0 /* PositionLog.swift */,
+				E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */,
+				E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */,
+				E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */,
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
@@ -288,6 +300,10 @@
 				A1B2C3D4E5F6A1B2C3D4E5F6 /* RiskSettings.swift in Sources */,
 				A2B3C4D5E6F7A2B3C4D5E6F7 /* TradingFloorView.swift in Sources */,
 				A3B4C5D6E7F8A3B4C5D6E7F8 /* PreMarketView.swift in Sources */,
+				D4E5F6A7B8C9D4E5F6A7B8C9 /* PositionLog.swift in Sources */,
+				D5E6F7A8B9C0D5E6F7A8B9C0 /* TradeHistoryView.swift in Sources */,
+				D6E7F8A9B0C1D6E7F8A9B0C1 /* BotActivityView.swift in Sources */,
+				D7E8F9A0B1C2D7E8F9A0B1C2 /* CircuitBreakerBanner.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
