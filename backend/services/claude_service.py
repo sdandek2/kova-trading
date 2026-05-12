@@ -30,7 +30,8 @@ def analyze_and_decide(
     sector_context: dict = None,      # {symbol: {"sector": str, "sector_pct": float, "sector_signal": str}}
     recent_trades: list = None,        # last 10 AI decisions from DB
     earnings_plays: list = None,       # pre-earnings play candidates
-) -> TradeDecision:
+    afternoon_pressure: bool = False,  # True if < 2 trades by 2 PM — lower bar
+) -> list:
     current_strategy = strategy_service.get_strategy()
     max_position = portfolio_value * current_strategy["max_position_pct"]
 
@@ -202,12 +203,10 @@ Respond in JSON with ONLY these two fields per entry:
         return TradeDecision(action="hold", symbol=None, quantity=None,
                            reasoning="Market scan found no clear opportunities. Holding.")
 
-    # ── Step 2: Deep dive on top candidates ──
-    opp_text = "\n".join([f"- {o['symbol']}: {o.get('signal','')} — {o.get('reason','')}"
-                          for o in opportunities[:5]])
-
-    # Fetch FULL historical data (90 days) for top candidates only
+    # ── Step 2: Deep dive — evaluate ALL candidates, approve up to 3 trades ──
     top_symbols = [o["symbol"] for o in opportunities[:5]]
+
+    # Fetch full historical data for all candidates
     deep_data = {}
     if full_data_fetcher and top_symbols:
         try:
@@ -216,7 +215,7 @@ Respond in JSON with ONLY these two fields per entry:
         except Exception as e:
             logger.warning(f"Could not fetch deep data: {e}")
 
-    # ── Multi-timeframe: 15-min bars for top candidates ──
+    # 15-min intraday bars for trend confirmation
     intraday_summary = {}
     try:
         from services import alpaca_service as _alpaca_svc
@@ -225,10 +224,9 @@ Respond in JSON with ONLY these two fields per entry:
             bars = intraday_data.get(sym, [])
             if len(bars) >= 3:
                 closes = [b["close"] for b in bars]
-                # Simple trend: last 3 bars going up or down?
                 recent_trend = "up" if closes[-1] > closes[-3] else "down"
                 vol_now = bars[-1]["volume"] if bars else 0
-                intraday_summary[sym] = f"15min trend: {recent_trend}, last bar vol: {vol_now:,}"
+                intraday_summary[sym] = f"15min trend:{recent_trend}, vol:{vol_now:,}"
     except Exception as e:
         logger.warning(f"Intraday bars failed (non-fatal): {e}")
 
@@ -238,160 +236,154 @@ Respond in JSON with ONLY these two fields per entry:
         data = deep_data.get(sym) or market_snapshot.get(sym, {})
         closing_prices = data.get("closing_prices", [])
         indicators = compute_all(closing_prices) if closing_prices else {}
-        candidate_detail.append(
-            f"{sym}: price=${data.get('current_price')}, RSI={indicators.get('rsi','N/A')}, "
-            f"5-day={data.get('five_day_change_pct','N/A')}%, "
+        line = (
+            f"{sym} [{opp.get('signal','')}]: price=${data.get('current_price')}, "
+            f"RSI={indicators.get('rsi','N/A')}, 5d={data.get('five_day_change_pct','N/A')}%, "
             f"MA20=${indicators.get('moving_averages',{}).get('ma20','N/A')}, "
-            f"MA50=${indicators.get('moving_averages',{}).get('ma50','N/A')}, "
-            f"MACD hist={indicators.get('macd',{}).get('histogram','N/A')}, "
-            f"news mentions={(sentiment or {}).get(sym, 0)}"
+            f"MACD={indicators.get('macd',{}).get('histogram','N/A')}, "
+            f"news={(sentiment or {}).get(sym, 0)}"
         )
-        intraday_info = intraday_summary.get(sym, "")
-        if intraday_info:
-            candidate_detail[-1] += f", {intraday_info}"
+        if intraday_summary.get(sym):
+            line += f", {intraday_summary[sym]}"
+        candidate_detail.append(line)
 
     default_tp = current_strategy.get("default_take_profit_pct", 0.10)
     default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
+    positions_count = len(positions)
+    cash_pct = (account_cash / portfolio_value * 100) if portfolio_value > 0 else 0
 
-    step2_prompt = f"""You are executing a deep analysis on your top stock candidates. Your mandate is AGGRESSIVE GROWTH — find the single best trade and set OPTIMAL exit targets to maximise profit.
+    pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
+
+    step2_prompt = f"""You are building a high-performance trading portfolio. Evaluate EACH candidate independently and approve the best 1-3 trades this cycle.
+{pressure_note}
 
 {portfolio_context}
+Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
+{"⚠️ PORTFOLIO THIN — only {positions_count} positions open. Prioritise building positions." if positions_count < 3 else ""}
 {geo_text if geo_context else ""}{news_text}
-## Candidates from broad scan:
-{opp_text}
-
-## Detailed technical data:
+## Candidates to evaluate:
 {chr(10).join(candidate_detail)}
 
-For each candidate, assess:
-1. Signal strength (strong/medium/weak) — technical + news catalyst + macro/geopolitical alignment
-2. Realistic upside — based on technicals, catalyst size, and comparable moves. Be specific (e.g. "NVDA has 18% upside to next resistance at $X")
-3. Strategy fit: {current_strategy['name']} — {current_strategy['prompt_modifier']}
-4. News catalyst check: does any breaking news directly support or invalidate this trade?
-5. Timing: is NOW the right entry, or is the move already over?
+Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
 
-Geopolitical override rules:
-- If geo risk is HIGH or EXTREME: only trade inverse ETFs (SOXS, SQQQ, SPXS) or defensive safe havens; no aggressive longs
-- If a candidate is in the "sectors at risk" list: reduce confidence to low
-- If a candidate is in the "geopolitical opportunities" list: boost signal strength
-- If a candidate has direct positive news catalyst: boost to HIGH confidence
+For EACH candidate decide: BUY, SELL, or SKIP.
+Rules:
+- Approve up to 3 buys per cycle — we WANT a diversified portfolio working simultaneously
+- Never approve 2 stocks from the same sector unless both are very high conviction
+- Each approved trade must stand on its own merit
+- If geo risk is HIGH: only approve inverse ETFs or safe havens
+- MUST approve at least 1 trade if any candidate has medium+ signal
 
-IMPORTANT: You MUST pick a trade if ANY candidate has medium or better signal strength.
+Exit rules per approved trade:
+- take_profit_pct: realistic upside (0.08-0.40). Strong catalyst=0.15-0.25, ETF=0.15-0.30
+- stop_loss_pct: trailing stop (0.03-0.08). High conviction=0.05-0.07, volatile=0.06-0.08
+- partial_exit: true when upside ≥ 15% (sell half at target, let half compound)
 
-## Exit Strategy Rules (CRITICAL — this is how we maximise profit):
-- take_profit_pct: How far this stock can realistically run. Base this on the actual thesis:
-  * Strong catalyst + technical breakout → 0.15-0.25 (15-25%)
-  * Momentum continuation → 0.10-0.15 (10-15%)
-  * Leveraged ETF (SOXL/TQQQ/SPXL) on strong day → 0.15-0.30 (15-30%)
-  * Weak signal → 0.08-0.10 (8-10%)
-  * DEFAULT if unsure: {default_tp} ({int(default_tp*100)}%)
-- stop_loss_pct: Trailing stop. Wider = lets winners breathe. Narrower = tighter protection:
-  * High conviction → 0.05-0.07 (5-7% trail — gives room to run)
-  * Medium conviction → 0.04-0.05
-  * Volatile stock / leveraged ETF → 0.06-0.08
-  * DEFAULT if unsure: {default_sl} ({int(default_sl*100)}%)
-- partial_exit: true if upside is 15%+. This sells 50% at the take_profit target and lets the other 50% compound further with the trailing stop. Use this for your highest-conviction plays.
-
-Respond in JSON:
-{{"best_symbol": "TICKER or null", "action": "buy|sell|hold", "confidence": "high|medium|low", "quantity_suggestion": integer_or_null, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "deep_analysis": "3-4 sentences: why this stock NOW, what specific catalyst, realistic upside target with price level, why exit strategy fits this trade"}}"""
+Respond in JSON — only include approved trades (skip = omit from list):
+{{"trades": [{{"symbol": "X", "action": "buy|sell", "confidence": "high|medium", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + upside target"}}], "skipped": "brief reason why other candidates were skipped"}}"""
 
     try:
-        step2_raw = ask_ai(step2_prompt, max_tokens=600)
+        step2_raw = ask_ai(step2_prompt, max_tokens=1000)
         if step2_raw.startswith("```"):
             step2_raw = step2_raw.split("```")[1]
             if step2_raw.startswith("json"):
                 step2_raw = step2_raw[4:]
         step2_data = json.loads(step2_raw.strip())
-        logger.info(f"Step 2 — Best pick: {step2_data.get('best_symbol')} ({step2_data.get('confidence')} confidence)")
+        approved = step2_data.get("trades", [])
+        logger.info(f"Step 2 — Approved {len(approved)} trades: {[t.get('symbol') for t in approved]} | Skipped: {step2_data.get('skipped','')}")
     except Exception as e:
         logger.error(f"Step 2 failed: {e}")
-        return TradeDecision(action="hold", symbol=None, quantity=None,
-                           reasoning="Deep analysis failed. Holding positions.")
+        return [TradeDecision(action="hold", symbol=None, quantity=None,
+                              reasoning="Deep analysis failed. Holding positions.")]
 
-    best_symbol = step2_data.get("best_symbol")
-    action = step2_data.get("action", "hold")
-    confidence = step2_data.get("confidence", "low")
-    deep_analysis = step2_data.get("deep_analysis", "")
-    qty_suggestion = step2_data.get("quantity_suggestion")
-    take_profit_pct = step2_data.get("take_profit_pct") or default_tp
-    stop_loss_pct = step2_data.get("stop_loss_pct") or default_sl
-    partial_exit = bool(step2_data.get("partial_exit", False))
+    if not approved:
+        return [TradeDecision(action="hold", symbol=None, quantity=None,
+                              reasoning=f"No trades approved this cycle. Candidates: {', '.join(top_symbols)}")]
 
-    # ── Correlation check: don't double-bet on the same sector ──
-    if best_symbol and action == "buy" and positions:
+    # ── Step 3: Convert approved list into TradeDecision objects ──
+    decisions = []
+    remaining_cash = account_cash
+    sectors_bought = []
+
+    for trade in approved[:3]:  # max 3 per cycle
+        sym = trade.get("symbol")
+        action = trade.get("action", "hold")
+        confidence = trade.get("confidence", "medium")
+        qty_suggestion = trade.get("quantity_suggestion")
+        take_profit_pct = max(0.05, min(float(trade.get("take_profit_pct") or default_tp), 0.40))
+        stop_loss_pct = max(0.02, min(float(trade.get("stop_loss_pct") or default_sl), 0.10))
+        partial_exit = bool(trade.get("partial_exit", False))
+        analysis = trade.get("analysis", "")
+
+        if not sym or action == "hold":
+            continue
+
+        # Confidence gate
+        min_confidence = current_strategy.get("min_confidence", "medium")
+        confidence_rank = {"high": 2, "medium": 1, "low": 0}
+        if confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 1):
+            logger.info(f"Skipping {sym} — confidence {confidence} below strategy minimum {min_confidence}")
+            continue
+
+        # Sector correlation check
         try:
             from services.sector_momentum import get_sector_for_symbol
-            target_sector = get_sector_for_symbol(best_symbol)
-            existing_in_sector = [
-                p.symbol for p in positions
-                if get_sector_for_symbol(p.symbol) == target_sector
-            ]
-            if len(existing_in_sector) >= 2 and target_sector not in ("Unknown", "Broad"):
-                logger.info(f"Correlation check: already have {existing_in_sector} in {target_sector}. Reducing size by 50%.")
-                if qty_suggestion:
-                    qty_suggestion = max(1, qty_suggestion // 2)
-                deep_analysis += f" [Correlation: already holding {', '.join(existing_in_sector)} in {target_sector} — reduced size]"
-        except Exception as e:
-            logger.warning(f"Correlation check failed (non-fatal): {e}")
+            sym_sector = get_sector_for_symbol(sym)
+            existing_sector_count = sum(1 for s in sectors_bought if s == sym_sector)
+            held_in_sector = [p.symbol for p in positions if get_sector_for_symbol(p.symbol) == sym_sector]
+            if existing_sector_count >= 1 and sym_sector not in ("Unknown", "Broad"):
+                logger.info(f"Skipping {sym} — already buying another {sym_sector} stock this cycle")
+                continue
+            if len(held_in_sector) >= 2 and sym_sector not in ("Unknown", "Broad"):
+                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector}")
+                continue
+            sectors_bought.append(sym_sector)
+        except Exception:
+            pass
 
-    # Clamp to sane ranges (never more than 40% TP or 10% stop)
-    take_profit_pct = max(0.05, min(float(take_profit_pct), 0.40))
-    stop_loss_pct = max(0.02, min(float(stop_loss_pct), 0.10))
-
-    logger.info(f"Exit strategy: TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}% trail | partial_exit={partial_exit}")
-
-    # Skip low confidence trades — but respect per-strategy minimum
-    min_confidence = current_strategy.get("min_confidence", "medium")
-    confidence_rank = {"high": 2, "medium": 1, "low": 0}
-    if (confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 1)
-            or action == "hold" or not best_symbol):
-        return TradeDecision(action="hold", symbol=None, quantity=None,
-                           reasoning=f"Confidence too low for {current_strategy['name']} strategy. {deep_analysis}")
-
-    # ── Step 3: Final decision with quantity ──
-    if action == "buy" and best_symbol and account_cash > 0:
-        price = market_snapshot.get(best_symbol, {}).get("current_price") or 1
-        max_shares = int(max_position / price) if price > 0 else 0
-
-        # Use suggestion from step 2, capped by position limit
-        if qty_suggestion:
-            final_qty = min(qty_suggestion, max_shares)
-        else:
-            # Size based on confidence and strategy aggressiveness
+        if action == "buy":
+            price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or 0
+            if price <= 0:
+                continue
+            max_shares = int(max_position / price)
             is_aggressive = current_strategy.get("key") == "aggressive"
-            if confidence == "high":
-                size_pct = 1.0
-            elif confidence == "medium":
-                size_pct = 0.75 if is_aggressive else 0.5
+            if qty_suggestion:
+                final_qty = min(int(qty_suggestion), max_shares)
             else:
-                size_pct = 0.25
-            final_qty = max(1, int(max_shares * size_pct))
+                size_pct = 1.0 if confidence == "high" else (0.75 if is_aggressive else 0.5)
+                final_qty = max(1, int(max_shares * size_pct))
 
-        if final_qty < 1 or price * final_qty > account_cash:
-            return TradeDecision(action="hold", symbol=None, quantity=None,
-                               reasoning=f"Insufficient cash to buy {best_symbol}. {deep_analysis}")
-    elif action == "sell" and best_symbol:
-        pos = next((p for p in positions if p.symbol == best_symbol), None)
-        if not pos:
-            return TradeDecision(action="hold", symbol=None, quantity=None,
-                               reasoning=f"No position in {best_symbol} to sell.")
-        final_qty = max(1, round(float(pos.qty)))
-    else:
-        return TradeDecision(action="hold", symbol=None, quantity=None, reasoning=deep_analysis)
+            cost = price * final_qty
+            if final_qty < 1 or cost > remaining_cash:
+                logger.info(f"Skipping {sym} — insufficient cash (need ${cost:.0f}, have ${remaining_cash:.0f})")
+                continue
+            remaining_cash -= cost
 
-    full_reasoning = (
-        f"[{confidence.upper()} CONFIDENCE] {deep_analysis} "
-        f"Exit: TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}% trail"
-        f"{' | partial exit (50% at TP, 50% rides)' if partial_exit else ''}. "
-        f"Candidates: {', '.join([o['symbol'] for o in opportunities[:3]])}."
-    )
+        elif action == "sell":
+            pos = next((p for p in positions if p.symbol == sym), None)
+            if not pos:
+                continue
+            final_qty = max(1, round(float(pos.qty)))
+        else:
+            continue
 
-    return TradeDecision(
-        action=action,
-        symbol=best_symbol,
-        quantity=final_qty,
-        reasoning=full_reasoning,
-        take_profit_pct=take_profit_pct,
-        stop_loss_pct=stop_loss_pct,
-        partial_exit=partial_exit,
-    )
+        reasoning = (
+            f"[{confidence.upper()}] {analysis} "
+            f"TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}%"
+            f"{' | partial exit' if partial_exit else ''}."
+        )
+        decisions.append(TradeDecision(
+            action=action,
+            symbol=sym,
+            quantity=final_qty,
+            reasoning=reasoning,
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct,
+            partial_exit=partial_exit,
+        ))
+        logger.info(f"Approved: {action.upper()} {sym} x{final_qty} | TP={take_profit_pct*100:.0f}% SL={stop_loss_pct*100:.0f}%")
+
+    if not decisions:
+        return [TradeDecision(action="hold", symbol=None, quantity=None,
+                              reasoning=f"All approved trades filtered out by risk/cash checks. Candidates: {', '.join(top_symbols)}")]
+    return decisions

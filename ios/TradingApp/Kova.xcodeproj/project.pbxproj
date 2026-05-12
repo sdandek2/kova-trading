@@ -46,6 +46,9 @@
 		E5144074BE262084914C866C /* AIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9B383E71DA3A126C1640CC /* AIView.swift */; };
 		F613D4FEA0AB05ED94B16D6A /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98185D223838F12E20232E0F /* Account.swift */; };
 		F9E7890EBA46415D88277DC1 /* Order.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1DFB31D36986CDAD442306 /* Order.swift */; };
+		A1B2C3D4E5F6A1B2C3D4E5F6 /* RiskSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */; };
+		A2B3C4D5E6F7A2B3C4D5E6F7 /* TradingFloorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */; };
+		A3B4C5D6E7F8A3B4C5D6E7F8 /* PreMarketView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -90,6 +93,9 @@
 		E9819384A688423BF3DA8FA1 /* InsightsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InsightsViewModel.swift; path = Sources/ViewModels/InsightsViewModel.swift; sourceTree = "<group>"; };
 		FA91403580F7C26E4D7DC85A /* OrdersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OrdersView.swift; path = Sources/Views/Orders/OrdersView.swift; sourceTree = "<group>"; };
 		FCC19DCD9B52FD90768369D9 /* BotControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotControlView.swift; path = Sources/Views/AI/BotControlView.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RiskSettings.swift; path = Sources/Models/RiskSettings.swift; sourceTree = "<group>"; };
+		B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradingFloorView.swift; path = Sources/Views/AI/TradingFloorView.swift; sourceTree = "<group>"; };
+		B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PreMarketView.swift; path = Sources/Views/AI/PreMarketView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,6 +153,9 @@
 				0719B0817272613D70676E77 /* PerformanceView.swift */,
 				8C0C835D1A3EAEC1E9E32702 /* StrategyPickerView.swift */,
 				13F2E87D7B52A1FEB042993B /* WatchlistEditorView.swift */,
+				B2C3D4E5F6A7B2C3D4E5F6A7 /* TradingFloorView.swift */,
+				B3C4D5E6F7A8B3C4D5E6F7A8 /* PreMarketView.swift */,
+				B1C2D3E4F5A6B1C2D3E4F5A6 /* RiskSettings.swift */,
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
@@ -276,6 +285,9 @@
 				21D6A98300A2D1FF80794619 /* NewsView.swift in Sources */,
 				2592C513492F5287BB2E6077 /* OrderRowView.swift in Sources */,
 				4071354E076A14ABB69C6A56 /* OrdersView.swift in Sources */,
+				A1B2C3D4E5F6A1B2C3D4E5F6 /* RiskSettings.swift in Sources */,
+				A2B3C4D5E6F7A2B3C4D5E6F7 /* TradingFloorView.swift in Sources */,
+				A3B4C5D6E7F8A3B4C5D6E7F8 /* PreMarketView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
