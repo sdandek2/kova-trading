@@ -3,6 +3,7 @@ import Charts
 
 struct PortfolioChartView: View {
     let points: [PortfolioPoint]
+    var onPeriodChange: ((String) -> Void)? = nil
     @State private var selectedPeriod = "1W"
     let periods = ["1D", "1W", "1M", "3M"]
 
@@ -64,6 +65,9 @@ struct PortfolioChartView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .onChange(of: selectedPeriod) { _, newPeriod in
+                onPeriodChange?(newPeriod)
+            }
         }
         .padding()
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))

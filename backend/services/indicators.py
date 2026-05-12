@@ -1,14 +1,20 @@
 def compute_rsi(prices: list[float], period: int = 14) -> float:
-    """Compute RSI from a list of closing prices."""
+    """Compute RSI using Wilder's smoothed moving average (standard definition)."""
     if len(prices) < period + 1:
         return 50.0  # neutral default
 
     deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-    gains = [d if d > 0 else 0 for d in deltas[-period:]]
-    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    gains = [max(d, 0) for d in deltas]
+    losses = [max(-d, 0) for d in deltas]
 
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
+    # Seed with simple average over first period
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    # Wilder smoothing for remaining bars
+    for g, l in zip(gains[period:], losses[period:]):
+        avg_gain = (avg_gain * (period - 1) + g) / period
+        avg_loss = (avg_loss * (period - 1) + l) / period
 
     if avg_loss == 0:
         return 100.0
@@ -18,36 +24,33 @@ def compute_rsi(prices: list[float], period: int = 14) -> float:
 
 
 def compute_macd(prices: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
-    """Compute MACD line, signal line, and histogram."""
+    """Compute MACD using proper rolling EMA series (not non-overlapping window slices)."""
     if len(prices) < slow + signal:
         return {"macd": 0.0, "signal": 0.0, "histogram": 0.0}
 
-    def ema(data, period):
+    def ema_series(data: list[float], period: int) -> list[float]:
         k = 2 / (period + 1)
-        ema_val = data[0]
+        result = [data[0]]
         for price in data[1:]:
-            ema_val = price * k + ema_val * (1 - k)
-        return ema_val
+            result.append(price * k + result[-1] * (1 - k))
+        return result
 
-    fast_ema = ema(prices[-slow:], fast)
-    slow_ema = ema(prices[-slow:], slow)
-    macd_line = fast_ema - slow_ema
+    fast_ema = ema_series(prices, fast)
+    slow_ema = ema_series(prices, slow)
 
-    # Approximate signal as EMA of recent MACD values
-    macd_values = []
-    for i in range(signal, 0, -1):
-        subset = prices[-(slow + i):-i] if i > 0 else prices[-slow:]
-        f = ema(subset, fast)
-        s = ema(subset, slow)
-        macd_values.append(f - s)
+    # Align: fast_ema is longer, trim to match slow_ema length
+    offset = len(fast_ema) - len(slow_ema)
+    macd_line = [f - s for f, s in zip(fast_ema[offset:], slow_ema)]
 
-    signal_line = ema(macd_values, signal) if macd_values else 0.0
-    histogram = macd_line - signal_line
+    signal_ema = ema_series(macd_line, signal)
+
+    macd_val = macd_line[-1]
+    signal_val = signal_ema[-1]
 
     return {
-        "macd": round(macd_line, 4),
-        "signal": round(signal_line, 4),
-        "histogram": round(histogram, 4),
+        "macd": round(macd_val, 4),
+        "signal": round(signal_val, 4),
+        "histogram": round(macd_val - signal_val, 4),
     }
 
 

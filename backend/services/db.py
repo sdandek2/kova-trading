@@ -574,7 +574,7 @@ def get_position_history(limit: int = 50) -> list[dict]:
             return []
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, entry_time, exit_time, entry_price, exit_price,
+                SELECT symbol, side, entry_time, exit_time, entry_price, exit_price,
                        quantity, realized_pl, realized_pl_pct, hold_duration_mins,
                        exit_reason, strategy, claude_reasoning, market_regime
                 FROM position_log
@@ -586,18 +586,19 @@ def get_position_history(limit: int = 50) -> list[dict]:
         return [
             {
                 "symbol":            r[0],
-                "entry_time":        r[1].isoformat() if r[1] else None,
-                "exit_time":         r[2].isoformat() if r[2] else None,
-                "entry_price":       r[3],
-                "exit_price":        r[4],
-                "quantity":          r[5],
-                "realized_pl":       r[6],
-                "realized_pl_pct":   r[7],
-                "hold_duration_mins": r[8],
-                "exit_reason":       r[9],
-                "strategy":          r[10],
-                "claude_reasoning":  r[11],
-                "market_regime":     r[12],
+                "side":              r[1] or "long",
+                "entry_time":        r[2].isoformat() if r[2] else None,
+                "exit_time":         r[3].isoformat() if r[3] else None,
+                "entry_price":       r[4],
+                "exit_price":        r[5],
+                "quantity":          r[6],
+                "realized_pl":       r[7],
+                "realized_pl_pct":   r[8],
+                "hold_duration_mins": r[9],
+                "exit_reason":       r[10],
+                "strategy":          r[11],
+                "claude_reasoning":  r[12],
+                "market_regime":     r[13],
             }
             for r in rows
         ]
@@ -613,8 +614,15 @@ def get_trade_performance_summary() -> dict:
     """
     try:
         conn = _get_conn()
+        _empty = {
+            "total_trades": 0, "wins": 0, "losses": 0,
+            "win_rate_pct": 0.0, "avg_pl_pct": 0.0,
+            "avg_win_pct": 0.0, "avg_loss_pct": 0.0,
+            "total_realized_pl": 0.0,
+            "best_symbols": [], "worst_symbols": [],
+        }
         if not conn:
-            return {}
+            return _empty
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
@@ -645,7 +653,7 @@ def get_trade_performance_summary() -> dict:
                 SELECT symbol, ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pct
                 FROM position_log
                 WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
-                GROUP BY symbol HAVING COUNT(*) >= 2
+                GROUP BY symbol HAVING COUNT(*) >= 1
                 ORDER BY avg_pct DESC LIMIT 3
             """)
             best = [{"symbol": r[0], "avg_pct": float(r[1])} for r in cur.fetchall()]
@@ -654,7 +662,7 @@ def get_trade_performance_summary() -> dict:
                 SELECT symbol, ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pct
                 FROM position_log
                 WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
-                GROUP BY symbol HAVING COUNT(*) >= 2
+                GROUP BY symbol HAVING COUNT(*) >= 1
                 ORDER BY avg_pct ASC LIMIT 3
             """)
             worst = [{"symbol": r[0], "avg_pct": float(r[1])} for r in cur.fetchall()]
@@ -673,7 +681,13 @@ def get_trade_performance_summary() -> dict:
             }
     except Exception as e:
         logger.warning(f"get_trade_performance_summary failed ({e})")
-        return {}
+        return {
+            "total_trades": 0, "wins": 0, "losses": 0,
+            "win_rate_pct": 0.0, "avg_pl_pct": 0.0,
+            "avg_win_pct": 0.0, "avg_loss_pct": 0.0,
+            "total_realized_pl": 0.0,
+            "best_symbols": [], "worst_symbols": [],
+        }
 
 
 # ── circuit_breaker_log helpers ────────────────────────────────────────────

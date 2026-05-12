@@ -28,7 +28,7 @@ class DashboardViewModel: ObservableObject {
         do {
             async let accountTask = APIService.shared.getAccount()
             async let positionsTask = APIService.shared.getPositions()
-            async let historyTask = APIService.shared.getPortfolioHistory()
+            async let historyTask = APIService.shared.getPortfolioHistory(period: "1W")
             let (acc, pos, history) = try await (accountTask, positionsTask, historyTask)
             account = acc
             positions = pos
@@ -37,5 +37,13 @@ class DashboardViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    func loadPortfolioHistory(period: String) async {
+        do {
+            portfolioHistory = try await APIService.shared.getPortfolioHistory(period: period)
+        } catch {
+            // Non-fatal — keep existing chart data
+        }
     }
 }

@@ -82,7 +82,7 @@ struct PerformanceSummaryCard: View {
                 StatPill(label: "Win Rate", value: String(format: "%.0f%%", summary.win_rate_pct),
                          color: summary.win_rate_pct >= 50 ? .green : .red)
                 StatPill(label: "Total P&L",
-                         value: String(format: "$%@%.0f", summary.total_realized_pl >= 0 ? "+" : "", summary.total_realized_pl),
+                         value: String(format: "%@$%.0f", summary.total_realized_pl >= 0 ? "+" : "-", abs(summary.total_realized_pl)),
                          color: summary.total_realized_pl >= 0 ? .green : .red)
             }
 

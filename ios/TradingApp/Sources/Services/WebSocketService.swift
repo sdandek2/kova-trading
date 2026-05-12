@@ -54,7 +54,16 @@ class WebSocketService: ObservableObject {
         else { return }
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // Support both standard ISO8601 and fractional-seconds variants (e.g. "2026-05-11T12:00:00.000Z")
+        decoder.dateDecodingStrategy = .custom { dec in
+            let str = try dec.singleValueContainer().decode(String.self)
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = iso.date(from: str) { return date }
+            iso.formatOptions = [.withInternetDateTime]
+            if let date = iso.date(from: str) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: dec.codingPath, debugDescription: "Cannot decode date: \(str)"))
+        }
 
         let payloadData = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
 

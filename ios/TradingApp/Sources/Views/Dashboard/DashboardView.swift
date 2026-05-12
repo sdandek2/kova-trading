@@ -18,8 +18,10 @@ struct DashboardView: View {
                                 AccountCardView(account: account)
                             }
 
-                            PortfolioChartView(points: vm.portfolioHistory)
-                                .padding(.horizontal)
+                            PortfolioChartView(points: vm.portfolioHistory) { period in
+                                Task { await vm.loadPortfolioHistory(period: period) }
+                            }
+                            .padding(.horizontal)
 
                             VStack(alignment: .leading, spacing: 0) {
                                 Text("Positions")
