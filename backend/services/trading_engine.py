@@ -27,7 +27,7 @@ _RISK_DEFAULTS = {
     "daily_loss_limit_pct": 6.0,   # aggressive: tolerate up to 6% daily loss before halting buys
     "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
-    "min_daily_trades": 4,          # afternoon pressure if fewer than 4 trades by cutoff
+    "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM EST — more time to catch up
 }
 
