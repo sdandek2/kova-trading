@@ -186,7 +186,7 @@ Respond in JSON:
 {{"opportunities": [{{"symbol": "X", "signal": "momentum", "reason": "..."}}]}}"""
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=512)
+        step1_raw = ask_ai(step1_prompt, max_tokens=1024)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
@@ -195,7 +195,7 @@ Respond in JSON:
         opportunities = step1_data.get("opportunities", [])
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
-        logger.error(f"Step 1 failed: {e}")
+        logger.error(f"Step 1 failed (JSON parse or API error — likely truncated response): {e}. Raw response was: {step1_raw[:200] if 'step1_raw' in dir() else 'no response'}")
         opportunities = []
 
     if not opportunities:

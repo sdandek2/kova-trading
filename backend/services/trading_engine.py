@@ -141,11 +141,7 @@ async def run_trading_cycle():
 
         positions = alpaca_service.get_positions()
         universe = alpaca_service.get_tradeable_universe()
-        # Always include user's watchlist stocks in the scan
-        from routers.watchlist import load_watchlist
-        user_watchlist = load_watchlist()
-        universe = list(dict.fromkeys(user_watchlist + universe))  # watchlist first, deduplicated
-        logger.info(f"Universe: {len(universe)} stocks (including {len(user_watchlist)} from watchlist)")
+        logger.info(f"Universe: {len(universe)} stocks — 100% market-driven (top movers, volume, news, sectors)")
         # Lightweight snapshot for broad scan (Step 1) — price + 5-day change only
         snapshot_light = alpaca_service.get_market_snapshot_light(universe)
 
