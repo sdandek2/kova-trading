@@ -74,7 +74,8 @@ struct DailyPicksView: View {
                         emoji: "🔥",
                         subtitle: "1–2 weeks",
                         picks: picks.short_term,
-                        accentColor: .orange
+                        accentColor: .orange,
+                        prefillSide: "buy"
                     )
                 }
 
@@ -85,8 +86,14 @@ struct DailyPicksView: View {
                         emoji: "🚀",
                         subtitle: "1–3 months",
                         picks: picks.long_term,
-                        accentColor: .blue
+                        accentColor: .blue,
+                        prefillSide: "buy"
                     )
+                }
+
+                // Bearish plays section
+                if let bearish = picks.bearish_plays, !bearish.isEmpty {
+                    bearishSection(bearish)
                 }
 
                 // Avoid section
@@ -113,7 +120,7 @@ struct DailyPicksView: View {
 
     // MARK: - Picks section
 
-    func picksSection(title: String, emoji: String, subtitle: String, picks: [DailyPick], accentColor: Color) -> some View {
+    func picksSection(title: String, emoji: String, subtitle: String, picks: [DailyPick], accentColor: Color, prefillSide: String = "buy") -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text(emoji)
@@ -129,9 +136,43 @@ struct DailyPicksView: View {
                         DailyPickCard(
                             pick: pick,
                             accentColor: accentColor,
+                            prefillSide: prefillSide,
                             livePrice: vm.livePrices[pick.symbol]
                         ) {
                             selectedSymbol = pick.symbol
+                            showPrediction = true
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+            }
+        }
+        .padding(.bottom, 16)
+    }
+
+    // MARK: - Bearish plays section
+
+    func bearishSection(_ plays: [DailyPick]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("🐻")
+                Text("Bearish Plays").font(.subheadline.weight(.semibold))
+                Text("·").foregroundStyle(.secondary)
+                Text("Short sells & inverse ETFs").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(plays) { play in
+                        DailyPickCard(
+                            pick: play,
+                            accentColor: .red,
+                            prefillSide: play.isInverseETF ? "buy" : "short",
+                            livePrice: vm.livePrices[play.symbol]
+                        ) {
+                            selectedSymbol = play.symbol
                             showPrediction = true
                         }
                     }
@@ -208,9 +249,12 @@ struct DailyPicksView: View {
 struct DailyPickCard: View {
     let pick: DailyPick
     let accentColor: Color
-    var livePrice: Double? = nil   // real-time price injected by parent
+    var prefillSide: String = "buy"  // "buy" | "short"
+    var livePrice: Double? = nil     // real-time price injected by parent
     var onTap: () -> Void
     @State private var showTrade = false
+
+    private var isBearish: Bool { prefillSide == "short" || pick.isInverseETF }
 
     /// Authoritative price: live first, fall back to AI estimate
     private var displayPrice: Double? { livePrice ?? pick.current_price_approx }
@@ -223,11 +267,29 @@ struct DailyPickCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Symbol + upside
+            // Symbol + upside/downside
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(pick.symbol)
-                        .font(.title3.weight(.bold))
+                    HStack(spacing: 6) {
+                        Text(pick.symbol)
+                            .font(.title3.weight(.bold))
+                        // Badge for inverse ETF or short
+                        if pick.isInverseETF {
+                            Text("INVERSE")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Color.red)
+                                .clipShape(Capsule())
+                        } else if prefillSide == "short" {
+                            Text("SHORT")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Color.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
                     if let price = displayPrice {
                         HStack(spacing: 4) {
                             Text(String(format: "$%.2f", price))
@@ -242,7 +304,10 @@ struct DailyPickCard: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     if let upside = pick.upside_pct {
-                        Text(String(format: "+%.0f%%", upside))
+                        // Bearish plays show downside % with negative arrow
+                        Text(isBearish
+                             ? String(format: "↓%.0f%%", upside)
+                             : String(format: "+%.0f%%", upside))
                             .font(.title3.weight(.bold))
                             .foregroundStyle(accentColor)
                     }
@@ -271,7 +336,7 @@ struct DailyPickCard: View {
 
             // Entry + risk
             VStack(alignment: .leading, spacing: 4) {
-                Label(pick.entry_zone, systemImage: "arrow.down.circle")
+                Label(pick.entry_zone, systemImage: isBearish ? "arrow.up.circle" : "arrow.down.circle")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -281,7 +346,7 @@ struct DailyPickCard: View {
                     .lineLimit(2)
             }
 
-            // Buy button
+            // Action button
             HStack {
                 Text("AI: \(suggestedQty) share\(suggestedQty == 1 ? "" : "s")")
                     .font(.caption2)
@@ -290,12 +355,12 @@ struct DailyPickCard: View {
                 Button {
                     showTrade = true
                 } label: {
-                    Text("Buy")
+                    Text(prefillSide == "short" ? "Short" : "Buy")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
-                        .background(Color.green)
+                        .background(prefillSide == "short" ? Color.red : Color.green)
                         .clipShape(Capsule())
                 }
             }
@@ -312,7 +377,7 @@ struct DailyPickCard: View {
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .sheet(isPresented: $showTrade) {
-            TradeSheet(prefillSymbol: pick.symbol, prefillSide: "buy", prefillQty: suggestedQty)
+            TradeSheet(prefillSymbol: pick.symbol, prefillSide: prefillSide, prefillQty: suggestedQty)
         }
     }
 

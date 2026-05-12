@@ -42,9 +42,10 @@ def get_daily_picks(force_refresh: bool = False) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market_regime": "unknown",
         "geo_risk_level": "unknown",
-        "short_term": [],   # 1-2 week high-conviction plays
-        "long_term": [],    # 1-3 month growth compounders
-        "avoid_today": [],  # stocks / sectors to avoid right now
+        "short_term": [],     # 1-2 week high-conviction long plays
+        "long_term": [],      # 1-3 month growth compounders (long)
+        "bearish_plays": [],  # short-sell candidates + inverse ETFs for bear conditions
+        "avoid_today": [],    # stocks / sectors to avoid right now
         "summary": "",
         "error": None,
     }
@@ -126,13 +127,20 @@ Today is {date.today().strftime('%A, %B %d, %Y')}.
 
 ---
 
-Your task: Identify the BEST growth opportunities for TWO time horizons.
+Your task: Identify the BEST opportunities across THREE categories.
 
-**SHORT-TERM picks (1-2 weeks):**
+**SHORT-TERM picks (1-2 weeks, LONG direction):**
 Focus on: technical breakouts, momentum continuation, upcoming catalysts (earnings, FDA, product launch), news-driven sentiment plays, short squeeze candidates, sector rotation beneficiaries. These should be high-velocity moves.
 
-**LONG-TERM picks (1-3 months):**
+**LONG-TERM picks (1-3 months, LONG direction):**
 Focus on: structural tailwinds, macro/geopolitical beneficiaries, strong sector leadership, stocks building a base before a big move, undervalued relative to peers. These are higher-conviction, lower-risk compounders.
+
+**BEARISH plays (profit when market/stock falls):**
+Two sub-types:
+1. **SHORT candidates** (individual stocks to short-sell): Overextended stocks with deteriorating fundamentals, failed breakouts, negative catalysts, sector headwinds, or technical breakdowns. Must have high float, no near-term squeeze risk, and no imminent earnings (earnings are unpredictable).
+2. **INVERSE ETFs** (always use direction: "inverse_etf"): Best for broad market/sector weakness. Include options like SQQQ (3x short QQQ), SPXU (3x short S&P), SOXS (3x short semis), SDOW (3x short Dow), TZA (3x short small-cap). Prefer these when the whole market looks weak.
+
+Include bearish plays especially if market_regime is bearish/risk-off or VIX is elevated. If conditions are bullish, still include 2-3 defensive plays as hedges.
 
 **AVOID list:**
 Stocks/sectors that look dangerous right now — overextended, facing headwinds, earnings risk, geopolitical exposure.
@@ -146,6 +154,7 @@ Respond ONLY in JSON:
     {{
       "symbol": "XXXX",
       "type": "breakout|momentum|catalyst|sentiment|squeeze|rotation",
+      "direction": "long",
       "current_price_approx": 123.45,
       "upside_pct": 15,
       "target_price": 142.00,
@@ -161,6 +170,7 @@ Respond ONLY in JSON:
     {{
       "symbol": "XXXX",
       "type": "compounder|sector_leader|macro_play|turnaround|geopolitical",
+      "direction": "long",
       "current_price_approx": 123.45,
       "upside_pct": 35,
       "target_price": 166.00,
@@ -172,6 +182,22 @@ Respond ONLY in JSON:
       "key_risk": "single biggest risk"
     }}
   ],
+  "bearish_plays": [
+    {{
+      "symbol": "SQQQ",
+      "type": "inverse_etf|short_candidate|breakdown|overextended|sector_weakness",
+      "direction": "inverse_etf",
+      "current_price_approx": 12.50,
+      "upside_pct": 20,
+      "target_price": 15.00,
+      "time_horizon": "3-7 days",
+      "confidence": "high|medium",
+      "thesis": "2-3 sentences: why this falls, what the bearish catalyst is, why now is the right time to short or buy the inverse",
+      "entry_zone": "short above $X / buy inverse ETF at $Y",
+      "invalidation": "what would make this bearish thesis wrong",
+      "key_risk": "single biggest risk (e.g. short squeeze, unexpected bounce)"
+    }}
+  ],
   "avoid_today": [
     {{
       "symbol_or_sector": "XXXX or 'Airlines sector'",
@@ -180,11 +206,11 @@ Respond ONLY in JSON:
   ]
 }}
 
-Provide 5 short-term picks and 5 long-term picks. Be specific, actionable, and conviction-driven."""
+Provide 5 short-term picks, 5 long-term picks, and 3 bearish plays (mix of inverse ETFs and short candidates based on current conditions). Be specific, actionable, and conviction-driven."""
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2500,
+            max_tokens=3500,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -197,16 +223,19 @@ Provide 5 short-term picks and 5 long-term picks. Be specific, actionable, and c
 
         result["short_term"] = data.get("short_term", [])
         result["long_term"] = data.get("long_term", [])
+        result["bearish_plays"] = data.get("bearish_plays", [])
         result["avoid_today"] = data.get("avoid_today", [])
         result["summary"] = data.get("summary", "")
 
         logger.info(
             f"Daily picks: {len(result['short_term'])} short-term, "
-            f"{len(result['long_term'])} long-term | "
+            f"{len(result['long_term'])} long-term, "
+            f"{len(result['bearish_plays'])} bearish | "
             f"Regime: {result['market_regime']} | Geo: {result['geo_risk_level']}"
         )
         logger.info(f"Short-term picks: {[p['symbol'] for p in result['short_term']]}")
         logger.info(f"Long-term picks: {[p['symbol'] for p in result['long_term']]}")
+        logger.info(f"Bearish plays: {[p['symbol'] for p in result['bearish_plays']]}")
 
     except Exception as e:
         logger.error(f"Daily picks generation failed: {e}", exc_info=True)

@@ -57,19 +57,26 @@ _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
 _position_high_watermarks: dict = {}   # symbol → peak price seen while holding long position
-_short_low_watermarks: dict = {}       # symbol → lowest price seen while holding short position
+_short_low_watermarks: dict = _load_short_watermarks()  # symbol → lowest price seen while holding short position
 _previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time, side} for close detection
 _current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
 
 
 def _load_watermarks() -> dict:
-    """Restore watermarks from persistent cache after a server restart."""
+    """Restore long-position high watermarks from persistent cache after a server restart."""
     cached = cache_get("position_watermarks")
     return cached if isinstance(cached, dict) else {}
 
 
+def _load_short_watermarks() -> dict:
+    """Restore short-position low watermarks from persistent cache after a server restart."""
+    cached = cache_get("short_position_watermarks")
+    return cached if isinstance(cached, dict) else {}
+
+
 def _save_watermarks() -> None:
-    cache_set("position_watermarks", _position_high_watermarks, 86400)  # 24h TTL
+    cache_set("position_watermarks", _position_high_watermarks, 86400)        # 24h TTL
+    cache_set("short_position_watermarks", _short_low_watermarks, 86400)      # 24h TTL
 
 
 def _load_daily_trade_count() -> dict:
