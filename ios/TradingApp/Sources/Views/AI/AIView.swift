@@ -189,8 +189,21 @@ struct RiskSettingsCard: View {
                     RiskSectionHeader(title: "TRADE THROTTLE")
 
                     RiskStepperRow(
+                        label: "Bot Cycle Interval",
+                        hint: "How often the bot scans and trades. 5 min catches faster moves; 10 min is default.",
+                        value: Binding(
+                            get: { settings.cycle_interval_seconds / 60 },
+                            set: { settings.cycle_interval_seconds = $0 * 60 }
+                        ),
+                        range: 5...30,
+                        unit: "min"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskStepperRow(
                         label: "Max Trades Per Cycle",
-                        hint: "Limits new buys/shorts per 10-min cycle. Sells & covers always go through.",
+                        hint: "Limits new buys/shorts per cycle. Sells & covers always go through.",
                         value: $settings.max_trades_per_cycle,
                         range: 1...10,
                         unit: "trades"

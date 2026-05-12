@@ -31,6 +31,7 @@ _RISK_DEFAULTS = {
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM EST — more time to catch up
     "max_trades_per_cycle": 3,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
+    "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
 }
 
 
@@ -861,7 +862,7 @@ async def _trading_loop():
         # Sleep longer when market is closed (nights / weekends)
         # so we don't spin every 5 min for 18 hours doing nothing
         if market_open_now:
-            sleep_seconds = TRADING_INTERVAL_SECONDS
+            sleep_seconds = int(_risk_settings.get("cycle_interval_seconds", TRADING_INTERVAL_SECONDS))
         else:
             sleep_seconds = 900  # check every 15 min when closed
             logger.info("Market closed — checking again in 15 minutes")
