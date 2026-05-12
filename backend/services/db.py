@@ -553,10 +553,10 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, side)
                 cur.execute("""
                     INSERT INTO position_log
-                        (symbol, entry_time, exit_time, entry_price, exit_price,
+                        (symbol, side, entry_time, exit_time, entry_price, exit_price,
                          quantity, realized_pl, realized_pl_pct, exit_reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (symbol, entry_time or now, now, ep, exit_price,
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (symbol, side or "long", entry_time or now, now, ep, exit_price,
                       qty, realized_pl, realized_pl_pct, exit_reason))
         logger.info(f"log_position_close: {symbol} exit=${exit_price:.2f} reason={exit_reason}")
     except Exception as e:

@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api", tags=["orders"])
 
 class ManualOrderRequest(BaseModel):
     symbol: str
-    side: str   # "buy" or "sell"
+    side: str   # "buy", "sell", or "short"
     qty: int
 
 
@@ -20,16 +20,15 @@ def get_orders():
 @router.post("/orders/manual")
 def place_manual_order(req: ManualOrderRequest):
     symbol = req.symbol.upper().strip()
-    if req.side not in ("buy", "sell"):
-        raise HTTPException(status_code=400, detail="side must be buy or sell")
+    if req.side not in ("buy", "sell", "short"):
+        raise HTTPException(status_code=400, detail="side must be buy, sell, or short")
     if req.qty < 1:
         raise HTTPException(status_code=400, detail="qty must be at least 1")
 
     # Validate symbol exists and is tradeable
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest, GetAssetsRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce, AssetStatus
+        from alpaca.trading.enums import AssetStatus
         from config import settings
         client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
         try:
@@ -54,6 +53,18 @@ def place_manual_order(req: ManualOrderRequest):
         owned = int(position.qty)
         if req.qty > owned:
             raise HTTPException(status_code=400, detail=f"You only own {owned} shares of {symbol}")
+
+    # Short sell: use submit_short_order which places a limit sell + GTC cover buy
+    if req.side == "short":
+        try:
+            order = alpaca_service.submit_short_order(symbol=symbol, qty=req.qty)
+            if not order:
+                raise HTTPException(status_code=400, detail=f"Short order for {symbol} failed")
+            return {"status": "submitted", "order_id": order.id, "symbol": symbol, "side": "short", "qty": req.qty}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     try:
         from alpaca.trading.client import TradingClient

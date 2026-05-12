@@ -65,6 +65,7 @@ class InsightsViewModel: ObservableObject {
         if let picks = dailyPicks {
             picks.short_term.forEach { symbols.insert($0.symbol) }
             picks.long_term.forEach { symbols.insert($0.symbol) }
+            picks.bearish_plays?.forEach { symbols.insert($0.symbol) }
         }
         guard !symbols.isEmpty else { return }
         let prices = await APIService.shared.getLivePrices(symbols: Array(symbols))

@@ -180,7 +180,7 @@ These stocks have earnings coming this week. Consider a small position (5% max) 
     # ── Inject inverse ETFs on bearish days ──
     regime = (macro or {}).get("market_regime", "")
     vix = (macro or {}).get("vix_level", "low")
-    is_bearish_day = regime in ("bearish", "risk-off") or vix in ("extreme", "high")
+    is_bearish_day = regime in ("bear", "volatile", "bearish", "risk-off") or vix in ("extreme_fear", "elevated", "extreme", "high")
     bearish_etf_note = ""
     if is_bearish_day:
         bearish_etf_note = """
@@ -225,7 +225,7 @@ Return ONLY symbol and signal type:
 {{"opportunities": [{{"symbol": "X", "signal": "momentum"}}]}}"""
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=256)
+        step1_raw = ask_ai(step1_prompt, max_tokens=512)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):

@@ -78,6 +78,15 @@ class WebSocketService: ObservableObject {
                 if let analysis = try? decoder.decode(AIAnalysis.self, from: payloadData) {
                     self.latestMessage = .aiAnalysis(analysis)
                 }
+            case "circuit_breaker":
+                let dayPl = (payload as? [String: Any])?["day_pl_percent"] as? Double
+                let reason = (payload as? [String: Any])?["reason"] as? String ?? "Daily loss limit hit"
+                NotificationCenter.default.post(
+                    name: .circuitBreakerFired,
+                    object: nil,
+                    userInfo: dayPl.map { ["day_pl_percent": $0] }
+                )
+                NotificationService.shared.notifyCircuitBreaker(reason: reason)
             default:
                 break
             }

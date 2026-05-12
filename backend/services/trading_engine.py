@@ -342,13 +342,14 @@ async def run_trading_cycle():
                 if sym in _position_high_watermarks:
                     del _position_high_watermarks[sym]
 
-        # Update _previous_positions for next cycle
+        # Update _previous_positions for next cycle — include side so short closes are identified correctly
         _previous_positions = {
             p.symbol: {
                 "qty": int(float(p.qty)),
                 "avg_entry_price": p.avg_entry_price,
                 "entry_time": datetime.now(timezone.utc),  # approximate if not tracked
                 "exit_reason": "unknown",
+                "side": p.side,  # critical: "long" or "short" — used by log_position_close P&L formula
             }
             for p in positions
         }
@@ -426,17 +427,19 @@ async def run_trading_cycle():
                     action_label, reason,
                     symbol=position.symbol, cycle_id=_current_cycle_id
                 )
-                # For shorts: cancel any open GTC buy orders before market cover
-                # (submit_short_order places a GTC limit buy — must cancel to avoid double-cover)
-                if is_short:
-                    try:
-                        open_orders = alpaca_service.get_orders(limit=20)
-                        for o in open_orders:
-                            if o.symbol == position.symbol and o.side == "buy" and o.status in ("new", "partially_filled", "accepted"):
-                                alpaca_service.cancel_order(o.id)
-                                logger.info(f"Cancelled GTC cover order {o.id} for {position.symbol} before engine cover")
-                    except Exception as ce:
-                        logger.warning(f"Could not cancel GTC orders for {position.symbol}: {ce}")
+                # Cancel any open GTC bracket orders before submitting a market exit
+                # Shorts: cancel GTC limit buy (cover order placed at entry via submit_short_order)
+                # Longs: cancel GTC limit sell / stop-loss legs placed at entry via bracket order
+                # Without this, the orphaned GTC order can fill later and create an unintended position
+                try:
+                    open_orders = alpaca_service.get_orders(limit=20)
+                    cancel_side = "buy" if is_short else "sell"
+                    for o in open_orders:
+                        if o.symbol == position.symbol and o.side == cancel_side and o.status in ("new", "partially_filled", "accepted"):
+                            alpaca_service.cancel_order(o.id)
+                            logger.info(f"Cancelled open {cancel_side} order {o.id} for {position.symbol} before engine exit")
+                except Exception as ce:
+                    logger.warning(f"Could not cancel open orders for {position.symbol}: {ce}")
                 order = alpaca_service.submit_market_order(
                     symbol=position.symbol,
                     qty=exit_qty,
@@ -644,8 +647,9 @@ async def run_trading_cycle():
                         market_regime=macro.get("market_regime"),
                         side="short",
                     )
-                    # Seed low watermark for new short position
+                    # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
+                    _save_watermarks()
                     _previous_positions[decision.symbol] = {
                         "qty": decision.quantity,
                         "avg_entry_price": fill_price,
@@ -675,12 +679,17 @@ async def run_trading_cycle():
                         "side": "long",
                     }
                 elif decision.action == "sell" and fill_price:
+                    prev = _previous_positions.get(decision.symbol, {})
                     if decision.symbol in _previous_positions:
                         _previous_positions[decision.symbol]["exit_reason"] = "ai_sell"
                     log_position_close(
                         symbol=decision.symbol,
                         exit_price=fill_price,
                         exit_reason="ai_sell",
+                        entry_price=prev.get("avg_entry_price"),
+                        quantity=prev.get("qty"),
+                        entry_time=prev.get("entry_time"),
+                        side=prev.get("side", "long"),
                     )
 
                 log_bot_activity(

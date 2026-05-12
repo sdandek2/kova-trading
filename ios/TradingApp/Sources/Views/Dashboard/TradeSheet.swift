@@ -63,8 +63,21 @@ struct TradeSheet: View {
                     Picker("Side", selection: $side) {
                         Text("Buy").tag("buy")
                         Text("Sell").tag("sell")
+                        Text("Short").tag("short")
                     }
                     .pickerStyle(.segmented)
+
+                    // Short selling explanation
+                    if side == "short" {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("Short sell: profit when the stock falls. Bot will auto-cover when profitable.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     HStack {
                         Text("Shares")
@@ -129,9 +142,9 @@ struct TradeSheet: View {
                             if isSubmitting {
                                 ProgressView()
                             } else {
-                                Text(side == "buy" ? "Place Buy Order" : "Place Sell Order")
+                                Text(side == "buy" ? "Place Buy Order" : side == "short" ? "Place Short Order" : "Place Sell Order")
                                     .fontWeight(.semibold)
-                                    .foregroundStyle(side == "buy" ? .green : .red)
+                                    .foregroundStyle(side == "buy" ? .green : side == "short" ? .orange : .red)
                             }
                             Spacer()
                         }

@@ -87,6 +87,18 @@ def should_confirm_entry(
             return False, f"{symbol} RSI is {rsi:.1f} — oversold, may bounce, holding"
         return True, f"{symbol} sell confirmed: RSI={rsi:.1f}"
 
+    elif action == "short":
+        # Don't short into deeply oversold conditions — high bounce risk
+        if rsi < 35:
+            return False, f"{symbol} RSI {rsi:.1f} — oversold, short bounce risk, skipping"
+        # Don't short a stock already down >5% today — late entry, most of the move is gone
+        if current_price < yesterday_close * 0.95:
+            return False, f"{symbol} already down >5% today — late short entry, skipping"
+        # Don't short in aggressive mode if RSI < 45 — could be bottoming, not breaking down
+        if is_aggressive and rsi < 45:
+            return False, f"{symbol} RSI {rsi:.1f} — not overbought enough to short confidently"
+        return True, f"{symbol} short confirmed: RSI={rsi:.1f}, price vs yesterday ok"
+
     return True, "No confirmation needed for hold"
 
 
