@@ -220,7 +220,10 @@ class APIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try? JSONEncoder().encode(settings)
-        let (_, _) = try await URLSession.shared.data(for: request)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
     }
 
     func getPositionHistory(limit: Int = 50) async throws -> [PositionLog] {

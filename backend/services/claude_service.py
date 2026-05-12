@@ -408,11 +408,19 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             step2_raw = step2_raw.split("```")[1]
             if step2_raw.startswith("json"):
                 step2_raw = step2_raw[4:]
-        step2_data = json.loads(step2_raw.strip())
+        try:
+            step2_data = json.loads(step2_raw.strip())
+        except json.JSONDecodeError:
+            import re as _re
+            match = _re.search(r'\{.*\}', step2_raw, _re.DOTALL)
+            if match:
+                step2_data = json.loads(match.group())
+            else:
+                raise ValueError(f"Could not extract JSON from Step 2 response: {step2_raw[:200]}")
         approved = step2_data.get("trades", [])
         logger.info(f"Step 2 — Approved {len(approved)} trades: {[t.get('symbol') for t in approved]} | Skipped: {step2_data.get('skipped','')}")
     except Exception as e:
-        logger.error(f"Step 2 failed: {e}")
+        logger.error(f"Step 2 failed: {e}. Raw: {step2_raw[:300] if 'step2_raw' in locals() else 'none'}")
         return [TradeDecision(action="hold", symbol=None, quantity=None,
                               reasoning="Deep analysis failed. Holding positions.")]
 
@@ -474,9 +482,8 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             # Apply penny stock cap in Step 3 so cash reservation is correctly sized.
             # trading_engine.py applies the same cap for final ATR-adjusted sizing.
             if action == "buy" and price < 5.0:
-                from services.db import cache_get as _cg
-                _rs = _cg("user_pref:risk_settings") or {}
-                _penny_pct = float(_rs.get("max_penny_position_pct", 3.0)) / 100.0
+                from services import trading_engine as _te
+                _penny_pct = float(_te._risk_settings.get("max_penny_position_pct", 3.0)) / 100.0
                 effective_max_position = portfolio_value * _penny_pct
             else:
                 effective_max_position = max_position
