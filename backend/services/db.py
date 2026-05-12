@@ -482,12 +482,25 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                        entry_price: float = None, quantity: int = None,
-                       entry_time: datetime = None) -> None:
+                       entry_time: datetime = None, side: str = "long") -> None:
     """
     Update the most recent open position_log row for *symbol* with exit data.
     Also handles the case where no open row exists (logs a standalone closed row).
+    side: "long" (profit = exit > entry) | "short" (profit = entry > exit)
     Never raises.
     """
+    def _calc_pl(ep, xp, qty, side):
+        """P&L is positive when trade is profitable regardless of direction."""
+        if not ep or not qty:
+            return None, None
+        if side == "short":
+            pl = (ep - xp) * qty        # short profits when price falls
+            pct = (ep - xp) / ep * 100
+        else:
+            pl = (xp - ep) * qty        # long profits when price rises
+            pct = (xp - ep) / ep * 100
+        return pl, pct
+
     try:
         conn = _get_conn()
         if not conn:
@@ -509,8 +522,7 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 ep = ep or entry_price or 0
                 qty = qty or quantity or 0
                 et = et or entry_time or now
-                realized_pl = (exit_price - ep) * qty if ep and qty else None
-                realized_pl_pct = ((exit_price - ep) / ep * 100) if ep else None
+                realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, side)
                 hold_mins = int((now - et).total_seconds() / 60) if et else None
                 cur.execute("""
                     UPDATE position_log SET
@@ -527,8 +539,7 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 # No open row — insert a closed record directly
                 ep = entry_price or 0
                 qty = quantity or 0
-                realized_pl = (exit_price - ep) * qty if ep else None
-                realized_pl_pct = ((exit_price - ep) / ep * 100) if ep else None
+                realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, side)
                 cur.execute("""
                     INSERT INTO position_log
                         (symbol, entry_time, exit_time, entry_price, exit_price,

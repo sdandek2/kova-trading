@@ -25,6 +25,8 @@ struct PositionLog: Decodable, Identifiable {
         return m == 0 ? "\(h)h" : "\(h)h \(m)m"
     }
 
+    var isShort: Bool { strategy?.contains("short") == true }
+
     var exitReasonLabel: String {
         switch exit_reason {
         case "trailing_stop":  return "Trailing Stop"
@@ -32,7 +34,8 @@ struct PositionLog: Decodable, Identifiable {
         case "loss_cut":       return "Loss Cut"
         case "ai_sell":        return "AI Sell"
         case "scale_out":      return "Scale Out"
-        default:               return exit_reason?.capitalized ?? "Unknown"
+        case "short_cover":    return "Short Cover"
+        default:               return exit_reason?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unknown"
         }
     }
 }
@@ -72,6 +75,7 @@ struct BotActivity: Decodable, Identifiable {
         case "circuit_breaker": return "red"
         case "trailing_stop":   return "purple"
         case "scale_out":       return "blue"
+        case "cover_short":     return "teal"
         case "position_closed": return "secondary"
         default:                return "secondary"
         }
@@ -85,6 +89,7 @@ struct BotActivity: Decodable, Identifiable {
         case "circuit_breaker": return "exclamationmark.triangle.fill"
         case "trailing_stop":   return "arrow.down.circle.fill"
         case "scale_out":       return "arrow.up.right.circle"
+        case "cover_short":     return "arrow.down.forward.circle.fill"
         case "position_closed": return "circle.fill"
         default:                return "info.circle"
         }

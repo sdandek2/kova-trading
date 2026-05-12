@@ -147,6 +147,14 @@ struct TradeHistoryRow: View {
                 HStack {
                     Text(trade.symbol)
                         .font(.subheadline).fontWeight(.semibold)
+                    if trade.isShort {
+                        Text("SHORT")
+                            .font(.caption2).fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange)
+                            .clipShape(Capsule())
+                    }
                     Text(trade.exitReasonLabel)
                         .font(.caption2).fontWeight(.medium)
                         .padding(.horizontal, 6).padding(.vertical, 2)
