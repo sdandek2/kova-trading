@@ -861,12 +861,16 @@ async def _trading_loop():
             _eod_saved_date = today
             logger.info("Market just closed — saving EOD snapshot and running AI analysis.")
             await _save_eod_snapshot()
-            # Run Claude-powered EOD analysis in a thread so it doesn't block the loop
-            import asyncio as _asyncio
-            _asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: __import__('services.eod_analysis_service', fromlist=['run_eod_analysis']).run_eod_analysis()
-            )
+            # Run Claude-powered EOD analysis in a background thread so it doesn't block the loop.
+            # run_eod_analysis() is synchronous (calls ask_ai which is blocking I/O),
+            # so we offload it to the executor. get_running_loop() is correct here
+            # (we're inside an async function) and avoids the DeprecationWarning from get_event_loop().
+            try:
+                from services.eod_analysis_service import run_eod_analysis as _run_eod_analysis
+                asyncio.get_running_loop().run_in_executor(None, _run_eod_analysis)
+                logger.info("EOD analysis triggered in background thread.")
+            except Exception as _eod_err:
+                logger.warning(f"Could not trigger EOD analysis: {_eod_err}")
         _market_was_open = market_open_now
 
         # Run DB cleanup once every ~144 cycles (~24 hours at 10-min intervals)
