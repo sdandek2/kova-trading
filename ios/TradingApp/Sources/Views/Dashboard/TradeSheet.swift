@@ -167,7 +167,7 @@ struct TradeSheet: View {
                     Task { await fetchPriceAndPosition(for: symbol) }
                 }
             }
-            .onChange(of: symbol) { _, newSymbol in
+            .onChange(of: symbol) { newSymbol in
                 let trimmed = newSymbol.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty else {
                     currentPrice = nil
