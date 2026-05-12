@@ -195,7 +195,7 @@ struct RiskSettingsCard: View {
                             get: { settings.cycle_interval_seconds / 60 },
                             set: { settings.cycle_interval_seconds = $0 * 60 }
                         ),
-                        range: 5...30,
+                        range: 1...30,
                         unit: "min"
                     ) { saveSettings() }
 
