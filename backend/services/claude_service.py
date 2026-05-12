@@ -220,11 +220,11 @@ Scan the stocks above. Identify the TOP 5 best opportunities based on technicals
 - NEUTRAL: balanced mix
 Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
 
-Respond with ONLY this JSON — no explanation, no markdown, no other text:
-{{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}]}}"""
+Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown.
+EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}, {{"symbol": "SQQQ", "signal": "inverse_etf"}}]}}"""
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=512)
+        step1_raw = ask_ai(step1_prompt, max_tokens=800)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
