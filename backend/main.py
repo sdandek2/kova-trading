@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -47,6 +47,7 @@ app.include_router(geopolitical.router)
 app.include_router(predictions.router)
 app.include_router(picks.router)
 app.include_router(watchlist.router)
+app.include_router(eod.router)
 
 
 @app.get("/health")

@@ -20,44 +20,11 @@ struct AIView: View {
                                 CircuitBreakerBanner(dayPlPercent: dayPl, limitPct: circuitBreakerLimit)
                             }
 
+                            // ════════════════════════════════
+                            // INFO — What the bot is doing
+                            // ════════════════════════════════
+
                             PreMarketView()
-
-                            // ── Active short positions (only shown when bot has open shorts) ──
-                            OpenShortsCard()
-
-                            BotControlView(vm: vm)
-
-                            StrategyPickerView()
-
-                            TradingFloorView()
-
-                            WatchlistEditorView()
-
-                            // ── Risk controls ──
-                            RiskSettingsCard()
-
-                            // ── Real-time bot activity log ──
-                            BotActivityView()
-
-                            // ── Navigation buttons ──
-                            HStack(spacing: 12) {
-                                NavigationLink {
-                                    TradeHistoryView()
-                                } label: {
-                                    Label("Trade History", systemImage: "chart.bar.xaxis")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.bordered)
-
-                                NavigationLink {
-                                    PerformanceView()
-                                        .navigationTitle("Performance")
-                                } label: {
-                                    Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
 
                             // ── Latest AI decision ──
                             if let analysis = vm.analysis {
@@ -96,22 +63,65 @@ struct AIView: View {
                                 }
                                 .padding()
                                 .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
-                            } else {
-                                VStack(spacing: 8) {
-                                    Image(systemName: "brain")
-                                        .font(.system(size: 32))
-                                        .foregroundStyle(.secondary)
-                                    Text("No analysis yet")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                    Text("Start the bot to see Claude's trading decisions here.")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                        .multilineTextAlignment(.center)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 40)
                             }
+
+                            // ── Active short positions ──
+                            OpenShortsCard()
+
+                            // ── Real-time bot activity log ──
+                            BotActivityView()
+
+                            // ── Reports & History ──
+                            HStack(spacing: 12) {
+                                NavigationLink {
+                                    TradeHistoryView()
+                                } label: {
+                                    Label("Trade History", systemImage: "chart.bar.xaxis")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+
+                                NavigationLink {
+                                    PerformanceView()
+                                        .navigationTitle("Performance")
+                                } label: {
+                                    Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+
+                            NavigationLink {
+                                EODReportView()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "chart.bar.doc.horizontal")
+                                    Text("Daily Report")
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(14)
+                            }
+                            .foregroundColor(.primary)
+
+                            // ════════════════════════════════
+                            // SETTINGS — Bot configuration
+                            // ════════════════════════════════
+
+                            BotControlView(vm: vm)
+
+                            StrategyPickerView()
+
+                            TradingFloorView()
+
+                            WatchlistEditorView()
+
+                            RiskSettingsCard()
                         }
                         .padding()
                     }

@@ -242,4 +242,12 @@ class APIService {
     func getBotActivity(limit: Int = 50) async throws -> [BotActivity] {
         try await fetch("/api/trading/activity?limit=\(limit)")
     }
+
+    func getEODReport() async throws -> EODReport {
+        try await fetch("/api/eod/latest")
+    }
+
+    func triggerEODAnalysis() async throws {
+        let _: [String: String] = try await fetch("/api/eod/run", method: "POST")
+    }
 }

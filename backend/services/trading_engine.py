@@ -859,8 +859,14 @@ async def _trading_loop():
         market_open_now = alpaca_service.is_market_open()
         if _market_was_open and not market_open_now and _eod_saved_date != today:
             _eod_saved_date = today
-            logger.info("Market just closed — saving EOD snapshot.")
+            logger.info("Market just closed — saving EOD snapshot and running AI analysis.")
             await _save_eod_snapshot()
+            # Run Claude-powered EOD analysis in a thread so it doesn't block the loop
+            import asyncio as _asyncio
+            _asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: __import__('services.eod_analysis_service', fromlist=['run_eod_analysis']).run_eod_analysis()
+            )
         _market_was_open = market_open_now
 
         # Run DB cleanup once every ~144 cycles (~24 hours at 10-min intervals)
