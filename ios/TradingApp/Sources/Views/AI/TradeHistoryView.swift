@@ -213,7 +213,7 @@ struct TradeDetailSheet: View {
                                     .font(.title2).fontWeight(.bold)
                                     .foregroundStyle(pct >= 0 ? .green : .red)
                                 if let pl = trade.realized_pl {
-                                    Text("\(pl >= 0 ? "+" : "")$\(pl, specifier: "%.2f")")
+                                    Text(String(format: "%@$%.2f", pl >= 0 ? "+" : "-", abs(pl)))
                                         .font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }

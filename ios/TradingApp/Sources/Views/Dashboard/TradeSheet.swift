@@ -144,7 +144,7 @@ struct TradeSheet: View {
                             } else {
                                 Text(side == "buy" ? "Place Buy Order" : side == "short" ? "Place Short Order" : "Place Sell Order")
                                     .fontWeight(.semibold)
-                                    .foregroundStyle(side == "buy" ? .green : side == "short" ? .orange : .red)
+                                    .foregroundStyle(side == "buy" ? .green : .red)
                             }
                             Spacer()
                         }
@@ -167,7 +167,7 @@ struct TradeSheet: View {
                     Task { await fetchPriceAndPosition(for: symbol) }
                 }
             }
-            .onChange(of: symbol) { newSymbol in
+            .onChange(of: symbol) { _, newSymbol in
                 let trimmed = newSymbol.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty else {
                     currentPrice = nil
