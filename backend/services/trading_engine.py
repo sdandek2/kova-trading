@@ -56,7 +56,6 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
-_daily_trade_count: dict = {}          # date → int, tracks trades executed per day
 _position_high_watermarks: dict = {}   # symbol → peak price seen while holding position
 _previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time} for close detection
 _current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
@@ -72,8 +71,35 @@ def _save_watermarks() -> None:
     cache_set("position_watermarks", _position_high_watermarks, 86400)  # 24h TTL
 
 
-# Restore watermarks now that helpers are defined
+def _load_daily_trade_count() -> dict:
+    """
+    Restore today's executed trade count from trade_log after a server restart.
+    Prevents afternoon pressure from misfiring because the in-memory counter reset to 0.
+    Falls back to empty dict silently if DB is unavailable.
+    """
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return {}
+        today = datetime.now(timezone.utc).date()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM trade_log WHERE action IN ('buy', 'sell') AND timestamp::date = %s",
+                (today,),
+            )
+            row = cur.fetchone()
+            count = int(row[0]) if row else 0
+        logger.info(f"Restored daily trade count from DB: {count} trades today")
+        return {today: count} if count > 0 else {}
+    except Exception as e:
+        logger.warning(f"Could not restore daily trade count ({e}), starting from 0")
+        return {}
+
+
+# Restore state that must survive server restarts
 _position_high_watermarks = _load_watermarks()
+_daily_trade_count: dict = _load_daily_trade_count()
 
 
 def get_status() -> TradingStatus:
