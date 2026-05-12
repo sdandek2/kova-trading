@@ -93,7 +93,7 @@ def _load_daily_trade_count() -> dict:
         today = datetime.now(timezone.utc).date()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM trade_log WHERE action IN ('buy', 'sell') AND timestamp::date = %s",
+                "SELECT COUNT(*) FROM trade_log WHERE action IN ('buy', 'sell', 'short') AND timestamp::date = %s",
                 (today,),
             )
             row = cur.fetchone()
@@ -525,18 +525,18 @@ async def run_trading_cycle():
             if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
                 continue
 
-            # ── Circuit breaker: block new buys when daily loss limit hit ──
-            if decision.action == "buy" and circuit_breaker_active:
-                logger.info(f"Circuit breaker: skipping BUY {decision.symbol} — daily loss limit active")
+            # ── Circuit breaker: block new buys AND shorts when daily loss limit hit ──
+            if decision.action in ("buy", "short") and circuit_breaker_active:
+                logger.info(f"Circuit breaker: skipping {decision.action.upper()} {decision.symbol} — daily loss limit active")
                 log_bot_activity("circuit_breaker",
-                                 f"BUY {decision.symbol} blocked — daily loss limit active",
+                                 f"{decision.action.upper()} {decision.symbol} blocked — daily loss limit active",
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 continue
 
-            # ── Hard earnings block: never buy into earnings today/tomorrow ──
-            # Gap risk on an earnings miss can blow through any stop loss.
+            # ── Hard earnings block: never buy OR short into earnings today/tomorrow ──
+            # Gap risk on an earnings miss/beat can blow through any stop loss on both sides.
             # Claude is informed about earnings flags but this is the enforcement layer.
-            if decision.action == "buy" and earnings_map and earnings_map.get(decision.symbol) == "today/tomorrow":
+            if decision.action in ("buy", "short") and earnings_map and earnings_map.get(decision.symbol) == "today/tomorrow":
                 logger.warning(
                     f"EARNINGS BLOCK: skipping BUY {decision.symbol} — earnings today/tomorrow, "
                     f"gap risk too high. Wait until after the report."

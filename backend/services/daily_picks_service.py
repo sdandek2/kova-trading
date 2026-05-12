@@ -218,7 +218,16 @@ Total picks: 8-10 across all three categories. Allocate based on today's market 
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        data = json.loads(raw.strip())
+        try:
+            data = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            # Fallback: extract JSON object via regex in case of extra prose
+            import re as _re
+            match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+            else:
+                raise ValueError(f"Could not extract JSON from AI response: {raw[:200]}")
 
         result["short_term"] = data.get("short_term", [])
         result["long_term"] = data.get("long_term", [])
@@ -240,9 +249,12 @@ Total picks: 8-10 across all three categories. Allocate based on today's market 
         logger.error(f"Daily picks generation failed: {e}", exc_info=True)
         result["error"] = str(e)
 
-    # Cache until end of day (seconds remaining in the day)
-    now_utc = datetime.now(timezone.utc)
-    midnight_utc = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc) + timedelta(days=1)
-    seconds_until_midnight = int((midnight_utc - now_utc).total_seconds())
-    cache_set(_picks_cache_key(), result, max(seconds_until_midnight, 3600))
+    # Only cache successful results — on failure, let the next request retry
+    if result["error"] is None:
+        now_utc = datetime.now(timezone.utc)
+        midnight_utc = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc) + timedelta(days=1)
+        seconds_until_midnight = int((midnight_utc - now_utc).total_seconds())
+        cache_set(_picks_cache_key(), result, max(seconds_until_midnight, 3600))
+    else:
+        logger.warning("Daily picks generation failed — skipping cache so next request can retry")
     return result

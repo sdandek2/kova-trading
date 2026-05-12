@@ -36,7 +36,7 @@ def analyze_and_decide(
     max_position = portfolio_value * current_strategy["max_position_pct"]
 
     positions_text = "\n".join([
-        f"  - {p.symbol}: {p.qty} shares @ avg ${p.avg_entry_price:.2f}, "
+        f"  - {p.symbol} [{getattr(p, 'side', 'long').upper()}]: {p.qty} shares @ avg ${p.avg_entry_price:.2f}, "
         f"current ${p.current_price:.2f}, P&L: ${p.unrealized_pl:.2f} ({p.unrealized_pl_percent:.1f}%)"
         for p in positions
     ]) or "  None"

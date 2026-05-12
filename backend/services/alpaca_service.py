@@ -200,30 +200,46 @@ def submit_market_order(
                 created_at=order.created_at,
             )
         except Exception as e:
-            logger.warning(f"Advanced order failed, using plain market order: {e}")
+            logger.warning(f"Advanced order failed, falling back to plain market order: {e}")
+            # Fallback: plain market buy (only reaches here if advanced order was never placed)
+            try:
+                order = trading_client.submit_order(request)
+                logger.info(f"Submitted plain market buy: {qty} {symbol}")
+                return Order(
+                    id=str(order.id),
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    qty=float(order.qty),
+                    status=order.status.value,
+                    filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
+                    created_at=order.created_at,
+                )
+            except Exception as e2:
+                logger.error(f"Plain market buy also failed for {symbol}: {e2}")
+                return None
     else:
+        # Sell path: plain market order
         request = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=order_side,
             time_in_force=TimeInForce.DAY,
         )
-
-    try:
-        order = trading_client.submit_order(request)
-        logger.info(f"Submitted {side} order: {qty} {symbol}")
-        return Order(
-            id=str(order.id),
-            symbol=order.symbol,
-            side=order.side.value,
-            qty=float(order.qty),
-            status=order.status.value,
-            filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
-            created_at=order.created_at,
-        )
-    except Exception as e:
-        logger.error(f"Failed to submit order: {e}")
-        return None
+        try:
+            order = trading_client.submit_order(request)
+            logger.info(f"Submitted sell order: {qty} {symbol}")
+            return Order(
+                id=str(order.id),
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=float(order.qty),
+                status=order.status.value,
+                filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
+                created_at=order.created_at,
+            )
+        except Exception as e:
+            logger.error(f"Failed to submit sell order for {symbol}: {e}")
+            return None
 
 
 def cancel_order(order_id: str) -> bool:

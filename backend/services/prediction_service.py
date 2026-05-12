@@ -289,7 +289,15 @@ Respond ONLY in JSON:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        data = json.loads(raw.strip())
+        try:
+            data = json.loads(raw.strip())
+        except json.JSONDecodeError:
+            import re as _re
+            match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+            else:
+                raise ValueError(f"Could not extract JSON from suggestions response: {raw[:200]}")
         raw_suggestions = data.get("suggestions", [])
 
         # Validate: reject placeholder/example symbols — real tickers are 1-5 uppercase letters only

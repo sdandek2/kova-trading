@@ -152,7 +152,7 @@ struct TradeHistoryRow: View {
                             .font(.caption2).fontWeight(.bold)
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.orange)
+                            .background(Color.red)
                             .clipShape(Capsule())
                     }
                     Text(trade.exitReasonLabel)
