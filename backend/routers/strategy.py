@@ -21,4 +21,6 @@ def get_all_strategies():
 def set_strategy(key: str):
     if not strategy_service.set_strategy(key):
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {key}. Choose from: conservative, balanced, aggressive")
+    from services.db import log_strategy_change
+    log_strategy_change(key)
     return {"message": f"Strategy set to {key}"}

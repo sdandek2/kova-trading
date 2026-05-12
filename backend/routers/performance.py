@@ -21,7 +21,7 @@ def _compute_sharpe(returns: list[float], risk_free_rate: float = 0.05) -> float
 @router.get("/")
 def get_performance():
     try:
-        orders = alpaca_service.get_orders(limit=200)
+        orders = alpaca_service.get_orders(limit=500)
         filled = [o for o in orders if o.status == "filled" and o.filled_avg_price]
 
         # Win rate: count profitable sell orders
@@ -54,26 +54,43 @@ def get_performance():
             avg_loss = round(total_loss / (len(sells) - wins), 2) if (len(sells) - wins) > 0 else 0.0
             profit_factor = round(total_gain / total_loss, 2) if total_loss > 0 else 0.0
 
-        # Portfolio history for Sharpe
+        # Portfolio history for Sharpe — prefer our own DB (unlimited history),
+        # fall back to Alpaca's 1M window if DB is empty (e.g. first day running)
         sharpe = 0.0
         portfolio_return = None
         history = []
         try:
-            history = alpaca_service.get_portfolio_history(period="1M")
-            daily_returns = []
-            for i in range(1, len(history)):
-                prev = history[i-1]["equity"]
-                curr = history[i]["equity"]
-                if prev > 0:
-                    daily_returns.append((curr - prev) / prev)
-
-            sharpe = _compute_sharpe(daily_returns)
-
-            if history and len(history) >= 2:
-                start_equity = history[0]["equity"]
-                end_equity = history[-1]["equity"]
+            from services.db import get_daily_summaries
+            db_summaries = get_daily_summaries(days=365)
+            if len(db_summaries) >= 2:
+                # Use our own daily snapshots — no Alpaca retention limit
+                daily_returns = []
+                for i in range(1, len(db_summaries)):
+                    prev = db_summaries[i-1]["portfolio_value"]
+                    curr = db_summaries[i]["portfolio_value"]
+                    if prev > 0:
+                        daily_returns.append((curr - prev) / prev)
+                sharpe = _compute_sharpe(daily_returns)
+                start_equity = db_summaries[0]["portfolio_value"]
+                end_equity = db_summaries[-1]["portfolio_value"]
                 if start_equity > 0:
                     portfolio_return = round((end_equity - start_equity) / start_equity * 100, 2)
+                history = [{"date": s["date"], "equity": s["portfolio_value"]} for s in db_summaries]
+            else:
+                # Fall back to Alpaca for the first days before DB has data
+                history = alpaca_service.get_portfolio_history(period="1M")
+                daily_returns = []
+                for i in range(1, len(history)):
+                    prev = history[i-1]["equity"]
+                    curr = history[i]["equity"]
+                    if prev > 0:
+                        daily_returns.append((curr - prev) / prev)
+                sharpe = _compute_sharpe(daily_returns)
+                if history and len(history) >= 2:
+                    start_equity = history[0]["equity"]
+                    end_equity = history[-1]["equity"]
+                    if start_equity > 0:
+                        portfolio_return = round((end_equity - start_equity) / start_equity * 100, 2)
         except Exception:
             sharpe = 0.0
             portfolio_return = None

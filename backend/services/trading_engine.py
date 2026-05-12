@@ -391,11 +391,82 @@ async def run_trading_cycle():
         logger.error(f"Trading cycle error: {e}", exc_info=True)
 
 
+async def _save_eod_snapshot():
+    """
+    Save an end-of-day performance snapshot to daily_summary.
+    Called once automatically when the market transitions from open → closed.
+    """
+    try:
+        from services.db import save_daily_summary
+        from services.strategy import get_strategy
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from alpaca.data.historical import StockHistoricalDataClient
+        from config import settings as _settings
+
+        account = alpaca_service.get_account()
+        today = datetime.now(timezone.utc).date()
+
+        # Count today's AI decisions from trade_log
+        from services.db import _get_conn
+        conn = _get_conn()
+        totals = {"total": 0, "buy": 0, "sell": 0, "hold": 0}
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT action, COUNT(*) FROM trade_log
+                        WHERE timestamp::date = %s
+                        GROUP BY action
+                    """, (today,))
+                    for action, cnt in cur.fetchall():
+                        totals["total"] += cnt
+                        if action in totals:
+                            totals[action] += cnt
+            except Exception as e:
+                logger.warning(f"EOD: could not count today's decisions: {e}")
+
+        # Get SPY close price
+        spy_close = None
+        try:
+            data_client = StockHistoricalDataClient(_settings.alpaca_api_key, _settings.alpaca_secret_key)
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=2)
+            bars = data_client.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=["SPY"], timeframe=TimeFrame.Day, start=start, end=end
+            ))
+            spy_bars = bars.get("SPY", [])
+            if spy_bars:
+                spy_close = float(spy_bars[-1].close)
+        except Exception as e:
+            logger.warning(f"EOD: could not fetch SPY close: {e}")
+
+        strat = get_strategy()
+        save_daily_summary({
+            "date":             today,
+            "portfolio_value":  account.portfolio_value,
+            "cash":             account.cash,
+            "day_pl":           account.day_pl,
+            "day_pl_pct":       account.day_pl_percent,
+            "total_decisions":  totals["total"],
+            "buy_decisions":    totals["buy"],
+            "sell_decisions":   totals["sell"],
+            "hold_decisions":   totals["hold"],
+            "strategy":         strat["key"],
+            "spy_close":        spy_close,
+        })
+        logger.info(f"EOD snapshot saved for {today}: portfolio=${account.portfolio_value:,.2f}, day_pl={account.day_pl_percent:.2f}%")
+    except Exception as e:
+        logger.warning(f"EOD snapshot failed (non-fatal): {e}")
+
+
 async def _trading_loop():
     global _next_run_at
     from datetime import timedelta
     _cleanup_counter = 0
     _premarket_scanned_date = None  # track which date we last ran the pre-market scan
+    _eod_saved_date = None          # track which date we last saved the EOD snapshot
+    _market_was_open = False        # detect open→closed transition
     while _is_running:
         # Run pre-market scan once per day at 13:00-14:00 UTC (9-10 AM EST)
         now_utc = datetime.now(timezone.utc)
@@ -405,6 +476,14 @@ async def _trading_loop():
             await run_premarket_scan()
 
         await run_trading_cycle()
+
+        # Detect market close → save EOD snapshot once per day
+        market_open_now = alpaca_service.is_market_open()
+        if _market_was_open and not market_open_now and _eod_saved_date != today:
+            _eod_saved_date = today
+            logger.info("Market just closed — saving EOD snapshot.")
+            await _save_eod_snapshot()
+        _market_was_open = market_open_now
 
         # Run DB cleanup once every ~144 cycles (~24 hours at 10-min intervals)
         _cleanup_counter += 1
@@ -417,7 +496,7 @@ async def _trading_loop():
 
         # Sleep longer when market is closed (nights / weekends)
         # so we don't spin every 5 min for 18 hours doing nothing
-        if alpaca_service.is_market_open():
+        if market_open_now:
             sleep_seconds = TRADING_INTERVAL_SECONDS
         else:
             sleep_seconds = 900  # check every 15 min when closed

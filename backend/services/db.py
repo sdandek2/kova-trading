@@ -74,6 +74,29 @@ def _ensure_table(conn):
                 partial_exit    BOOLEAN DEFAULT FALSE
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_summary (
+                id              SERIAL PRIMARY KEY,
+                date            DATE UNIQUE NOT NULL,
+                portfolio_value FLOAT NOT NULL,
+                cash            FLOAT,
+                day_pl          FLOAT,
+                day_pl_pct      FLOAT,
+                total_decisions INTEGER DEFAULT 0,
+                buy_decisions   INTEGER DEFAULT 0,
+                sell_decisions  INTEGER DEFAULT 0,
+                hold_decisions  INTEGER DEFAULT 0,
+                strategy        TEXT,
+                spy_close       FLOAT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_log (
+                id        SERIAL PRIMARY KEY,
+                timestamp TIMESTAMPTZ NOT NULL,
+                strategy  TEXT NOT NULL
+            )
+        """)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -250,6 +273,116 @@ def log_trade_decision(decision_data: dict) -> None:
         logger.info(f"log_trade_decision: logged action={decision_data.get('action')} symbol={decision_data.get('symbol')}")
     except Exception as e:
         logger.warning(f"log_trade_decision failed ({e}), continuing without logging.")
+
+
+def save_daily_summary(data: dict) -> None:
+    """
+    Upsert an end-of-day performance snapshot into daily_summary.
+    Called once per day when the market closes.
+    Never raises.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            logger.warning("save_daily_summary: no DB connection, skipping.")
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO daily_summary
+                    (date, portfolio_value, cash, day_pl, day_pl_pct,
+                     total_decisions, buy_decisions, sell_decisions, hold_decisions,
+                     strategy, spy_close)
+                VALUES
+                    (%(date)s, %(portfolio_value)s, %(cash)s, %(day_pl)s, %(day_pl_pct)s,
+                     %(total_decisions)s, %(buy_decisions)s, %(sell_decisions)s, %(hold_decisions)s,
+                     %(strategy)s, %(spy_close)s)
+                ON CONFLICT (date) DO UPDATE SET
+                    portfolio_value = EXCLUDED.portfolio_value,
+                    cash            = EXCLUDED.cash,
+                    day_pl          = EXCLUDED.day_pl,
+                    day_pl_pct      = EXCLUDED.day_pl_pct,
+                    total_decisions = EXCLUDED.total_decisions,
+                    buy_decisions   = EXCLUDED.buy_decisions,
+                    sell_decisions  = EXCLUDED.sell_decisions,
+                    hold_decisions  = EXCLUDED.hold_decisions,
+                    strategy        = EXCLUDED.strategy,
+                    spy_close       = EXCLUDED.spy_close
+            """, {
+                "date":             data.get("date"),
+                "portfolio_value":  data.get("portfolio_value"),
+                "cash":             data.get("cash"),
+                "day_pl":           data.get("day_pl"),
+                "day_pl_pct":       data.get("day_pl_pct"),
+                "total_decisions":  data.get("total_decisions", 0),
+                "buy_decisions":    data.get("buy_decisions", 0),
+                "sell_decisions":   data.get("sell_decisions", 0),
+                "hold_decisions":   data.get("hold_decisions", 0),
+                "strategy":         data.get("strategy"),
+                "spy_close":        data.get("spy_close"),
+            })
+        logger.info(f"save_daily_summary: saved snapshot for {data.get('date')} — portfolio=${data.get('portfolio_value'):,.2f}")
+    except Exception as e:
+        logger.warning(f"save_daily_summary failed ({e}), skipping.")
+
+
+def log_strategy_change(strategy: str) -> None:
+    """
+    Record a strategy change with a timestamp.
+    Never raises.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO strategy_log (timestamp, strategy) VALUES (%s, %s)",
+                (datetime.now(timezone.utc), strategy),
+            )
+        logger.info(f"log_strategy_change: strategy set to '{strategy}'")
+    except Exception as e:
+        logger.warning(f"log_strategy_change failed ({e}), skipping.")
+
+
+def get_daily_summaries(days: int = 365) -> list[dict]:
+    """
+    Return daily_summary rows for the last *days* days, oldest first.
+    Used by the performance endpoint for Sharpe ratio and equity curve.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT date, portfolio_value, cash, day_pl, day_pl_pct,
+                       total_decisions, buy_decisions, sell_decisions, hold_decisions,
+                       strategy, spy_close
+                FROM daily_summary
+                WHERE date >= %s
+                ORDER BY date ASC
+            """, (cutoff,))
+            rows = cur.fetchall()
+        return [
+            {
+                "date":             str(row[0]),
+                "portfolio_value":  row[1],
+                "cash":             row[2],
+                "day_pl":           row[3],
+                "day_pl_pct":       row[4],
+                "total_decisions":  row[5],
+                "buy_decisions":    row[6],
+                "sell_decisions":   row[7],
+                "hold_decisions":   row[8],
+                "strategy":         row[9],
+                "spy_close":        row[10],
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.warning(f"get_daily_summaries failed ({e}), returning empty.")
+        return []
 
 
 def cleanup_old_trade_logs(days: int = 90) -> None:

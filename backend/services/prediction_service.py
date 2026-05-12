@@ -281,13 +281,24 @@ Respond ONLY in JSON:
         data = json.loads(raw.strip())
         raw_suggestions = data.get("suggestions", [])
 
+        # Validate: reject placeholder/example symbols — real tickers are 1-5 uppercase letters only
+        import re as _re
+        _ticker_re = _re.compile(r'^[A-Z]{1,5}$')
+        valid_suggestions = [
+            s for s in raw_suggestions
+            if _ticker_re.match(s.get("symbol", ""))
+        ]
+        if len(valid_suggestions) < len(raw_suggestions):
+            dropped = [s.get("symbol") for s in raw_suggestions if s not in valid_suggestions]
+            logger.warning(f"Dropped {len(dropped)} invalid suggestion symbols: {dropped}")
+
         # Enrich with current price from snapshot
-        for s in raw_suggestions:
+        for s in valid_suggestions:
             sym = s.get("symbol", "")
             s["current_price"] = valid.get(sym, {}).get("current_price")
             s["five_day_change_pct"] = valid.get(sym, {}).get("five_day_change_pct")
 
-        suggestions = raw_suggestions
+        suggestions = valid_suggestions
         logger.info(f"Generated {len(suggestions)} suggestions: {[s['symbol'] for s in suggestions]}")
 
         # Only cache successful results

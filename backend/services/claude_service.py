@@ -180,22 +180,22 @@ Prioritize: strong news catalysts + technical breakout + macro tailwind (highest
 Boost conviction when: [VOL:2x+] + bullish sector + strong technical signal = highest priority. Reduce conviction when sector is BEARISH even if individual stock looks good.
 You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative across the board.
 
-For each, give: symbol, signal type (momentum/reversal/sentiment/breakout/geopolitical/news_catalyst/squeeze), and 1-sentence reason incorporating the specific catalyst driving it.
+Return ONLY symbol and signal type — no descriptions, no explanations. The detailed analysis happens in the next step.
 
-Respond in JSON:
-{{"opportunities": [{{"symbol": "X", "signal": "momentum", "reason": "..."}}]}}"""
+Respond in JSON with ONLY these two fields per entry:
+{{"opportunities": [{{"symbol": "X", "signal": "momentum"}}]}}"""
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=1024)
+        step1_raw = ask_ai(step1_prompt, max_tokens=256)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
-                step1_raw = step1_raw[4:]
+                step1_raw = raw = step1_raw[4:]
         step1_data = json.loads(step1_raw.strip())
         opportunities = step1_data.get("opportunities", [])
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
-        logger.error(f"Step 1 failed (JSON parse or API error — likely truncated response): {e}. Raw response was: {step1_raw[:200] if 'step1_raw' in dir() else 'no response'}")
+        logger.error(f"Step 1 failed: {e}. Raw response: {step1_raw[:300] if 'step1_raw' in locals() else 'none'}")
         opportunities = []
 
     if not opportunities:
