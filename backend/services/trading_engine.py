@@ -24,11 +24,11 @@ TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
 _RISK_CACHE_KEY = "user_pref:risk_settings"
 _RISK_DEFAULTS = {
-    "daily_loss_limit_pct": 3.0,   # stop trading if down this % today
+    "daily_loss_limit_pct": 6.0,   # aggressive: tolerate up to 6% daily loss before halting buys
     "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
-    "take_profit_pct": 0.15,        # 15% TP fallback (Claude overrides per trade)
-    "min_daily_trades": 2,          # trigger afternoon pressure if below this by cutoff hour
-    "afternoon_pressure_hour": 14,  # EST hour (24h) — e.g. 14 = 2:00 PM EST
+    "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
+    "min_daily_trades": 4,          # afternoon pressure if fewer than 4 trades by cutoff
+    "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM EST — more time to catch up
 }
 
 
@@ -537,6 +537,7 @@ async def run_trading_cycle():
                         max_position_pct=strat["max_position_pct"],
                         current_price=price,
                         atr=atr,
+                        risk_per_trade_pct=strat.get("risk_per_trade_pct", 0.01),
                     )
                     if vol_qty != decision.quantity:
                         logger.info(f"Vol-adjust: {decision.symbol} {decision.quantity}→{vol_qty} shares (ATR={atr:.2f})")

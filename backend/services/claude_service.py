@@ -370,15 +370,14 @@ Respond in JSON — only include approved trades (skip = omit from list):
         try:
             from services.sector_momentum import get_sector_for_symbol
             sym_sector = get_sector_for_symbol(sym)
+            sector_cap = current_strategy.get("sector_cap", 1)
             existing_sector_count = sum(1 for s in sectors_bought if s == sym_sector)
             held_in_sector = [p.symbol for p in positions if get_sector_for_symbol(p.symbol) == sym_sector]
-            if existing_sector_count >= 1 and sym_sector not in ("Unknown", "Broad"):
-                logger.info(f"Skipping {sym} — already buying another {sym_sector} stock this cycle")
+            if existing_sector_count >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                logger.info(f"Skipping {sym} — already buying {existing_sector_count} {sym_sector} stocks this cycle (cap={sector_cap})")
                 continue
-            # Strict sector cap: max 1 position per sector at a time.
-            # Prevents correlated positions all moving against us on a sector dip.
-            if len(held_in_sector) >= 1 and sym_sector not in ("Unknown", "Broad"):
-                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (1-per-sector rule)")
+            if len(held_in_sector) >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (cap={sector_cap})")
                 continue
             sectors_bought.append(sym_sector)
         except Exception:
