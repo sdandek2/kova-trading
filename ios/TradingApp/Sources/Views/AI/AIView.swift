@@ -50,15 +50,9 @@ struct AIView: View {
                                                     }
                                                     .font(.caption2)
                                                     .foregroundStyle(.blue)
-                                                } else {
-                                                    HStack(spacing: 3) {
-                                                        Image(systemName: "clock.arrow.circlepath")
-                                                            .font(.caption2)
-                                                        Text("Running soon…")
-                                                            .font(.caption2)
-                                                    }
-                                                    .foregroundStyle(.orange)
                                                 }
+                                                // Overdue = bot is holding or cycling — hide countdown,
+                                                // the "X min ago" timestamp above is enough context.
                                             }
                                         }
                                     }
