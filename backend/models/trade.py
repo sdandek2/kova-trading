@@ -6,6 +6,7 @@ from datetime import datetime
 class Position(BaseModel):
     symbol: str
     qty: float
+    side: str = "long"                   # "long" | "short"
     avg_entry_price: float
     current_price: float
     unrealized_pl: float
@@ -16,7 +17,7 @@ class Position(BaseModel):
 class Order(BaseModel):
     id: str
     symbol: str
-    side: str  # "buy" | "sell"
+    side: str  # "buy" | "sell" | "short"
     qty: float
     status: str
     filled_avg_price: Optional[float] = None
@@ -24,7 +25,7 @@ class Order(BaseModel):
 
 
 class TradeDecision(BaseModel):
-    action: str                          # "buy" | "sell" | "hold"
+    action: str                          # "buy" | "sell" | "hold" | "short"
     symbol: Optional[str] = None
     quantity: Optional[int] = None
     reasoning: str

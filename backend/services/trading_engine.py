@@ -12,7 +12,7 @@ from services.db import (
     get_trade_performance_summary,
 )
 from services.indicators import compute_atr, compute_rsi, volatility_adjusted_quantity
-from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out
+from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out, should_cover_short
 from services.earnings import get_upcoming_earnings
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
@@ -56,8 +56,9 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
-_position_high_watermarks: dict = {}   # symbol → peak price seen while holding position
-_previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time} for close detection
+_position_high_watermarks: dict = {}   # symbol → peak price seen while holding long position
+_short_low_watermarks: dict = {}       # symbol → lowest price seen while holding short position
+_previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time, side} for close detection
 _current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
 
 
@@ -308,10 +309,13 @@ async def run_trading_cycle():
             if sym not in current_symbols:
                 # Position was closed — determine exit price from Alpaca orders
                 exit_price = prev.get("avg_entry_price", 0)  # fallback
+                is_prev_short = prev.get("side") == "short"
                 try:
                     recent_orders = alpaca_service.get_orders(limit=20)
+                    # Longs close via a sell order; shorts close via a buy-to-cover order
+                    close_side = "buy" if is_prev_short else "sell"
                     for o in recent_orders:
-                        if o.symbol == sym and o.side == "sell" and o.filled_avg_price:
+                        if o.symbol == sym and o.side == close_side and o.filled_avg_price:
                             exit_price = float(o.filled_avg_price)
                             break
                 except Exception:
@@ -323,6 +327,7 @@ async def run_trading_cycle():
                     entry_price=prev.get("avg_entry_price"),
                     quantity=prev.get("qty"),
                     entry_time=prev.get("entry_time"),
+                    side=prev.get("side", "long"),
                 )
                 log_bot_activity("position_closed",
                                  f"Position closed: {sym} exit=${exit_price:.2f} reason={prev.get('exit_reason','unknown')}",
@@ -341,54 +346,94 @@ async def run_trading_cycle():
             for p in positions
         }
 
-        # ── Update high watermarks for all open positions ──
+        # ── Update watermarks for all open positions ──
         held_symbols = {p.symbol for p in positions}
         for position in positions:
             cp = position.current_price
-            prev_high = _position_high_watermarks.get(position.symbol, 0)
-            if cp > prev_high:
-                _position_high_watermarks[position.symbol] = cp
-        # Clean up watermarks for positions that were closed
+            if position.side == "short":
+                # Track lowest price for shorts (profit as price falls)
+                prev_low = _short_low_watermarks.get(position.symbol, float("inf"))
+                if cp < prev_low:
+                    _short_low_watermarks[position.symbol] = cp
+            else:
+                # Track highest price for longs (profit as price rises)
+                prev_high = _position_high_watermarks.get(position.symbol, 0)
+                if cp > prev_high:
+                    _position_high_watermarks[position.symbol] = cp
+        # Clean up watermarks for closed positions
         for sym in list(_position_high_watermarks.keys()):
             if sym not in held_symbols:
                 del _position_high_watermarks[sym]
-        # Persist watermarks so trailing stops survive server restarts
+        for sym in list(_short_low_watermarks.keys()):
+            if sym not in held_symbols:
+                del _short_low_watermarks[sym]
+        # Persist long watermarks so trailing stops survive server restarts
         _save_watermarks()
 
-        # ── Scale-out: review existing positions for partial profit-taking / loss cuts ──
+        # ── Scale-out: review existing positions for profit-taking / loss cuts ──
         for position in positions:
             sym_data = snapshot_light.get(position.symbol, {})
             closing_prices = sym_data.get("closing_prices", [])
             rsi = compute_rsi(closing_prices) if closing_prices else 50.0
+            trail_pct = _risk_settings.get("stop_loss_pct", 0.05)
 
-            scale_out, fraction, reason = should_scale_out(
-                position_unrealized_pl_percent=position.unrealized_pl_percent,
-                rsi=rsi,
-                symbol=position.symbol,
-                strategy_key=strategy_key,
-                high_watermark=_position_high_watermarks.get(position.symbol),
-                current_price=position.current_price,
-                trail_pct=_risk_settings.get("stop_loss_pct", 0.05),
-            )
+            is_short = position.side == "short"
 
-            if scale_out:
-                sell_qty = max(1, int(float(position.qty) * fraction))
-                logger.info(f"Scale-out triggered: {reason} — selling {sell_qty} shares")
-                # Tag exit reason so position_close detection knows why
+            if is_short:
+                # Short position: check if we should cover (buy back)
+                cover, fraction, reason = should_cover_short(
+                    symbol=position.symbol,
+                    position_unrealized_pl_percent=position.unrealized_pl_percent,
+                    rsi=rsi,
+                    low_watermark=_short_low_watermarks.get(position.symbol),
+                    current_price=position.current_price,
+                    trail_pct=trail_pct,
+                    strategy_key=strategy_key,
+                )
+                should_exit = cover
+            else:
+                scale_out, fraction, reason = should_scale_out(
+                    position_unrealized_pl_percent=position.unrealized_pl_percent,
+                    rsi=rsi,
+                    symbol=position.symbol,
+                    strategy_key=strategy_key,
+                    high_watermark=_position_high_watermarks.get(position.symbol),
+                    current_price=position.current_price,
+                    trail_pct=trail_pct,
+                )
+                should_exit = scale_out
+
+            if should_exit:
+                exit_qty = max(1, int(float(position.qty) * fraction))
+                action_label = "cover_short" if is_short else "scale_out"
+                order_side = "buy" if is_short else "sell"
+                logger.info(f"{action_label.upper()} triggered: {reason} — {'covering' if is_short else 'selling'} {exit_qty} shares")
                 if position.symbol in _previous_positions:
                     _previous_positions[position.symbol]["exit_reason"] = (
                         "trailing_stop" if "trailing stop" in reason.lower()
                         else "take_profit" if "profit" in reason.lower()
+                        else "short_cover" if is_short
                         else "loss_cut"
                     )
                 log_bot_activity(
-                    "scale_out", reason,
+                    action_label, reason,
                     symbol=position.symbol, cycle_id=_current_cycle_id
                 )
+                # For shorts: cancel any open GTC buy orders before market cover
+                # (submit_short_order places a GTC limit buy — must cancel to avoid double-cover)
+                if is_short:
+                    try:
+                        open_orders = alpaca_service.get_orders(limit=20)
+                        for o in open_orders:
+                            if o.symbol == position.symbol and o.side == "buy" and o.status in ("new", "partially_filled", "accepted"):
+                                alpaca_service.cancel_order(o.id)
+                                logger.info(f"Cancelled GTC cover order {o.id} for {position.symbol} before engine cover")
+                    except Exception as ce:
+                        logger.warning(f"Could not cancel GTC orders for {position.symbol}: {ce}")
                 order = alpaca_service.submit_market_order(
                     symbol=position.symbol,
-                    qty=sell_qty,
-                    side="sell",
+                    qty=exit_qty,
+                    side=order_side,
                 )
                 if order:
                     await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
@@ -396,7 +441,7 @@ async def run_trading_cycle():
                         "type": "ai_analysis",
                         "data": {
                             "reasoning": reason,
-                            "last_action": "sell",
+                            "last_action": order_side,
                             "symbol": position.symbol,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
@@ -467,7 +512,7 @@ async def run_trading_cycle():
             logger.info(f"AI decision: {decision.action} {decision.symbol} x{decision.quantity}")
             await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
 
-            if decision.action not in ("buy", "sell") or not decision.symbol or not decision.quantity:
+            if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
                 continue
 
             # ── Circuit breaker: block new buys when daily loss limit hit ──
@@ -557,14 +602,23 @@ async def run_trading_cycle():
                     logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
                 decision.quantity = scaled_qty
 
-            order = alpaca_service.submit_market_order(
-                symbol=decision.symbol,
-                qty=decision.quantity,
-                side=decision.action,
-                stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
-                take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
-                partial_exit=decision.partial_exit,
-            )
+            # Route to correct order executor
+            if decision.action == "short":
+                order = alpaca_service.submit_short_order(
+                    symbol=decision.symbol,
+                    qty=decision.quantity,
+                    stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                    take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                )
+            else:
+                order = alpaca_service.submit_market_order(
+                    symbol=decision.symbol,
+                    qty=decision.quantity,
+                    side=decision.action,
+                    stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                    take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                    partial_exit=decision.partial_exit,
+                )
             if order:
                 # Track daily trade count
                 today = datetime.now(timezone.utc).date()
@@ -573,7 +627,25 @@ async def run_trading_cycle():
 
                 # Log position open / close to position_log
                 fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)
-                if decision.action == "buy" and fill_price > 0:
+                if decision.action == "short" and fill_price > 0:
+                    log_position_open(
+                        symbol=decision.symbol,
+                        entry_price=fill_price,
+                        quantity=decision.quantity,
+                        strategy=f"{strategy_key}_short",
+                        claude_reasoning=decision.reasoning,
+                        market_regime=macro.get("market_regime"),
+                    )
+                    # Seed low watermark for new short position
+                    _short_low_watermarks[decision.symbol] = fill_price
+                    _previous_positions[decision.symbol] = {
+                        "qty": decision.quantity,
+                        "avg_entry_price": fill_price,
+                        "entry_time": datetime.now(timezone.utc),
+                        "exit_reason": "unknown",
+                        "side": "short",
+                    }
+                elif decision.action == "buy" and fill_price > 0:
                     log_position_open(
                         symbol=decision.symbol,
                         entry_price=fill_price,
@@ -591,6 +663,7 @@ async def run_trading_cycle():
                         "avg_entry_price": fill_price,
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
+                        "side": "long",
                     }
                 elif decision.action == "sell" and fill_price:
                     if decision.symbol in _previous_positions:

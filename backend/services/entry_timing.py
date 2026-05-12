@@ -184,6 +184,51 @@ def should_scale_out(
     return False, 0.0, ""
 
 
+def should_cover_short(
+    symbol: str,
+    position_unrealized_pl_percent: float,
+    rsi: float,
+    low_watermark: float = None,
+    current_price: float = None,
+    trail_pct: float = 0.05,
+    strategy_key: str = "aggressive",
+) -> tuple[bool, float, str]:
+    """
+    Exit logic for short positions (cover = buy back to close).
+
+    Profits when price FALLS. Rules mirror long side but inverted:
+    - Trailing stop: if price rises trail_pct% from the lowest point seen → cover to lock gains
+    - Take profit: cover at 12%+ gain
+    - Stop loss: cover if position is down 5%+ (price rose against us)
+    """
+    is_aggressive = strategy_key == "aggressive"
+
+    # ── Trailing stop for shorts: cover if price rises trail_pct% from low watermark ──
+    if low_watermark and current_price and low_watermark > 0 and position_unrealized_pl_percent > 2.0:
+        rise_from_low = (current_price - low_watermark) / low_watermark
+        if rise_from_low >= trail_pct:
+            return True, 1.0, (
+                f"{symbol} SHORT trailing stop: price rose {rise_from_low*100:.1f}% from low "
+                f"${low_watermark:.2f} → ${current_price:.2f} "
+                f"(still up {position_unrealized_pl_percent:.1f}% from entry) — locking in short gains"
+            )
+
+    if is_aggressive:
+        if position_unrealized_pl_percent >= 15.0:
+            return True, 0.50, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering half, letting rest ride"
+        elif position_unrealized_pl_percent >= 10.0 and rsi < 35:
+            return True, 0.33, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} oversold — trimming 33%"
+        elif position_unrealized_pl_percent <= -5.0:
+            return True, 1.0, f"{symbol} SHORT down {abs(position_unrealized_pl_percent):.1f}% (price rose) — covering to stop loss"
+    else:
+        if position_unrealized_pl_percent >= 12.0:
+            return True, 1.0, f"{symbol} SHORT hit target +{position_unrealized_pl_percent:.1f}% — covering"
+        elif position_unrealized_pl_percent <= -4.0:
+            return True, 1.0, f"{symbol} SHORT stop: down {abs(position_unrealized_pl_percent):.1f}% — covering"
+
+    return False, 0.0, ""
+
+
 def is_good_trading_window() -> tuple[bool, str]:
     """
     Time-of-day filter. Avoids the chaotic first 15 minutes after open

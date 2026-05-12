@@ -51,6 +51,7 @@ def get_positions() -> list[Position]:
             Position(
                 symbol=p.symbol,
                 qty=float(p.qty),
+                side=p.side.value if hasattr(p.side, "value") else str(p.side),
                 avg_entry_price=float(p.avg_entry_price),
                 current_price=float(p.current_price),
                 unrealized_pl=float(p.unrealized_pl),
@@ -222,6 +223,86 @@ def submit_market_order(
         )
     except Exception as e:
         logger.error(f"Failed to submit order: {e}")
+        return None
+
+
+def cancel_order(order_id: str) -> bool:
+    """Cancel an open order by ID. Returns True on success."""
+    try:
+        trading_client.cancel_order_by_id(order_id)
+        logger.info(f"Cancelled order {order_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to cancel order {order_id}: {e}")
+        return False
+
+
+def submit_short_order(
+    symbol: str,
+    qty: int,
+    stop_loss_pct: float = 0.05,
+    take_profit_pct: float = 0.12,
+) -> Optional[Order]:
+    """
+    Open a short position: sell shares we don't own, profiting as price falls.
+    - Entry: limit sell just below midpoint (competitive fill)
+    - Take profit: GTC limit buy at cover price (lock in gain when price falls)
+    - Stop loss: monitored by trading engine per cycle (avoids Alpaca stop complexity)
+    """
+    from alpaca.trading.requests import LimitOrderRequest
+    try:
+        quote_request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quotes = data_client.get_stock_latest_quote(quote_request)
+        quote = quotes[symbol]
+        bid = float(quote.bid_price or 0)
+        ask = float(quote.ask_price or 0)
+        if bid <= 0 or ask <= 0:
+            raise ValueError(f"Invalid quote for {symbol}: bid={bid} ask={ask}")
+
+        midpoint = (bid + ask) / 2
+        entry_limit = round(midpoint * 0.998, 2)          # 0.2% below mid — fill aggressively
+        cover_target = round(midpoint * (1 - take_profit_pct), 2)   # buy to cover at profit
+
+        # Short entry: limit sell
+        entry_req = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=entry_limit,
+        )
+        order = trading_client.submit_order(entry_req)
+        logger.info(
+            f"SHORT {symbol} x{qty} @ limit ${entry_limit:.2f} | "
+            f"cover target ${cover_target:.2f} (-{take_profit_pct*100:.0f}%) | "
+            f"stop +{stop_loss_pct*100:.0f}% (engine-monitored)"
+        )
+
+        # GTC limit buy to cover at take-profit price
+        try:
+            cover_req = LimitOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC,
+                limit_price=cover_target,
+            )
+            trading_client.submit_order(cover_req)
+            logger.info(f"Cover order placed for {symbol} at ${cover_target:.2f}")
+        except Exception as e:
+            logger.warning(f"Cover order failed (non-fatal, engine will monitor): {e}")
+
+        return Order(
+            id=str(order.id),
+            symbol=symbol,
+            side="short",
+            qty=qty,
+            status=str(order.status.value if hasattr(order.status, "value") else order.status),
+            filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
+            created_at=order.created_at,
+        )
+    except Exception as e:
+        logger.error(f"Short order failed for {symbol}: {e}")
         return None
 
 

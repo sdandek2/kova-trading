@@ -177,10 +177,29 @@ These stocks have earnings coming this week. Consider a small position (5% max) 
 {headlines_formatted}
 """
 
-    step1_prompt = f"""You are an expert stock trader and portfolio manager executing an AGGRESSIVE growth strategy. Your mandate is to find the best trade RIGHT NOW.
+    # ── Inject inverse ETFs on bearish days ──
+    regime = (macro or {}).get("market_regime", "")
+    vix = (macro or {}).get("vix_level", "low")
+    is_bearish_day = regime in ("bearish", "risk-off") or vix in ("extreme", "high")
+    bearish_etf_note = ""
+    if is_bearish_day:
+        bearish_etf_note = """
+## Bearish / Inverse ETF Opportunities (market regime is BEARISH — PRIORITIZE these)
+These ETFs profit when the market FALLS. Use them aggressively today:
+  • SQQQ  — 3x inverse QQQ (tech/growth bear play)
+  • SPXU  — 3x inverse S&P 500
+  • SPXS  — 1x inverse S&P 500 (less volatile)
+  • SOXS  — 3x inverse semiconductors
+  • SDOW  — 3x inverse Dow Jones
+  • TZA   — 3x inverse Russell 2000 (small-cap bear)
+  • UVXY  — long VIX volatility (spikes when market panics)
+Buy inverse ETFs exactly like regular stocks — they profit automatically as the index falls.
+"""
+
+    step1_prompt = f"""You are an expert stock trader executing an AGGRESSIVE strategy that profits in BOTH bullish AND bearish markets. Your mandate is to find the best trade RIGHT NOW.
 
 {portfolio_context}
-{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}
+{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
@@ -189,20 +208,20 @@ These stocks have earnings coming this week. Consider a small position (5% max) 
 - MACD histogram positive+rising: bullish momentum | negative+falling: bearish
 - [PENNY]: stock under $5 — high risk/reward, size accordingly
 - [NEWS:N]: mentioned in N recent news articles — sentiment catalyst (higher = stronger signal)
-- [EARNINGS:today/tomorrow]: avoid — binary risk; [EARNINGS:this_week]: small position only
+- [EARNINGS:today/tomorrow]: AVOID shorts — binary risk; earnings stocks can also run hard pre-report
 - SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — use when market regime is bullish
-- [SECTOR:signal:pct%]: sector momentum — BULLISH sector boosts conviction, BEARISH reduces it
+- SQQQ/SPXU/SOXS/SDOW/TZA are inverse ETFs — use when market regime is bearish
+- [SECTOR:signal:pct%]: sector momentum — BULLISH sector boosts conviction for longs, BEARISH sector = short opportunity
 - [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
-Scan ALL stocks above. Use ALL signals: technicals, news catalysts, momentum, macro alignment.
-Identify the TOP 5 best opportunities right now — stocks most likely to move in the next 1-5 days.
-Prioritize: strong news catalysts + technical breakout + macro tailwind (highest conviction).
-Boost conviction when: [VOL:2x+] + bullish sector + strong technical signal = highest priority. Reduce conviction when sector is BEARISH even if individual stock looks good.
-You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative across the board.
+Scan ALL stocks above. Find the TOP 5 opportunities — both LONG (buy) and SHORT plays.
+- BULLISH regime: prioritize longs + leveraged ETFs
+- BEARISH regime: prioritize inverse ETFs + short sells (RSI > 72 + bearish sector = prime short)
+- NEUTRAL: mix of longs and opportunistic shorts
+Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
+You MUST find opportunities — "hold" is only acceptable if EVERY signal is negative.
 
-Return ONLY symbol and signal type — no descriptions, no explanations. The detailed analysis happens in the next step.
-
-Respond in JSON with ONLY these two fields per entry:
+Return ONLY symbol and signal type:
 {{"opportunities": [{{"symbol": "X", "signal": "momentum"}}]}}"""
 
     try:
@@ -295,33 +314,39 @@ Respond in JSON with ONLY these two fields per entry:
 
     pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
 
-    step2_prompt = f"""You are building a high-performance trading portfolio. Evaluate EACH candidate independently and approve the best 1-3 trades this cycle.
+    step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
 {pressure_note}
 {performance_text}
 {portfolio_context}
 Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
-{"⚠️ PORTFOLIO THIN — only {positions_count} positions open. Prioritise building positions." if positions_count < 3 else ""}
-{geo_text if geo_context else ""}{news_text}
+{"⚠️ PORTFOLIO THIN — only " + str(positions_count) + " positions open. Prioritise building positions." if positions_count < 3 else ""}
+{geo_text if geo_context else ""}{news_text}{bearish_etf_note}
 ## Candidates to evaluate:
 {chr(10).join(candidate_detail)}
 
 Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
 
-For EACH candidate decide: BUY, SELL, or SKIP.
+For EACH candidate decide: BUY, SHORT, or SKIP.
 Rules:
-- Approve up to 3 buys per cycle — we WANT a diversified portfolio working simultaneously
-- Never approve 2 stocks from the same sector unless both are very high conviction
-- Each approved trade must stand on its own merit
-- If geo risk is HIGH: only approve inverse ETFs or safe havens
+- Approve up to 3 trades per cycle (mix of longs and shorts)
+- BUY: standard long position — profit when price rises
+- SHORT: sell shares short — profit when price FALLS. Best for: RSI > 72 + bearish sector + no upcoming earnings
+- Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
+- In bearish regime: prioritize inverse ETF buys + individual stock shorts
+- If geo risk is HIGH: only approve inverse ETFs, short sells, or safe havens
 - MUST approve at least 1 trade if any candidate has medium+ signal
 
-Exit rules per approved trade:
-- take_profit_pct: realistic upside (0.08-0.40). Strong catalyst=0.15-0.25, ETF=0.15-0.30
-- stop_loss_pct: trailing stop (0.03-0.08). High conviction=0.05-0.07, volatile=0.06-0.08
-- partial_exit: true when upside ≥ 15% (sell half at target, let half compound)
+For LONG trades:
+- take_profit_pct: realistic upside (0.08-0.40). Strong catalyst=0.15-0.25, leveraged ETF=0.20-0.35
+- stop_loss_pct: trailing stop (0.03-0.08)
 
-Respond in JSON — only include approved trades (skip = omit from list):
-{{"trades": [{{"symbol": "X", "action": "buy|sell", "confidence": "high|medium", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + upside target"}}], "skipped": "brief reason why other candidates were skipped"}}"""
+For SHORT trades:
+- take_profit_pct: how far you expect it to FALL (0.08-0.20)
+- stop_loss_pct: how much RISE to tolerate before covering (0.04-0.07)
+- partial_exit: cover 50% at first target, let rest ride
+
+Respond in JSON — only include approved trades:
+{{"trades": [{{"symbol": "X", "action": "buy|short", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short"}}], "skipped": "brief reason"}}"""
 
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=1000)
@@ -383,7 +408,7 @@ Respond in JSON — only include approved trades (skip = omit from list):
         except Exception:
             pass
 
-        if action == "buy":
+        if action in ("buy", "short"):
             price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or 0
             if price <= 0:
                 continue
@@ -396,13 +421,15 @@ Respond in JSON — only include approved trades (skip = omit from list):
                 final_qty = max(1, int(max_shares * size_pct))
 
             cost = price * final_qty
-            if final_qty < 1 or cost > remaining_cash:
+            if action == "buy" and (final_qty < 1 or cost > remaining_cash):
                 logger.info(f"Skipping {sym} — insufficient cash (need ${cost:.0f}, have ${remaining_cash:.0f})")
                 continue
-            remaining_cash -= cost
+            if action == "buy":
+                remaining_cash -= cost
+            # Shorts don't consume cash directly (margin), but we still need buying power
 
         elif action == "sell":
-            pos = next((p for p in positions if p.symbol == sym), None)
+            pos = next((p for p in positions if p.symbol == sym and p.side == "long"), None)
             if not pos:
                 continue
             final_qty = max(1, round(float(pos.qty)))
