@@ -503,6 +503,11 @@ async def run_trading_cycle():
 
         _last_analysis_at = datetime.now(timezone.utc)
 
+        # Sort decisions: sells first, then buys/shorts
+        # This ensures rotation sells always free up cash before buys consume the cycle cap
+        ACTION_PRIORITY = {"sell": 0, "short": 1, "buy": 1, "hold": 2}
+        decisions = sorted(decisions, key=lambda d: ACTION_PRIORITY.get(d.action, 2))
+
         # Broadcast + log each decision
         for decision in decisions:
             _latest_analysis = AIAnalysis(

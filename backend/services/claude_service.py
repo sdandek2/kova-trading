@@ -321,12 +321,59 @@ Respond with ONLY this JSON — no explanation, no markdown, no other text:
 
     pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
 
+    # ── Rotation context: assess each held position for momentum strength ──
+    rotation_lines = []
+    for p in positions:
+        sym_data = deep_data.get(p.symbol) or market_snapshot.get(p.symbol, {})
+        closing_prices = sym_data.get("closing_prices", [])
+        indicators = compute_all(closing_prices) if closing_prices else {}
+        rsi = indicators.get("rsi", 50)
+        macd_hist = indicators.get("macd", {}).get("histogram", 0) or 0
+        pl_pct = p.unrealized_pl_percent
+
+        # Classify momentum strength
+        if pl_pct > 5 and macd_hist > 0:
+            momentum = "STRONG — do not rotate"
+        elif pl_pct < -2 or (rsi > 70 and macd_hist < 0):
+            momentum = "WEAK — rotation candidate"
+        elif pl_pct < 1 and abs(macd_hist) < 0.05:
+            momentum = "FLAT — rotation candidate if clearly better opp exists"
+        else:
+            momentum = "MODERATE — hold unless significantly better opp"
+
+        est_value = p.current_price * float(p.qty)
+        rotation_lines.append(
+            f"  - {p.symbol} [{getattr(p, 'side', 'long').upper()}]: "
+            f"P&L={pl_pct:+.1f}%, RSI={rsi:.0f}, MACD={macd_hist:.3f}, "
+            f"value≈${est_value:,.0f} → {momentum}"
+        )
+    rotation_text = "\n".join(rotation_lines) if rotation_lines else "  None"
+
+    cash_tight = account_cash < portfolio_value * 0.05  # less than 5% cash = tight
+    rotation_note = f"""
+## Portfolio Rotation (capital efficiency)
+Available cash: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio)
+{"⚠️ CASH IS TIGHT — consider rotating a weak position to fund a high-conviction opportunity." if cash_tight else "Cash is adequate — rotation optional but allowed."}
+
+Current positions with momentum assessment:
+{rotation_text}
+
+ROTATION RULES:
+- You MAY sell a weak/flat position to fund a significantly better opportunity
+- Only rotate if new opportunity conviction is clearly higher than the position being sold
+- NEVER rotate a STRONG momentum position
+- To rotate: add a {{"symbol": "X", "action": "sell", "analysis": "rotating to fund better opp"}} BEFORE the buy in your trades array
+- Sell proceeds are immediately available as cash for the next buy in the same cycle
+- Max 1 rotation per cycle (1 sell + 1 buy)
+"""
+
     step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
 {pressure_note}
 {performance_text}
 {portfolio_context}
 Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
 {"⚠️ PORTFOLIO THIN — only " + str(positions_count) + " positions open. Prioritise building positions." if positions_count < 3 else ""}
+{rotation_note}
 {geo_text if geo_context else ""}{news_text}{bearish_etf_note}
 ## Candidates to evaluate:
 {chr(10).join(candidate_detail)}
@@ -338,6 +385,7 @@ Rules:
 - Approve up to 3 trades per cycle (mix of longs and shorts)
 - BUY: standard long position — profit when price rises
 - SHORT: sell shares short — profit when price FALLS. Best for: RSI > 72 + bearish sector + no upcoming earnings
+- SELL: close an existing long position (for rotation or profit-taking)
 - Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
 - In bearish regime: prioritize inverse ETF buys + individual stock shorts
 - If geo risk is HIGH: only approve inverse ETFs, short sells, or safe havens
@@ -352,8 +400,8 @@ For SHORT trades:
 - stop_loss_pct: how much RISE to tolerate before covering (0.04-0.07)
 - partial_exit: cover 50% at first target, let rest ride
 
-Respond in JSON — only include approved trades:
-{{"trades": [{{"symbol": "X", "action": "buy|short", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short"}}], "skipped": "brief reason"}}"""
+Respond in JSON — only include approved trades (put any sell/rotation BEFORE the buy):
+{{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=1000)
@@ -440,6 +488,12 @@ Respond in JSON — only include approved trades:
             if not pos:
                 continue
             final_qty = max(1, round(float(pos.qty)))
+            # Add estimated proceeds to remaining_cash so a subsequent buy in
+            # the same cycle can use the freed capital (rotation)
+            price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or pos.current_price
+            proceeds = price * final_qty
+            remaining_cash += proceeds
+            logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} cash (now ${remaining_cash:,.0f} available)")
         else:
             continue
 
