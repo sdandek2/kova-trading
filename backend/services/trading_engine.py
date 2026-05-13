@@ -341,6 +341,27 @@ async def run_trading_cycle():
 
         # ── Detect position closes: symbols that were held last cycle but are gone now ──
         current_symbols = {p.symbol for p in positions}
+
+        # ── Detect NEW positions that appeared since last cycle ──
+        # This catches limit/bracket orders that filled between cycles (submitted cycle N,
+        # filled async before cycle N+1). Since we skip log_position_open for unfilled orders
+        # at submission time, we must detect and log them here when they appear in Alpaca.
+        old_symbols = set(_previous_positions.keys())
+        for sym in current_symbols - old_symbols:
+            pos = next((p for p in positions if p.symbol == sym), None)
+            if pos:
+                logger.info(f"New position detected (limit order filled between cycles): {sym} @ ${pos.avg_entry_price:.2f}")
+                log_position_open(
+                    symbol=sym,
+                    entry_price=pos.avg_entry_price,
+                    quantity=int(float(pos.qty)),
+                    strategy=strategy_key,
+                    claude_reasoning="Limit order filled between cycles — entry logged on position detection",
+                    market_regime=macro.get("market_regime"),
+                    side=pos.side,
+                )
+                _position_high_watermarks[sym] = pos.current_price
+                _save_watermarks()
         for sym, prev in _previous_positions.items():
             if sym not in current_symbols:
                 # Skip symbols handled by an AI sell — reserve + log already applied.
