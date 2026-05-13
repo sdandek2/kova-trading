@@ -52,7 +52,7 @@ def get_recent_ai_decisions(limit: int = Query(20, ge=1, le=100)):
     all_events = get_bot_activity_log(limit=200)
     decisions = [
         e for e in all_events
-        if e.get("event_type") in ("approved", "entry_rejected", "earnings_block", "circuit_breaker")
+        if e.get("event_type") in ("approved", "order_placed", "entry_rejected", "earnings_block", "circuit_breaker")
     ]
     return decisions[:limit]
 
