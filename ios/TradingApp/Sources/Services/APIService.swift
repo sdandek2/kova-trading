@@ -262,9 +262,17 @@ class APIService {
     }
 
     func resetReserve(amount: Double? = nil) async throws -> ReserveResetResponse {
+        guard let url = URL(string: baseURL + "/api/finance/reserve/reset") else { throw APIError.invalidURL }
         var body: [String: Any] = ["confirm": true]
         if let amt = amount { body["amount"] = amt }
-        let data = try JSONSerialization.data(withJSONObject: body)
-        return try await fetch("/api/finance/reserve/reset", method: "POST", body: data)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
+        return try decoder.decode(ReserveResetResponse.self, from: data)
     }
 }
