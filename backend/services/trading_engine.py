@@ -95,6 +95,11 @@ _short_low_watermarks: dict = _load_short_watermarks()  # symbol → lowest pric
 _previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time, side} for close detection
 _current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
 _ai_sold_symbols: set = set()          # symbols sold by AI this cycle — guards against double reserve on Alpaca lag
+# Staircase scale-out tracking: symbol → number of scale-outs already taken.
+# Thresholds: 1st = 20%, 2nd = 35%, 3rd = 50%, 4th = 65% ...  (each +15pp)
+# Prevents the cascade bug where remaining position sits at same P&L% and
+# fires the scale-out rule every cycle until position is nearly zero.
+_scale_out_counts: dict = {}           # symbol → int (how many scale-outs taken so far)
 
 
 def _save_watermarks() -> None:
@@ -455,13 +460,16 @@ async def run_trading_cycle():
                 prev_high = _position_high_watermarks.get(position.symbol, 0)
                 if cp > prev_high:
                     _position_high_watermarks[position.symbol] = cp
-        # Clean up watermarks for closed positions
+        # Clean up watermarks and scale-out counters for closed positions
         for sym in list(_position_high_watermarks.keys()):
             if sym not in held_symbols:
                 del _position_high_watermarks[sym]
         for sym in list(_short_low_watermarks.keys()):
             if sym not in held_symbols:
                 del _short_low_watermarks[sym]
+        for sym in list(_scale_out_counts.keys()):
+            if sym not in held_symbols:
+                del _scale_out_counts[sym]
         # Persist long watermarks so trailing stops survive server restarts
         _save_watermarks()
 
@@ -496,6 +504,22 @@ async def run_trading_cycle():
                     current_price=position.current_price,
                     trail_pct=trail_pct,
                 )
+                # ── Staircase gate: prevent cascading scale-outs ──────────────────
+                # After the first scale-out at 20%, the remaining position still
+                # shows the same P&L% (same entry price). Without a gate,
+                # should_scale_out fires every cycle, halving the position each time
+                # until it's nearly gone. Instead we require each successive trim to
+                # reach a 15pp higher threshold: 20% → 35% → 50% → 65% ...
+                if scale_out and "trailing stop" not in reason.lower() and "loss" not in reason.lower():
+                    count = _scale_out_counts.get(position.symbol, 0)
+                    next_threshold = 20.0 + count * 15.0  # 20, 35, 50, 65 ...
+                    pnl = position.unrealized_pl_percent
+                    if pnl < next_threshold:
+                        logger.debug(
+                            f"Scale-out gate: {position.symbol} at {pnl:.1f}% — "
+                            f"next trim requires {next_threshold:.0f}% (count={count})"
+                        )
+                        scale_out = False  # suppress until position runs further
                 should_exit = scale_out
 
             if should_exit:
@@ -514,6 +538,13 @@ async def run_trading_cycle():
                     action_label, reason,
                     symbol=position.symbol, cycle_id=_current_cycle_id
                 )
+                # Advance staircase counter so next trim needs 15pp more gain
+                if action_label == "scale_out":
+                    _scale_out_counts[position.symbol] = _scale_out_counts.get(position.symbol, 0) + 1
+                    logger.info(
+                        f"Scale-out #{_scale_out_counts[position.symbol]} for {position.symbol} — "
+                        f"next trim at {20.0 + _scale_out_counts[position.symbol] * 15.0:.0f}%"
+                    )
                 # Cancel any open GTC bracket orders before submitting a market exit
                 # Shorts: cancel GTC limit buy (cover order placed at entry via submit_short_order)
                 # Longs: cancel GTC limit sell / stop-loss legs placed at entry via bracket order
