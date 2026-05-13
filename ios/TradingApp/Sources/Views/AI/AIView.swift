@@ -5,6 +5,8 @@ struct AIView: View {
     @State private var circuitBreakerDayPl: Double? = nil
     @State private var circuitBreakerLimit: Double = 3.0
     @State private var cycleIntervalSeconds: Int = 600  // default 10 min, refreshed on load
+    @State private var recentDecisions: [BotActivity] = []
+    @State private var decisionsExpanded: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -27,60 +29,12 @@ struct AIView: View {
 
                             PreMarketView()
 
-                            // ── Latest AI decision ──
-                            if let analysis = vm.analysis {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack(alignment: .top) {
-                                        Text("Latest AI Decision")
-                                            .font(.headline)
-                                        Spacer()
-                                        VStack(alignment: .trailing, spacing: 3) {
-                                            if let ts = analysis.timestamp {
-                                                Text(ts, style: .relative)
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            if let ts = analysis.timestamp {
-                                                let nextRun = ts.addingTimeInterval(TimeInterval(cycleIntervalSeconds))
-                                                if nextRun > Date() {
-                                                    HStack(spacing: 3) {
-                                                        Image(systemName: "clock.arrow.circlepath")
-                                                            .font(.caption2)
-                                                        Text("Next in ") + Text(nextRun, style: .relative)
-                                                    }
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.blue)
-                                                }
-                                                // Overdue = bot is holding or cycling — hide countdown,
-                                                // the "X min ago" timestamp above is enough context.
-                                            }
-                                        }
-                                    }
-
-                                    if let action = analysis.lastAction, let symbol = analysis.symbol, action != "hold" {
-                                        HStack(spacing: 8) {
-                                            Text(action.uppercased())
-                                                .font(.caption)
-                                                .fontWeight(.bold)
-                                                .foregroundStyle(.white)
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                                .background(action == "buy" ? Color.green : Color.red)
-                                                .clipShape(Capsule())
-                                            Text(symbol)
-                                                .font(.subheadline)
-                                                .fontWeight(.medium)
-                                        }
-                                    }
-
-                                    Text(analysis.reasoning)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                        .lineSpacing(4)
-                                }
-                                .padding()
-                                .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
-                            }
+                            // ── Recent AI Decisions ──
+                            RecentAIDecisionsCard(
+                                decisions: recentDecisions,
+                                cycleIntervalSeconds: cycleIntervalSeconds,
+                                isExpanded: $decisionsExpanded
+                            )
 
                             // ── Active short positions ──
                             OpenShortsCard()
@@ -172,6 +126,7 @@ struct AIView: View {
             if let settings = try? await APIService.shared.getRiskSettings() {
                 cycleIntervalSeconds = settings.cycle_interval_seconds
             }
+            await loadRecentDecisions()
         }
         .onReceive(NotificationCenter.default.publisher(for: .circuitBreakerFired)) { note in
             if let dayPl = note.userInfo?["day_pl_percent"] as? Double {
@@ -187,10 +142,174 @@ struct AIView: View {
         }
         // Account P&L comes from the dashboard VM; rely on WebSocket for live updates
     }
+
+    private func loadRecentDecisions() async {
+        if let decisions = try? await APIService.shared.getRecentAIDecisions(limit: 20) {
+            recentDecisions = decisions
+        }
+    }
 }
 
 extension Notification.Name {
     static let circuitBreakerFired = Notification.Name("circuitBreakerFired")
+}
+
+// MARK: - Recent AI Decisions Card
+
+struct RecentAIDecisionsCard: View {
+    let decisions: [BotActivity]
+    let cycleIntervalSeconds: Int
+    @Binding var isExpanded: Bool
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private func parseDate(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        return Self.isoFormatter.date(from: raw)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // ── Header ──
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(Color.purple.opacity(0.12)).frame(width: 36, height: 36)
+                    Image(systemName: "brain.head.profile")
+                        .foregroundStyle(.purple).font(.system(size: 16))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recent AI Decisions")
+                        .font(.headline).foregroundStyle(.primary)
+                    Text("\(decisions.count) decisions")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                // Next cycle countdown from the most recent decision
+                if let latest = decisions.first, let ts = parseDate(latest.timestamp) {
+                    let nextRun = ts.addingTimeInterval(TimeInterval(cycleIntervalSeconds))
+                    if nextRun > Date() {
+                        HStack(spacing: 3) {
+                            Image(systemName: "clock.arrow.circlepath").font(.caption2)
+                            Text("Next in ") + Text(nextRun, style: .relative)
+                        }
+                        .font(.caption2).foregroundStyle(.blue)
+                    }
+                }
+                Button(action: { withAnimation { isExpanded.toggle() } }) {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+
+            if decisions.isEmpty {
+                Text("No AI decisions yet — waiting for first cycle.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding([.horizontal, .bottom])
+            } else {
+                Divider().padding(.horizontal)
+
+                // Always show the most recent decision in full
+                if let latest = decisions.first {
+                    AIDecisionRow(event: latest, showFullMessage: true)
+                }
+
+                // Show the rest in compact form if expanded
+                if isExpanded && decisions.count > 1 {
+                    ForEach(decisions.dropFirst()) { event in
+                        Divider().padding(.leading, 52)
+                        AIDecisionRow(event: event, showFullMessage: false)
+                    }
+                }
+
+                if decisions.count > 1 {
+                    Button(action: { withAnimation { isExpanded.toggle() } }) {
+                        Text(isExpanded ? "Show less" : "Show \(decisions.count - 1) more decisions")
+                            .font(.caption).foregroundStyle(.blue)
+                    }
+                    .padding(.horizontal, 16).padding(.bottom, 12)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
+    }
+}
+
+struct AIDecisionRow: View {
+    let event: BotActivity
+    let showFullMessage: Bool
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private var parsedDate: Date? {
+        guard let raw = event.timestamp else { return nil }
+        return Self.isoFormatter.date(from: raw)
+    }
+
+    private var actionBadgeInfo: (text: String, color: Color)? {
+        switch event.event_type {
+        case "approved":
+            // Extract action from message: "BUY TQQQ x412..." or "SELL ..."
+            let upper = event.message.uppercased()
+            if upper.hasPrefix("BUY ")   { return ("BUY",   .green) }
+            if upper.hasPrefix("SELL ")  { return ("SELL",  .red) }
+            if upper.hasPrefix("SHORT ") { return ("SHORT", .orange) }
+            if upper.hasPrefix("COVER ") { return ("COVER", .teal) }
+            return ("TRADE", .green)
+        case "entry_rejected":  return ("REJECTED", .orange)
+        case "earnings_block":  return ("BLOCKED",  .yellow)
+        case "circuit_breaker": return ("HALTED",   .red)
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Status icon
+            Image(systemName: event.eventIcon)
+                .foregroundStyle(Color(event.eventColor == "green" ? .systemGreen :
+                                       event.eventColor == "orange" ? .systemOrange :
+                                       event.eventColor == "red" ? .systemRed : .systemGray))
+                .font(.system(size: 20))
+                .frame(width: 28)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if let badge = actionBadgeInfo {
+                        Text(badge.text)
+                            .font(.caption2).fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(badge.color)
+                            .clipShape(Capsule())
+                    }
+                    if let symbol = event.symbol {
+                        Text(symbol).font(.subheadline).fontWeight(.semibold)
+                    }
+                    Spacer()
+                    if let date = parsedDate {
+                        Text(date, style: .relative)
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                Text(event.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(showFullMessage ? nil : 2)
+                    .lineSpacing(2)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+    }
 }
 
 // MARK: - Risk Settings Card

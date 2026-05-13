@@ -83,6 +83,10 @@ class APIService {
         try await fetch("/api/trading/analysis")
     }
 
+    func getRecentAIDecisions(limit: Int = 20) async throws -> [BotActivity] {
+        try await fetch("/api/trading/analysis/recent?limit=\(limit)")
+    }
+
     func startTrading() async throws {
         let _: [String: String] = try await fetch("/api/trading/start", method: "POST")
     }

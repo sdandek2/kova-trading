@@ -3,6 +3,35 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+# ── Ticker-aware MA20 thresholds ───────────────────────────────────────────
+# Leveraged ETFs (3×) naturally run 15-20% above MA20 during bull phases.
+# A flat 10% block misfires constantly on these instruments.
+_LEVERAGED_ETFS = {
+    "TQQQ", "SQQQ", "SOXL", "SOXS", "SPXL", "SPXS", "UPRO", "SPXU",
+    "TECL", "TECS", "LABU", "LABD", "FNGU", "FNGS", "CURE", "DFEN",
+    "TNA", "TZA", "UDOW", "SDOW", "URTY", "SRTY",
+}
+
+# Broad non-leveraged ETFs — slightly wider band than individual stocks
+_BROAD_ETFS = {
+    "QQQ", "SPY", "IWM", "XLE", "XLK", "XLF", "XLV", "XLI", "GLD",
+    "SLV", "EEM", "EFA", "VTI", "VOO", "ARKK", "ARKW", "ARKG",
+}
+
+
+def _ma20_extension_limit(symbol: str) -> float:
+    """
+    Return the maximum allowed % extension above MA20 for this symbol.
+    - Leveraged 3× ETFs: 18%  (they routinely run hot in bull markets)
+    - Broad / non-leveraged ETFs: 12%
+    - Individual stocks: 10% (original rule)
+    """
+    if symbol in _LEVERAGED_ETFS:
+        return 0.18
+    if symbol in _BROAD_ETFS:
+        return 0.12
+    return 0.10
+
 
 def should_confirm_entry(
     symbol: str,
@@ -54,11 +83,30 @@ def should_confirm_entry(
             if rsi > 80:
                 return False, f"{symbol} RSI {rsi:.1f} — extremely overbought even for aggressive"
 
-            # Rule 3: Don't chase if price is >10% above MA20 (parabolic, not breakout)
-            if ma20 and current_price > ma20 * 1.10 and not needs_positions:
-                return False, (
-                    f"{symbol} is 10%+ above MA20 (${ma20:.2f}) — parabolic, not a breakout"
-                )
+            # Rule 3: Ticker-aware MA20 extension limit.
+            # Leveraged ETFs (TQQQ/SOXL/SPXL): 18% allowed — they run hot in bull markets.
+            # Broad ETFs (QQQ/SPY/XLE): 12%.  Individual stocks: 10%.
+            # When portfolio is thin (<3 positions) we lower the bar, but NEVER bypass
+            # the check entirely — a hard cap at 1.5× the normal limit prevents chasing
+            # something already 30-40% extended (e.g. QUCY at 42% above MA20).
+            if ma20:
+                ext_limit = _ma20_extension_limit(symbol)
+                hard_cap  = ext_limit * 1.5   # e.g. 15% for stocks, 27% for leveraged ETFs
+                pct_above  = (current_price / ma20 - 1) * 100
+
+                if needs_positions:
+                    # Thin portfolio: allow up to hard_cap (not unlimited)
+                    if current_price > ma20 * (1 + hard_cap):
+                        return False, (
+                            f"{symbol} is {pct_above:.0f}% above MA20 (${ma20:.2f}) — "
+                            f"too extended even with thin portfolio (cap={hard_cap*100:.0f}%)"
+                        )
+                else:
+                    if current_price > ma20 * (1 + ext_limit):
+                        return False, (
+                            f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — "
+                            f"parabolic, not a breakout (limit={ext_limit*100:.0f}%)"
+                        )
 
             return True, (
                 f"{symbol} approved [AGGRESSIVE]: RSI={rsi:.1f}, "
@@ -66,7 +114,7 @@ def should_confirm_entry(
             )
 
         else:
-            # Original conservative/balanced rules
+            # Conservative/balanced rules — same ticker-aware MA20 limits but tighter RSI
             if current_price < yesterday_close * 0.98:
                 return False, (
                     f"{symbol} is down >2% from yesterday's close "
@@ -74,10 +122,14 @@ def should_confirm_entry(
                 )
             if rsi > 75:
                 return False, f"{symbol} RSI is {rsi:.1f} — overbought, waiting for pullback"
-            if ma20 and current_price > ma20 * 1.05:
-                return False, (
-                    f"{symbol} is 5%+ above MA20 (${ma20:.2f}) — avoid chasing"
-                )
+            if ma20:
+                # Use half the aggressive limit for conservative mode (5% stocks, 9% leveraged ETFs)
+                ext_limit = _ma20_extension_limit(symbol) * 0.5
+                pct_above  = (current_price / ma20 - 1) * 100
+                if current_price > ma20 * (1 + ext_limit):
+                    return False, (
+                        f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — avoid chasing"
+                    )
             return True, f"{symbol} passes entry confirmation: RSI={rsi:.1f}, price vs MA20 ok"
 
     elif action == "sell":

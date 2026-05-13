@@ -41,6 +41,22 @@ def get_analysis():
     return analysis
 
 
+@router.get("/analysis/recent")
+def get_recent_ai_decisions(limit: int = Query(20, ge=1, le=100)):
+    """
+    Return the most recent AI decisions (approved trades + entry rejections).
+    Each item includes: timestamp, symbol, event_type, message (full reasoning).
+    Powers the 'Recent AI Decisions' list in the iOS app.
+    """
+    from services.db import get_bot_activity_log
+    all_events = get_bot_activity_log(limit=200)
+    decisions = [
+        e for e in all_events
+        if e.get("event_type") in ("approved", "entry_rejected", "earnings_block", "circuit_breaker")
+    ]
+    return decisions[:limit]
+
+
 @router.get("/history")
 def get_trade_history(limit: int = Query(50, ge=1, le=500)):
     """Return the most recent AI trade decisions from the trade_log table."""
