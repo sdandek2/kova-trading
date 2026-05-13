@@ -671,7 +671,24 @@ async def run_trading_cycle():
             # ── Earnings play forced EOD exit ─────────────────────────────────
             # Positions entered as earnings plays must exit by 3:45 PM ET —
             # never hold through the actual earnings report after close.
-            if position.symbol in _earnings_day_positions:
+            # Two-pronged check so server restarts don't bypass this rule:
+            # 1. Symbol is in _earnings_day_positions (in-memory, set at order time)
+            # 2. OR: position entered today + still has earnings today/tomorrow in earnings_map
+            #    (covers restart scenario where in-memory set was wiped)
+            _ep_entry_time = _previous_positions.get(position.symbol, {}).get("entry_time")
+            _ep_entered_today = (
+                _ep_entry_time is not None and
+                _ep_entry_time.date() == datetime.now(timezone.utc).date()
+            )
+            _ep_has_earnings = (
+                earnings_map is not None and
+                earnings_map.get(position.symbol) == "today/tomorrow"
+            )
+            _is_earnings_play = (
+                position.symbol in _earnings_day_positions or
+                (_ep_entered_today and _ep_has_earnings)
+            )
+            if _is_earnings_play:
                 try:
                     from zoneinfo import ZoneInfo
                     _now_et = datetime.now(ZoneInfo("America/New_York"))

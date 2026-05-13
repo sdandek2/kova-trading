@@ -64,8 +64,8 @@ Interpretation guide:
 - Negative news (guidance cuts, sector headwinds, lawsuits) → bearish
 - Mixed or insufficient signals → uncertain
 
-Return ONLY valid JSON, no markdown:
-{{"direction": "bullish", "confidence": "high", "reasoning": "one sentence"}}
+Return ONLY valid JSON, no markdown. direction must be one of: bullish, bearish, uncertain.
+{{"direction": "<bullish|bearish|uncertain>", "confidence": "<high|medium|low>", "reasoning": "one sentence"}}
 
 Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
 
@@ -75,8 +75,7 @@ Only return bullish/bearish if there is CLEAR directional evidence. Default to u
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        import json as _json
-        result = _json.loads(raw.strip())
+        result = json.loads(raw.strip())
         direction = result.get("direction", "uncertain")
         confidence = result.get("confidence", "low")
         reasoning = result.get("reasoning", "")
