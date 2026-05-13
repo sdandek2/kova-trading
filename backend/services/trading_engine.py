@@ -325,11 +325,14 @@ async def run_trading_cycle():
             sector_scores = await loop.run_in_executor(
                 None, functools.partial(get_sector_momentum_scores, lookback_days=3)
             )
-            sector_context = get_sector_context_for_symbols(universe[:30], sector_scores)
             leading_sectors = [f"{s}({v:+.1f}%)" for s, v in sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
             logger.info(f"Sector momentum — Leading: {', '.join(leading_sectors)}")
         except Exception as e:
-            logger.warning(f"Sector momentum failed (non-fatal): {e}")
+            logger.warning(f"get_sector_momentum_scores failed (non-fatal): {e}")
+        try:
+            sector_context = get_sector_context_for_symbols(universe[:30], sector_scores)
+        except Exception as e:
+            logger.warning(f"get_sector_context_for_symbols failed (non-fatal): {e}")
 
         # Recent trade outcomes — fed back to Claude so it learns from past decisions
         from services.db import get_recent_trade_outcomes
@@ -438,14 +441,19 @@ async def run_trading_cycle():
                 if sym in _position_high_watermarks:
                     del _position_high_watermarks[sym]
 
-        # Update _previous_positions for next cycle — include side so short closes are identified correctly
+        # Update _previous_positions for next cycle — include side so short closes are identified correctly.
+        # Bug fix: preserve entry_time from previous cycle so the 48h stale-exit rule can actually
+        # trigger. Old code reset entry_time to now() every cycle, so hours_held was always ~0.17h.
         _previous_positions = {
             p.symbol: {
                 "qty": int(float(p.qty)),
                 "avg_entry_price": p.avg_entry_price,
-                "entry_time": datetime.now(timezone.utc),  # approximate if not tracked
+                "entry_time": (
+                    _previous_positions.get(p.symbol, {}).get("entry_time")
+                    or datetime.now(timezone.utc)
+                ),
                 "exit_reason": "unknown",
-                "side": p.side,  # critical: "long" or "short" — used by log_position_close P&L formula
+                "side": p.side,
             }
             for p in positions
         }
@@ -510,6 +518,10 @@ async def run_trading_cycle():
         elif _reserved > 0:
             logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
 
+        # Track symbols pyramided this cycle so re-entry logic skips them
+        # (position.qty is stale pre-pyramid; re-entry on same cycle would compute wrong qty)
+        _pyramided_this_cycle: set = set()
+
         # ── Pyramid: add to winning positions (aggressive only) ──────────────
         # Two tiers — let the best trades compound as far as they'll go:
         #
@@ -544,9 +556,10 @@ async def run_trading_cycle():
                 p_price = sym_data_p.get("current_price") or position.current_price
 
                 # Tier 1: sweet spot — clearly working, not yet overbought
-                tier1 = (5.0 <= pnl <= 18.0) and _mh > 0.05 and _rsi_p < 72 and pyrs_taken == 0
+                tier1 = (5.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 72 and pyrs_taken == 0
                 # Tier 2: extended winner — add smaller on continued strength
-                tier2 = (22.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
+                # Bug fix: was 22.0 leaving an 18-22% dead zone. Now 19.0 closes the gap.
+                tier2 = (19.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
 
                 if tier1:
                     add_pct, tier_label = 0.25, "Tier-1"
@@ -571,6 +584,7 @@ async def run_trading_cycle():
                     if pyr_order:
                         _pyramid_counts[position.symbol] = pyrs_taken + 1
                         _tradeable_cash -= add_cost
+                        _pyramided_this_cycle.add(position.symbol)
                         await manager.broadcast({"type": "order_filled",
                                                  "data": pyr_order.model_dump(mode="json")})
 
@@ -798,6 +812,9 @@ async def run_trading_cycle():
                 sym = position.symbol
                 if _scale_out_counts.get(sym, 0) == 0:
                     continue  # no scale-out taken yet, nothing to re-enter
+                # Skip if we just pyramided this cycle — position.qty is stale pre-pyramid
+                if sym in _pyramided_this_cycle:
+                    continue
                 pnl = position.unrealized_pl_percent
                 if pnl <= 0:
                     continue  # don't re-enter a losing position
@@ -835,8 +852,9 @@ async def run_trading_cycle():
                 re_order = alpaca_service.submit_market_order(symbol=sym, qty=reentry_qty, side="buy")
                 if re_order:
                     _tradeable_cash -= reentry_cost
-                    # Reset scale-out count so staircase restarts from current position
-                    _scale_out_counts[sym] = 0
+                    # Bug fix: reset to 1 not 0 — requires 35% gain before next scale-out.
+                    # Resetting to 0 creates an infinite scale-out/re-entry loop every cycle.
+                    _scale_out_counts[sym] = 1
                     _pre_scaleout_qty.pop(sym, None)
                     await manager.broadcast({"type": "order_filled", "data": re_order.model_dump(mode="json")})
 
@@ -860,9 +878,15 @@ async def run_trading_cycle():
         min_trades = int(_risk_settings.get("min_daily_trades", 2))
         # afternoon_pressure_hour is in EST; UTC offset is +4 (EDT) or +5 (EST)
         # Using +4 (EDT, summer) as default — close enough for this purpose
+        # Bug fix: use ET timezone for afternoon pressure (DST-aware) instead of hardcoded UTC+4
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+            _now_et = datetime.now(_ZI("America/New_York"))
+            _now_et_hour = _now_et.hour
+        except Exception:
+            _now_et_hour = now_utc.hour - 4  # fallback: approximate EDT
         pressure_hour_est = int(_risk_settings.get("afternoon_pressure_hour", 14))
-        pressure_hour_utc = pressure_hour_est + 4
-        afternoon_pressure = (now_utc.hour >= pressure_hour_utc and trades_today < min_trades)
+        afternoon_pressure = (_now_et_hour >= pressure_hour_est and trades_today < min_trades)
         if afternoon_pressure:
             logger.info(f"Afternoon pressure: only {trades_today}/{min_trades} trades today — lowering thresholds")
 
@@ -1048,6 +1072,10 @@ async def run_trading_cycle():
                     closes=closing_prices,
                 )
                 price = sym_data.get("current_price")
+                # Bug fix: initialize vol_qty to decision.quantity so it's always defined.
+                # Previously vol_qty was only assigned inside `if price and price > 0`,
+                # causing a NameError crash when price data was missing.
+                vol_qty = decision.quantity
                 if price and price > 0:
                     # Penny stock guard: stocks under $5 get a smaller max position %
                     # to prevent massive share counts from inflating notional risk.
@@ -1078,7 +1106,8 @@ async def run_trading_cycle():
                     # Claude embeds [HIGH]/[MEDIUM]/[LOW] in reasoning.
                     # High-conviction trades deserve a bigger position — up to 1.25×.
                     # Low-conviction trades get 0.8× to limit exposure on uncertain setups.
-                    _reasoning_upper = decision.reasoning.upper()
+                    # Bug fix: guard against None reasoning (AI occasionally omits it)
+                    _reasoning_upper = (decision.reasoning or "").upper()
                     if "[HIGH]" in _reasoning_upper:
                         _conv_mult = 1.25
                     elif "[LOW]" in _reasoning_upper:

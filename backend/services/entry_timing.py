@@ -1,65 +1,63 @@
 import logging
-from datetime import datetime, timezone, timedelta
+import threading
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 # ── Ticker-aware MA20 thresholds ───────────────────────────────────────────
-# Leveraged ETFs (3×) naturally run 15-20% above MA20 during bull phases.
-# A flat 10% block misfires constantly on these instruments.
 _LEVERAGED_ETFS = {
     "TQQQ", "SQQQ", "SOXL", "SOXS", "SPXL", "SPXS", "UPRO", "SPXU",
     "TECL", "TECS", "LABU", "LABD", "FNGU", "FNGS", "CURE", "DFEN",
     "TNA", "TZA", "UDOW", "SDOW", "URTY", "SRTY",
 }
 
-# Broad non-leveraged ETFs — slightly wider band than individual stocks
 _BROAD_ETFS = {
     "QQQ", "SPY", "IWM", "XLE", "XLK", "XLF", "XLV", "XLI", "GLD",
     "SLV", "EEM", "EFA", "VTI", "VOO", "ARKK", "ARKW", "ARKG",
 }
 
 # ── Rejection cooldown ─────────────────────────────────────────────────────
-# Tracks symbols rejected by entry confirmation (MA20 extension, RSI, etc.)
-# so the bot doesn't waste a cycle fetching deep data and running the same
-# check 4× per hour on a stock that clearly can't be entered right now.
-_REJECTION_COOLDOWN: dict = {}          # symbol → UTC datetime of last rejection
-_REJECTION_COOLDOWN_MINUTES = 30        # don't retry a rejected symbol for 30 min
+# Prevents the same symbol from being fetched, confirmed, and rejected every
+# cycle (e.g. QUCY rejected 4× per hour for the same MA20 extension reason).
+# Thread-safe: the dict is shared across executor threads via the lock below.
+_REJECTION_COOLDOWN: dict = {}
+_REJECTION_COOLDOWN_LOCK = threading.Lock()
+_REJECTION_COOLDOWN_MINUTES = 30
 
 
 def _is_in_rejection_cooldown(symbol: str) -> tuple[bool, str]:
-    """Return (True, reason) if symbol was recently rejected and should be skipped."""
-    last = _REJECTION_COOLDOWN.get(symbol)
-    if last is None:
+    """Return (True, reason) if symbol was recently rejected."""
+    with _REJECTION_COOLDOWN_LOCK:
+        last = _REJECTION_COOLDOWN.get(symbol)
+        if last is None:
+            return False, ""
+        mins = (datetime.now(timezone.utc) - last).total_seconds() / 60
+        if mins < _REJECTION_COOLDOWN_MINUTES:
+            return True, (
+                f"{symbol} in rejection cooldown — rejected {mins:.0f} min ago, "
+                f"retry in {_REJECTION_COOLDOWN_MINUTES - mins:.0f} min"
+            )
+        del _REJECTION_COOLDOWN[symbol]
         return False, ""
-    mins = (datetime.now(timezone.utc) - last).total_seconds() / 60
-    if mins < _REJECTION_COOLDOWN_MINUTES:
-        return True, (
-            f"{symbol} in rejection cooldown — rejected {mins:.0f} min ago, "
-            f"retry in {_REJECTION_COOLDOWN_MINUTES - mins:.0f} min"
-        )
-    # Cooldown expired — remove stale entry
-    del _REJECTION_COOLDOWN[symbol]
-    return False, ""
 
 
 def _record_rejection(symbol: str) -> None:
-    """Mark symbol as recently rejected to start the cooldown timer."""
-    _REJECTION_COOLDOWN[symbol] = datetime.now(timezone.utc)
+    with _REJECTION_COOLDOWN_LOCK:
+        _REJECTION_COOLDOWN[symbol] = datetime.now(timezone.utc)
 
 
 def clear_rejection_cooldown(symbol: str) -> None:
-    """Explicitly clear cooldown — call when position is entered or closed."""
-    _REJECTION_COOLDOWN.pop(symbol, None)
+    with _REJECTION_COOLDOWN_LOCK:
+        _REJECTION_COOLDOWN.pop(symbol, None)
 
 
 def _ma20_extension_limit(symbol: str, price: float = 0.0) -> float:
     """
     Return the maximum allowed % extension above MA20 for this symbol.
-    - Penny stocks (< $5): 40% — 10% on a $0.45 stock = just 4.5 cents, meaningless.
-                                   Penny stocks legitimately move 50-200% intraday.
-    - Leveraged 3× ETFs: 18%  (they routinely run hot in bull markets)
+    - Penny stocks (< $5): 40% — 10% on a $0.45 stock = 4.5 cents, meaningless.
+    - Leveraged 3× ETFs: 18%
     - Broad / non-leveraged ETFs: 12%
-    - Individual stocks: 10% (original rule)
+    - Individual stocks: 10%
     """
     if 0 < price < 5.0:
         return 0.40
@@ -85,18 +83,16 @@ def should_confirm_entry(
 
     AGGRESSIVE mode (designed for 2-5 trades/day):
     - Only blocks on confirmed panic selling (>5% down + volume collapse)
-    - RSI ceiling raised to 80 — momentum stocks legitimately run this hot
-    - MA20 extension raised to 10% — breakouts happen above MA20 by definition
-    - If portfolio has < 3 positions, entry bar is lowered further
+    - RSI ceiling raised to 80
+    - MA20 extension: ticker-aware (penny=40%, leveraged=18%, broad=12%, stocks=10%)
+    - Thin portfolio (<3 positions) lowers bar further, capped at 1.5× normal limit
 
-    BALANCED / CONSERVATIVE mode (original rules):
+    BALANCED / CONSERVATIVE mode:
     - Down >2% from yesterday → skip
     - RSI > 75 → skip
-    - Price > MA20 * 1.05 → skip
+    - Price > MA20 * (limit * 0.5) → skip (half aggressive limit, but penny stocks keep full 40%)
     """
-    # ── Rejection cooldown check: skip immediately if rejected recently ──
-    # This prevents wasting deep-data fetches + AI cycles on stocks that
-    # clearly can't be entered (e.g. QUCY rejected 4× in an hour for same reason).
+    # ── Rejection cooldown: skip immediately if recently rejected ──
     in_cooldown, cooldown_reason = _is_in_rejection_cooldown(symbol)
     if in_cooldown and action == "buy":
         return False, cooldown_reason
@@ -107,20 +103,16 @@ def should_confirm_entry(
     from services.indicators import compute_rsi, compute_moving_averages
 
     yesterday_close = closing_prices[-2]
-    # compute_rsi returns None when there are fewer than 15 bars.
-    # Default to 50 (neutral) so no RSI-based rule fires on insufficient data.
-    rsi = compute_rsi(closing_prices) or 50.0
+    # Explicit None check: `or 50.0` would wrongly replace a real 0.0 RSI with 50.
+    _raw_rsi = compute_rsi(closing_prices)
+    rsi = _raw_rsi if _raw_rsi is not None else 50.0
     mas = compute_moving_averages(closing_prices)
     ma20 = mas.get("ma20")
     is_aggressive = strategy_key == "aggressive"
-
-    # When portfolio is thin (< 3 positions) be more accepting — idle cash is dead money
     needs_positions = positions_count < 3
 
     if action == "buy":
         if is_aggressive:
-            # Rule 1: Only block real panic selling (>5% down), not normal gap-downs
-            # A stock down 2-4% from yesterday is often a buy-the-dip opportunity
             if current_price < yesterday_close * 0.95 and not needs_positions:
                 reason = (
                     f"{symbol} down >5% from yesterday (${yesterday_close:.2f}→${current_price:.2f}) "
@@ -129,26 +121,17 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
 
-            # Rule 2: RSI ceiling at 80 — momentum stocks often run 75-85 on breakout days
             if rsi > 80:
                 reason = f"{symbol} RSI {rsi:.1f} — extremely overbought even for aggressive"
                 _record_rejection(symbol)
                 return False, reason
 
-            # Rule 3: Ticker-aware MA20 extension limit.
-            # Penny stocks: 40% (10% on $0.45 = 4.5 cents — meaningless filter).
-            # Leveraged ETFs (TQQQ/SOXL/SPXL): 18% allowed — they run hot in bull markets.
-            # Broad ETFs (QQQ/SPY/XLE): 12%.  Individual stocks: 10%.
-            # When portfolio is thin (<3 positions) we lower the bar, but NEVER bypass
-            # the check entirely — a hard cap at 1.5× the normal limit prevents chasing
-            # something already 30-40% extended (e.g. QUCY at 87% above MA20).
             if ma20:
                 ext_limit = _ma20_extension_limit(symbol, current_price)
-                hard_cap  = ext_limit * 1.5   # e.g. 15% for stocks, 60% for penny stocks
-                pct_above  = (current_price / ma20 - 1) * 100
+                hard_cap  = ext_limit * 1.5
+                pct_above = (current_price / ma20 - 1) * 100
 
                 if needs_positions:
-                    # Thin portfolio: allow up to hard_cap (not unlimited)
                     if current_price > ma20 * (1 + hard_cap):
                         reason = (
                             f"{symbol} is {pct_above:.0f}% above MA20 (${ma20:.2f}) — "
@@ -165,15 +148,13 @@ def should_confirm_entry(
                         _record_rejection(symbol)
                         return False, reason
 
-            # Rule 4: Volume confirmation — only block if portfolio is not thin AND volume is very low
             if relative_volume < 0.7 and not needs_positions:
                 reason = (
-                    f"{symbol} relative volume {relative_volume:.1f}x — breakout not confirmed by volume, likely false move"
+                    f"{symbol} relative volume {relative_volume:.1f}x — breakout not confirmed by volume"
                 )
                 _record_rejection(symbol)
                 return False, reason
 
-            # Rule 5: MACD momentum confirmation — only block if histogram clearly negative AND RSI not deeply oversold AND portfolio not thin
             if macd_histogram is not None and macd_histogram < -0.05 and rsi >= 45 and not needs_positions:
                 reason = (
                     f"{symbol} MACD histogram {macd_histogram:.3f} — momentum negative, waiting for recovery"
@@ -187,7 +168,6 @@ def should_confirm_entry(
             )
 
         else:
-            # Conservative/balanced rules — same ticker-aware MA20 limits but tighter RSI
             if current_price < yesterday_close * 0.98:
                 reason = (
                     f"{symbol} is down >2% from yesterday's close "
@@ -200,9 +180,11 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
             if ma20:
-                # Use half the aggressive limit for conservative mode (5% stocks, 9% leveraged ETFs)
-                ext_limit = _ma20_extension_limit(symbol, current_price) * 0.5
-                pct_above  = (current_price / ma20 - 1) * 100
+                raw_limit = _ma20_extension_limit(symbol, current_price)
+                # Bug fix: penny stocks keep full 40% limit even in conservative mode.
+                # Halving 40% → 20% is still meaningless on a $0.45 stock.
+                ext_limit = raw_limit if (0 < current_price < 5.0) else raw_limit * 0.5
+                pct_above = (current_price / ma20 - 1) * 100
                 if current_price > ma20 * (1 + ext_limit):
                     reason = (
                         f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — avoid chasing"
@@ -212,20 +194,16 @@ def should_confirm_entry(
             return True, f"{symbol} passes entry confirmation: RSI={rsi:.1f}, price vs MA20 ok"
 
     elif action == "sell":
-        # Don't sell at the absolute bottom — may bounce
         rsi_floor = 20 if is_aggressive else 25
         if rsi < rsi_floor:
             return False, f"{symbol} RSI is {rsi:.1f} — oversold, may bounce, holding"
         return True, f"{symbol} sell confirmed: RSI={rsi:.1f}"
 
     elif action == "short":
-        # Don't short into deeply oversold conditions — high bounce risk
         if rsi < 35:
             return False, f"{symbol} RSI {rsi:.1f} — oversold, short bounce risk, skipping"
-        # Don't short a stock already down >5% today — late entry, most of the move is gone
         if current_price < yesterday_close * 0.95:
             return False, f"{symbol} already down >5% today — late short entry, skipping"
-        # Don't short in aggressive mode if RSI < 45 — could be bottoming, not breaking down
         if is_aggressive and rsi < 45:
             return False, f"{symbol} RSI {rsi:.1f} — not overbought enough to short confidently"
         return True, f"{symbol} short confirmed: RSI={rsi:.1f}, price vs yesterday ok"
@@ -240,25 +218,11 @@ def get_scale_in_quantity(
     max_total_qty: int = 0,
     strategy_key: str = "balanced",
 ) -> int:
-    """
-    Position sizing on entry.
-
-    AGGRESSIVE: Take full position on first entry — the entry confirmation
-    already validated the trade, timid scale-in loses alpha on the best moves.
-    Only scale in when adding to an existing position.
-
-    BALANCED / CONSERVATIVE: Original 50-75% scale-in logic.
-    """
     if existing_position_qty > 0:
-        # Adding to existing — buy the remainder up to max
         remaining = max(0, max_total_qty - int(existing_position_qty))
         return max(1, min(remaining, base_quantity))
-
     if strategy_key == "aggressive":
-        # Full position on first entry for high/medium confidence
         return max(1, base_quantity)
-
-    # Balanced / conservative — original scale-in
     scale_pct = 0.75 if confidence == "high" else 0.50
     return max(1, int(base_quantity * scale_pct))
 
@@ -275,23 +239,19 @@ def should_scale_out(
     """
     Partial profit-taking and loss-cutting rules, with trailing stop support.
 
-    Trailing stop logic:
-    - Tracks the peak price of each position (high_watermark)
-    - If price drops trail_pct% from peak while still in profit → exit to lock in gains
-    - Only triggers after position is profitable — doesn't replace the hard stop loss
-
-    Dynamic trailing stop: caller should pass a tighter trail_pct as P&L grows:
-    - P&L >= 25% → 2% trail (lock in most of the gain)
+    Dynamic trailing stop: caller computes trail_pct based on P&L:
+    - P&L >= 25% → 2% trail
     - P&L >= 15% → 3% trail
     - P&L < 15%  → 5% trail (standard)
-
-    AGGRESSIVE: Let winners run longer before taking profits.
-    Tighter loss-cutting to redeploy cash into better opportunities.
     """
     is_aggressive = strategy_key == "aggressive"
 
-    # ── Trailing stop: exit if price drops trail_pct% from peak while in profit ──
-    if high_watermark and current_price and high_watermark > 0 and position_unrealized_pl_percent > 2.0:
+    # ── Trailing stop ──
+    # Bug fix: use explicit None/positive checks — falsy 0.0 price would silently
+    # disable the trailing stop or compute a bogus 100% drop.
+    if (high_watermark is not None and current_price is not None
+            and high_watermark > 0 and current_price > 0
+            and position_unrealized_pl_percent > 2.0):
         drop_from_peak = (high_watermark - current_price) / high_watermark
         if drop_from_peak >= trail_pct:
             return True, 1.0, (
@@ -301,7 +261,6 @@ def should_scale_out(
             )
 
     if is_aggressive:
-        # Let winners breathe more — only trim at 20%+, cut hard at 6%+ loss
         if position_unrealized_pl_percent >= 20.0:
             return True, 0.50, (
                 f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 50% profits, letting 50% ride"
@@ -315,7 +274,6 @@ def should_scale_out(
                 f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses, redeploying cash"
             )
     else:
-        # Original balanced rules
         if position_unrealized_pl_percent >= 15.0:
             return True, 0.75, (
                 f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 75% profits"
@@ -341,18 +299,12 @@ def should_cover_short(
     trail_pct: float = 0.05,
     strategy_key: str = "aggressive",
 ) -> tuple[bool, float, str]:
-    """
-    Exit logic for short positions (cover = buy back to close).
-
-    Profits when price FALLS. Rules mirror long side but inverted:
-    - Trailing stop: if price rises trail_pct% from the lowest point seen → cover to lock gains
-    - Take profit: cover at 12%+ gain
-    - Stop loss: cover if position is down 5%+ (price rose against us)
-    """
     is_aggressive = strategy_key == "aggressive"
 
-    # ── Trailing stop for shorts: cover if price rises trail_pct% from low watermark ──
-    if low_watermark and current_price and low_watermark > 0 and position_unrealized_pl_percent > 2.0:
+    # Bug fix: explicit None/positive checks (same as should_scale_out)
+    if (low_watermark is not None and current_price is not None
+            and low_watermark > 0 and current_price > 0
+            and position_unrealized_pl_percent > 2.0):
         rise_from_low = (current_price - low_watermark) / low_watermark
         if rise_from_low >= trail_pct:
             return True, 1.0, (
@@ -379,43 +331,33 @@ def should_cover_short(
 
 def is_good_trading_window() -> tuple[str, str]:
     """
-    Time-of-day filter.
-    Returns (mode: str, reason: str) where mode is one of:
-      "full"        — normal trading, entries + exits allowed
-      "exits_only"  — first 15 min after open: allow AI exits, block new entries
-      "closed"      — outside market hours, skip entire cycle
-
-    Why exits_only instead of blocking everything:
-    9:30-9:45 AM is chaotic for NEW entries (wide spreads, opening volatility).
-    But if we already hold a losing/stale position, we want to exit ASAP — not wait
-    15 extra minutes while the loss compounds. Trailing stops and scale-outs already
-    run before this check; this opens the door for AI-decided sells too.
-
-    Market hours (EDT = UTC-4 in summer):
-    - 9:30 AM open  = 13:30 UTC
-    - 9:45 AM       = 13:45 UTC  ← entries allowed from here
-    - 4:00 PM close = 20:00 UTC
+    Time-of-day filter using proper ET timezone (handles EDT/EST DST automatically).
+    Returns (mode, reason) where mode is "full" | "exits_only" | "closed".
     """
-    now_utc = datetime.now(timezone.utc)
-    hour, minute = now_utc.hour, now_utc.minute
-    minutes_since_midnight_utc = hour * 60 + minute
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # Fallback: approximate with UTC-4 (EDT) if zoneinfo unavailable
+        from datetime import timedelta
+        now_et = datetime.now(timezone.utc) - timedelta(hours=4)
 
-    market_open_utc  = 13 * 60 + 30   # 9:30 AM EST
-    entries_start_utc = 13 * 60 + 45  # 9:45 AM EST — skip opening volatility for new entries
-    market_close_utc = 20 * 60        # 4:00 PM EST
+    total_minutes = now_et.hour * 60 + now_et.minute
 
-    if minutes_since_midnight_utc < market_open_utc:
+    market_open_et   = 9 * 60 + 30   # 9:30 AM ET
+    entries_start_et = 9 * 60 + 45   # 9:45 AM ET
+    market_close_et  = 16 * 60        # 4:00 PM ET
+
+    if total_minutes < market_open_et:
         return "closed", "Pre-market — market not yet open"
-    if minutes_since_midnight_utc >= market_close_utc:
+    if total_minutes >= market_close_et:
         return "closed", "Market closed"
-    if minutes_since_midnight_utc < entries_start_utc:
+    if total_minutes < entries_start_et:
         return "exits_only", (
             f"Opening 15 min window — exits allowed, new entries blocked "
-            f"({entries_start_utc - minutes_since_midnight_utc} min until entries open)"
+            f"({entries_start_et - total_minutes} min until entries open)"
         )
-
-    # Power hour (3-4 PM EST = 19:00-20:00 UTC) — best liquidity for exits
-    if minutes_since_midnight_utc >= 19 * 60:
+    if total_minutes >= 15 * 60:   # 3:00 PM ET
         return "full", "Power hour — prime exit window"
 
     return "full", "Normal trading hours"
