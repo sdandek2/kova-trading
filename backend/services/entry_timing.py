@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +18,51 @@ _BROAD_ETFS = {
     "SLV", "EEM", "EFA", "VTI", "VOO", "ARKK", "ARKW", "ARKG",
 }
 
+# ── Rejection cooldown ─────────────────────────────────────────────────────
+# Tracks symbols rejected by entry confirmation (MA20 extension, RSI, etc.)
+# so the bot doesn't waste a cycle fetching deep data and running the same
+# check 4× per hour on a stock that clearly can't be entered right now.
+_REJECTION_COOLDOWN: dict = {}          # symbol → UTC datetime of last rejection
+_REJECTION_COOLDOWN_MINUTES = 30        # don't retry a rejected symbol for 30 min
 
-def _ma20_extension_limit(symbol: str) -> float:
+
+def _is_in_rejection_cooldown(symbol: str) -> tuple[bool, str]:
+    """Return (True, reason) if symbol was recently rejected and should be skipped."""
+    last = _REJECTION_COOLDOWN.get(symbol)
+    if last is None:
+        return False, ""
+    mins = (datetime.now(timezone.utc) - last).total_seconds() / 60
+    if mins < _REJECTION_COOLDOWN_MINUTES:
+        return True, (
+            f"{symbol} in rejection cooldown — rejected {mins:.0f} min ago, "
+            f"retry in {_REJECTION_COOLDOWN_MINUTES - mins:.0f} min"
+        )
+    # Cooldown expired — remove stale entry
+    del _REJECTION_COOLDOWN[symbol]
+    return False, ""
+
+
+def _record_rejection(symbol: str) -> None:
+    """Mark symbol as recently rejected to start the cooldown timer."""
+    _REJECTION_COOLDOWN[symbol] = datetime.now(timezone.utc)
+
+
+def clear_rejection_cooldown(symbol: str) -> None:
+    """Explicitly clear cooldown — call when position is entered or closed."""
+    _REJECTION_COOLDOWN.pop(symbol, None)
+
+
+def _ma20_extension_limit(symbol: str, price: float = 0.0) -> float:
     """
     Return the maximum allowed % extension above MA20 for this symbol.
+    - Penny stocks (< $5): 40% — 10% on a $0.45 stock = just 4.5 cents, meaningless.
+                                   Penny stocks legitimately move 50-200% intraday.
     - Leveraged 3× ETFs: 18%  (they routinely run hot in bull markets)
     - Broad / non-leveraged ETFs: 12%
     - Individual stocks: 10% (original rule)
     """
+    if 0 < price < 5.0:
+        return 0.40
     if symbol in _LEVERAGED_ETFS:
         return 0.18
     if symbol in _BROAD_ETFS:
@@ -57,6 +94,13 @@ def should_confirm_entry(
     - RSI > 75 → skip
     - Price > MA20 * 1.05 → skip
     """
+    # ── Rejection cooldown check: skip immediately if rejected recently ──
+    # This prevents wasting deep-data fetches + AI cycles on stocks that
+    # clearly can't be entered (e.g. QUCY rejected 4× in an hour for same reason).
+    in_cooldown, cooldown_reason = _is_in_rejection_cooldown(symbol)
+    if in_cooldown and action == "buy":
+        return False, cooldown_reason
+
     if not closing_prices or len(closing_prices) < 2:
         return True, "Insufficient data for confirmation, proceeding anyway"
 
@@ -78,51 +122,64 @@ def should_confirm_entry(
             # Rule 1: Only block real panic selling (>5% down), not normal gap-downs
             # A stock down 2-4% from yesterday is often a buy-the-dip opportunity
             if current_price < yesterday_close * 0.95 and not needs_positions:
-                return False, (
+                reason = (
                     f"{symbol} down >5% from yesterday (${yesterday_close:.2f}→${current_price:.2f}) "
                     f"— confirmed weakness, skipping"
                 )
+                _record_rejection(symbol)
+                return False, reason
 
             # Rule 2: RSI ceiling at 80 — momentum stocks often run 75-85 on breakout days
             if rsi > 80:
-                return False, f"{symbol} RSI {rsi:.1f} — extremely overbought even for aggressive"
+                reason = f"{symbol} RSI {rsi:.1f} — extremely overbought even for aggressive"
+                _record_rejection(symbol)
+                return False, reason
 
             # Rule 3: Ticker-aware MA20 extension limit.
+            # Penny stocks: 40% (10% on $0.45 = 4.5 cents — meaningless filter).
             # Leveraged ETFs (TQQQ/SOXL/SPXL): 18% allowed — they run hot in bull markets.
             # Broad ETFs (QQQ/SPY/XLE): 12%.  Individual stocks: 10%.
             # When portfolio is thin (<3 positions) we lower the bar, but NEVER bypass
             # the check entirely — a hard cap at 1.5× the normal limit prevents chasing
-            # something already 30-40% extended (e.g. QUCY at 42% above MA20).
+            # something already 30-40% extended (e.g. QUCY at 87% above MA20).
             if ma20:
-                ext_limit = _ma20_extension_limit(symbol)
-                hard_cap  = ext_limit * 1.5   # e.g. 15% for stocks, 27% for leveraged ETFs
+                ext_limit = _ma20_extension_limit(symbol, current_price)
+                hard_cap  = ext_limit * 1.5   # e.g. 15% for stocks, 60% for penny stocks
                 pct_above  = (current_price / ma20 - 1) * 100
 
                 if needs_positions:
                     # Thin portfolio: allow up to hard_cap (not unlimited)
                     if current_price > ma20 * (1 + hard_cap):
-                        return False, (
+                        reason = (
                             f"{symbol} is {pct_above:.0f}% above MA20 (${ma20:.2f}) — "
                             f"too extended even with thin portfolio (cap={hard_cap*100:.0f}%)"
                         )
+                        _record_rejection(symbol)
+                        return False, reason
                 else:
                     if current_price > ma20 * (1 + ext_limit):
-                        return False, (
+                        reason = (
                             f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — "
                             f"parabolic, not a breakout (limit={ext_limit*100:.0f}%)"
                         )
+                        _record_rejection(symbol)
+                        return False, reason
 
             # Rule 4: Volume confirmation — only block if portfolio is not thin AND volume is very low
             if relative_volume < 0.7 and not needs_positions:
-                return False, (
+                reason = (
                     f"{symbol} relative volume {relative_volume:.1f}x — breakout not confirmed by volume, likely false move"
                 )
+                _record_rejection(symbol)
+                return False, reason
 
             # Rule 5: MACD momentum confirmation — only block if histogram clearly negative AND RSI not deeply oversold AND portfolio not thin
             if macd_histogram is not None and macd_histogram < -0.05 and rsi >= 45 and not needs_positions:
-                return False, (
+                reason = (
                     f"{symbol} MACD histogram {macd_histogram:.3f} — momentum negative, waiting for recovery"
                 )
+                _record_rejection(symbol)
+                return False, reason
 
             return True, (
                 f"{symbol} approved [AGGRESSIVE]: RSI={rsi:.1f}, "
@@ -132,20 +189,26 @@ def should_confirm_entry(
         else:
             # Conservative/balanced rules — same ticker-aware MA20 limits but tighter RSI
             if current_price < yesterday_close * 0.98:
-                return False, (
+                reason = (
                     f"{symbol} is down >2% from yesterday's close "
                     f"(${yesterday_close:.2f}→${current_price:.2f}) — waiting for stabilization"
                 )
+                _record_rejection(symbol)
+                return False, reason
             if rsi > 75:
-                return False, f"{symbol} RSI is {rsi:.1f} — overbought, waiting for pullback"
+                reason = f"{symbol} RSI is {rsi:.1f} — overbought, waiting for pullback"
+                _record_rejection(symbol)
+                return False, reason
             if ma20:
                 # Use half the aggressive limit for conservative mode (5% stocks, 9% leveraged ETFs)
-                ext_limit = _ma20_extension_limit(symbol) * 0.5
+                ext_limit = _ma20_extension_limit(symbol, current_price) * 0.5
                 pct_above  = (current_price / ma20 - 1) * 100
                 if current_price > ma20 * (1 + ext_limit):
-                    return False, (
+                    reason = (
                         f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — avoid chasing"
                     )
+                    _record_rejection(symbol)
+                    return False, reason
             return True, f"{symbol} passes entry confirmation: RSI={rsi:.1f}, price vs MA20 ok"
 
     elif action == "sell":
@@ -216,6 +279,11 @@ def should_scale_out(
     - Tracks the peak price of each position (high_watermark)
     - If price drops trail_pct% from peak while still in profit → exit to lock in gains
     - Only triggers after position is profitable — doesn't replace the hard stop loss
+
+    Dynamic trailing stop: caller should pass a tighter trail_pct as P&L grows:
+    - P&L >= 25% → 2% trail (lock in most of the gain)
+    - P&L >= 15% → 3% trail
+    - P&L < 15%  → 5% trail (standard)
 
     AGGRESSIVE: Let winners run longer before taking profits.
     Tighter loss-cutting to redeploy cash into better opportunities.

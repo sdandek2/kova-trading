@@ -100,6 +100,10 @@ _ai_sold_symbols: set = set()          # symbols sold by AI this cycle — guard
 # Prevents the cascade bug where remaining position sits at same P&L% and
 # fires the scale-out rule every cycle until position is nearly zero.
 _scale_out_counts: dict = {}           # symbol → int (how many scale-outs taken so far)
+_pyramid_counts: dict = {}             # symbol → int (how many pyramid adds taken; max 2)
+# Re-entry tracking: when we scale out partially, record the qty BEFORE the trim so we
+# can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
+_pre_scaleout_qty: dict = {}           # symbol → int (qty held before first scale-out)
 
 
 def _save_watermarks() -> None:
@@ -470,6 +474,12 @@ async def run_trading_cycle():
         for sym in list(_scale_out_counts.keys()):
             if sym not in held_symbols:
                 del _scale_out_counts[sym]
+        for sym in list(_pyramid_counts.keys()):
+            if sym not in held_symbols:
+                del _pyramid_counts[sym]
+        for sym in list(_pre_scaleout_qty.keys()):
+            if sym not in held_symbols:
+                del _pre_scaleout_qty[sym]
         # Persist long watermarks so trailing stops survive server restarts
         _save_watermarks()
 
@@ -501,20 +511,26 @@ async def run_trading_cycle():
             logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
 
         # ── Pyramid: add to winning positions (aggressive only) ──────────────
-        # When a long position is up 5-15% with strong momentum (MACD positive,
-        # RSI < 72, no first-scale-out yet), add 25% more — let winners compound.
-        # Cap: only pyramid once per position, only in aggressive mode, only if cash exists.
+        # Two tiers — let the best trades compound as far as they'll go:
+        #
+        # Tier 1 (first add): P&L 5-18%, MACD > 0.05, RSI < 72 → +25% of current qty
+        # Tier 2 (second add): P&L 22-40%, MACD > 0.03, RSI < 65 → +15% of current qty
+        #
+        # Guards: no scale-out taken yet (still in profit-building phase),
+        # max 2 pyramids per position, never spend >40% of cash on one pyramid.
         if strategy_key == "aggressive":
             for position in positions:
                 if position.side == "short":
                     continue
                 pnl = position.unrealized_pl_percent
-                # Only pyramid in the "sweet spot" — clearly working but not yet overbought
-                if not (5.0 <= pnl <= 18.0):
+                pyrs_taken = _pyramid_counts.get(position.symbol, 0)
+                # Max 2 pyramid adds per position
+                if pyrs_taken >= 2:
                     continue
-                # Only pyramid once (re-use scale_out_counts as proxy — if any trim has fired, skip)
+                # Never pyramid once scale-outs have started — position is in exit phase
                 if _scale_out_counts.get(position.symbol, 0) > 0:
                     continue
+
                 sym_data_p = snapshot_light.get(position.symbol, {})
                 cp = sym_data_p.get("closing_prices", [])
                 if not cp:
@@ -525,27 +541,38 @@ async def run_trading_cycle():
                 except Exception:
                     _mh = 0.0
                 _rsi_p = (compute_rsi(cp) or 50.0)
-                # Strong momentum: MACD histogram positive AND RSI not overbought
-                if _mh > 0.05 and _rsi_p < 72:
-                    # 25% add-on capped by strategy max_position and available cash
-                    add_qty = max(1, int(float(position.qty) * 0.25))
-                    p_price = sym_data_p.get("current_price") or position.current_price
-                    add_cost = add_qty * p_price
-                    if add_cost <= _tradeable_cash * 0.5:  # never spend >50% of cash on a pyramid
-                        pyramid_reason = (
-                            f"{position.symbol} pyramid: up {pnl:.1f}%, MACD={_mh:.3f}, "
-                            f"RSI={_rsi_p:.0f} — adding {add_qty} shares to winner"
-                        )
-                        logger.info(f"PYRAMID: {pyramid_reason}")
-                        log_bot_activity("approved", pyramid_reason,
-                                         symbol=position.symbol, cycle_id=_current_cycle_id)
-                        pyr_order = alpaca_service.submit_market_order(
-                            symbol=position.symbol, qty=add_qty, side="buy"
-                        )
-                        if pyr_order:
-                            _tradeable_cash -= add_cost
-                            await manager.broadcast({"type": "order_filled",
-                                                     "data": pyr_order.model_dump(mode="json")})
+                p_price = sym_data_p.get("current_price") or position.current_price
+
+                # Tier 1: sweet spot — clearly working, not yet overbought
+                tier1 = (5.0 <= pnl <= 18.0) and _mh > 0.05 and _rsi_p < 72 and pyrs_taken == 0
+                # Tier 2: extended winner — add smaller on continued strength
+                tier2 = (22.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
+
+                if tier1:
+                    add_pct, tier_label = 0.25, "Tier-1"
+                elif tier2:
+                    add_pct, tier_label = 0.15, "Tier-2"
+                else:
+                    continue
+
+                add_qty = max(1, int(float(position.qty) * add_pct))
+                add_cost = add_qty * p_price
+                if add_cost <= _tradeable_cash * 0.40:  # never spend >40% of cash on one pyramid
+                    pyramid_reason = (
+                        f"{position.symbol} pyramid {tier_label}: up {pnl:.1f}%, "
+                        f"MACD={_mh:.3f}, RSI={_rsi_p:.0f} — adding {add_qty} shares (+{add_pct*100:.0f}%)"
+                    )
+                    logger.info(f"PYRAMID {tier_label}: {pyramid_reason}")
+                    log_bot_activity("approved", pyramid_reason,
+                                     symbol=position.symbol, cycle_id=_current_cycle_id)
+                    pyr_order = alpaca_service.submit_market_order(
+                        symbol=position.symbol, qty=add_qty, side="buy"
+                    )
+                    if pyr_order:
+                        _pyramid_counts[position.symbol] = pyrs_taken + 1
+                        _tradeable_cash -= add_cost
+                        await manager.broadcast({"type": "order_filled",
+                                                 "data": pyr_order.model_dump(mode="json")})
 
         # ── Scale-out: review existing positions for profit-taking / loss cuts ──
         for position in positions:
@@ -553,7 +580,16 @@ async def run_trading_cycle():
             closing_prices = sym_data.get("closing_prices", [])
             # compute_rsi returns None when <15 bars — fall back to 50 (neutral, no rule fires)
             rsi = (compute_rsi(closing_prices) or 50.0) if closing_prices else 50.0
-            trail_pct = _risk_settings.get("stop_loss_pct", 0.05)
+            # ── Dynamic trailing stop: tighten as profit grows ────────────────
+            # Locks in progressively more of a big gain rather than letting a
+            # 30% winner give back 5% before stopping out.
+            _pnl_for_trail = position.unrealized_pl_percent
+            if _pnl_for_trail >= 25.0:
+                trail_pct = 0.02   # up 25%+ → 2% trail — protect most of the gain
+            elif _pnl_for_trail >= 15.0:
+                trail_pct = 0.03   # up 15-25% → 3% trail
+            else:
+                trail_pct = float(_risk_settings.get("stop_loss_pct", 0.05))
 
             is_short = position.side == "short"
 
@@ -696,6 +732,9 @@ async def run_trading_cycle():
                 )
                 # Advance staircase counter so next trim needs 15pp more gain
                 if action_label == "scale_out":
+                    # Record pre-trim qty on first scale-out (for re-entry logic)
+                    if _scale_out_counts.get(position.symbol, 0) == 0:
+                        _pre_scaleout_qty[position.symbol] = int(float(position.qty))
                     _scale_out_counts[position.symbol] = _scale_out_counts.get(position.symbol, 0) + 1
                     logger.info(
                         f"Scale-out #{_scale_out_counts[position.symbol]} for {position.symbol} — "
@@ -746,6 +785,60 @@ async def run_trading_cycle():
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                     })
+
+        # ── Re-entry after scale-out (aggressive only) ───────────────────────
+        # After trimming a winner, if the stock pulls back to near MA20 and
+        # MACD turns positive again, we re-buy a portion to get back into the move.
+        # Condition: still holding (partial position remains), scale-out taken,
+        # price near MA20 (within 6%), MACD histogram > 0, RSI < 58 (not overbought).
+        if strategy_key == "aggressive":
+            for position in positions:
+                if position.side == "short":
+                    continue
+                sym = position.symbol
+                if _scale_out_counts.get(sym, 0) == 0:
+                    continue  # no scale-out taken yet, nothing to re-enter
+                pnl = position.unrealized_pl_percent
+                if pnl <= 0:
+                    continue  # don't re-enter a losing position
+                orig_qty = _pre_scaleout_qty.get(sym, 0)
+                current_qty = int(float(position.qty))
+                if orig_qty <= current_qty:
+                    continue  # already back to original size
+                reentry_qty = min(orig_qty - current_qty, max(1, int(orig_qty * 0.25)))
+                sd = snapshot_light.get(sym, {})
+                cp_re = sd.get("closing_prices", [])
+                if not cp_re:
+                    continue
+                try:
+                    from services.indicators import compute_macd as _cmacd_re, compute_moving_averages as _cma_re
+                    _mh_re = (_cmacd_re(cp_re) or {}).get("histogram", 0.0)
+                    _ma20_re = _cma_re(cp_re).get("ma20")
+                except Exception:
+                    continue
+                _rsi_re = (compute_rsi(cp_re) or 50.0)
+                _price_re = sd.get("current_price") or position.current_price
+                # Must be near MA20 (pulled back properly) with resuming momentum
+                near_ma20 = _ma20_re and (_price_re <= _ma20_re * 1.06)
+                if not (near_ma20 and _mh_re > 0.0 and _rsi_re < 58):
+                    continue
+                reentry_cost = reentry_qty * _price_re
+                if reentry_cost > _tradeable_cash * 0.35:
+                    continue
+                reentry_reason = (
+                    f"{sym} re-entry after scale-out: pulled back to MA20 "
+                    f"(${_ma20_re:.2f}), MACD={_mh_re:.3f}, RSI={_rsi_re:.0f} "
+                    f"— re-buying {reentry_qty} shares (was {orig_qty}, now {current_qty})"
+                )
+                logger.info(f"RE-ENTRY: {reentry_reason}")
+                log_bot_activity("approved", reentry_reason, symbol=sym, cycle_id=_current_cycle_id)
+                re_order = alpaca_service.submit_market_order(symbol=sym, qty=reentry_qty, side="buy")
+                if re_order:
+                    _tradeable_cash -= reentry_cost
+                    # Reset scale-out count so staircase restarts from current position
+                    _scale_out_counts[sym] = 0
+                    _pre_scaleout_qty.pop(sym, None)
+                    await manager.broadcast({"type": "order_filled", "data": re_order.model_dump(mode="json")})
 
         # ── Time-of-day filter ──
         # "closed"      → skip entire cycle (pre-market / after-hours)
@@ -980,6 +1073,51 @@ async def run_trading_cycle():
                     )
                     if vol_qty != decision.quantity:
                         logger.info(f"Vol-adjust: {decision.symbol} {decision.quantity}→{vol_qty} shares (ATR={atr:.2f})")
+
+                    # ── Conviction-based sizing multiplier ────────────────────
+                    # Claude embeds [HIGH]/[MEDIUM]/[LOW] in reasoning.
+                    # High-conviction trades deserve a bigger position — up to 1.25×.
+                    # Low-conviction trades get 0.8× to limit exposure on uncertain setups.
+                    _reasoning_upper = decision.reasoning.upper()
+                    if "[HIGH]" in _reasoning_upper:
+                        _conv_mult = 1.25
+                    elif "[LOW]" in _reasoning_upper:
+                        _conv_mult = 0.80
+                    else:
+                        _conv_mult = 1.0
+                    if _conv_mult != 1.0:
+                        _pre_conv = vol_qty
+                        vol_qty = max(1, int(vol_qty * _conv_mult))
+                        logger.info(
+                            f"Conviction sizing: {decision.symbol} "
+                            f"{'HIGH' if _conv_mult > 1 else 'LOW'} confidence → "
+                            f"{_pre_conv}→{vol_qty} shares ({_conv_mult:.2f}×)"
+                        )
+
+                    # ── Sector momentum tilt ──────────────────────────────────
+                    # Hot sectors (score > +2%) get 20% more shares.
+                    # Cold sectors (score < -1%) get 20% fewer shares.
+                    # Uses sector_scores computed at cycle start (already in scope).
+                    try:
+                        _sym_sector = (sector_context or {}).get(decision.symbol, {}).get("sector")
+                        _sec_score = (sector_scores or {}).get(_sym_sector, 0.0) if _sym_sector else 0.0
+                        if _sec_score > 2.0:
+                            _pre_sec = vol_qty
+                            vol_qty = max(1, int(vol_qty * 1.20))
+                            logger.info(
+                                f"Sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
+                                f"{decision.symbol} {_pre_sec}→{vol_qty} shares (+20%)"
+                            )
+                        elif _sec_score < -1.0:
+                            _pre_sec = vol_qty
+                            vol_qty = max(1, int(vol_qty * 0.80))
+                            logger.info(
+                                f"Sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
+                                f"{decision.symbol} {_pre_sec}→{vol_qty} shares (-20%)"
+                            )
+                    except Exception:
+                        pass
+
                     decision.quantity = vol_qty
 
                 # Scale-in (strategy-aware — aggressive takes full position)
