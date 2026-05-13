@@ -8,6 +8,7 @@ so local development without Postgres still works fine.
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -17,34 +18,36 @@ logger = logging.getLogger(__name__)
 _memory_cache: dict[str, tuple[Any, datetime]] = {}
 
 _conn = None  # module-level connection (lazy)
+_conn_lock = threading.Lock()
 
 
 def _get_conn():
     """Return a live psycopg2 connection, or None if DB is unavailable."""
     global _conn
-    from config import settings
+    with _conn_lock:
+        from config import settings
 
-    if not settings.database_url:
-        return None
+        if not settings.database_url:
+            return None
 
-    # Re-use existing connection if still open
-    try:
-        if _conn and not _conn.closed:
-            _conn.cursor().execute("SELECT 1")
+        # Re-use existing connection if still open
+        try:
+            if _conn and not _conn.closed:
+                _conn.cursor().execute("SELECT 1")
+                return _conn
+        except Exception:
+            _conn = None
+
+        try:
+            import psycopg2
+            _conn = psycopg2.connect(settings.database_url)
+            _conn.autocommit = True
+            logger.info("Connected to Postgres.")
+            _ensure_table(_conn)
             return _conn
-    except Exception:
-        _conn = None
-
-    try:
-        import psycopg2
-        _conn = psycopg2.connect(settings.database_url)
-        _conn.autocommit = True
-        logger.info("Connected to Postgres.")
-        _ensure_table(_conn)
-        return _conn
-    except Exception as e:
-        logger.warning(f"Postgres unavailable — using in-memory cache. ({e})")
-        return None
+        except Exception as e:
+            logger.warning(f"Postgres unavailable — using in-memory cache. ({e})")
+            return None
 
 
 def _ensure_table(conn):
@@ -519,9 +522,10 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 SELECT id, entry_price, quantity, entry_time
                 FROM position_log
                 WHERE symbol = %s AND exit_time IS NULL
+                AND (side = %s OR side IS NULL)
                 ORDER BY entry_time DESC NULLS LAST
                 LIMIT 1
-            """, (symbol,))
+            """, (symbol, side))
             row = cur.fetchone()
 
             if row:

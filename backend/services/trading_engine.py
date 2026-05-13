@@ -473,14 +473,110 @@ async def run_trading_cycle():
         # Persist long watermarks so trailing stops survive server restarts
         _save_watermarks()
 
+        # ── Correlated-position groups ────────────────────────────────────────
+        # Symbols in the same group move together (same underlying exposure).
+        # Holding 2+ from a group multiplies risk without diversifying.
+        # Used below to gate new entries only — existing positions are untouched.
+        _CORR_GROUPS: list[set] = [
+            {"TQQQ", "SOXL", "TECL", "FNGU", "SPXL", "UPRO", "UDOW", "TNA"},   # leveraged long
+            {"SQQQ", "SOXS", "TECS", "FNGS", "SPXS", "SPXU", "SDOW", "TZA"},   # leveraged short
+        ]
+
+        def _corr_group(sym: str) -> set | None:
+            for g in _CORR_GROUPS:
+                if sym in g:
+                    return g
+            return None
+
+        held_symbols_set = {p.symbol for p in positions}
+
         # ── Scale-out: review existing positions for profit-taking / loss cuts ──
         for position in positions:
             sym_data = snapshot_light.get(position.symbol, {})
             closing_prices = sym_data.get("closing_prices", [])
-            rsi = compute_rsi(closing_prices) if closing_prices else 50.0
+            # compute_rsi returns None when <15 bars — fall back to 50 (neutral, no rule fires)
+            rsi = (compute_rsi(closing_prices) or 50.0) if closing_prices else 50.0
             trail_pct = _risk_settings.get("stop_loss_pct", 0.05)
 
             is_short = position.side == "short"
+
+            # ── Stale-position cleanup ────────────────────────────────────────
+            # A position flat for 48+ hours is dead money — exit and redeploy.
+            # Only triggers for longs between -1% and +3% P&L (truly flat).
+            # Does NOT fire when already being handled by scale-out or trailing stop.
+            if not is_short:
+                entry_time = _previous_positions.get(position.symbol, {}).get("entry_time")
+                if entry_time:
+                    hours_held = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+                    pnl = position.unrealized_pl_percent
+                    if hours_held >= 48 and -1.0 <= pnl <= 3.0:
+                        stale_reason = (
+                            f"{position.symbol} held {hours_held:.0f}h flat at {pnl:+.1f}% "
+                            f"— redeploying capital to better opportunities"
+                        )
+                        log_bot_activity("scale_out", stale_reason,
+                                         symbol=position.symbol, cycle_id=_current_cycle_id)
+                        if position.symbol in _previous_positions:
+                            _previous_positions[position.symbol]["exit_reason"] = "stale_exit"
+                        try:
+                            open_orders = alpaca_service.get_orders(limit=20)
+                            for o in open_orders:
+                                if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                                    alpaca_service.cancel_order(o.id)
+                        except Exception:
+                            pass
+                        order = alpaca_service.submit_market_order(
+                            symbol=position.symbol, qty=int(float(position.qty)), side="sell"
+                        )
+                        if order:
+                            await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
+                            await manager.broadcast({"type": "ai_analysis", "data": {
+                                "reasoning": stale_reason, "last_action": "sell",
+                                "symbol": position.symbol, "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }})
+                        continue  # skip scale-out check for this position
+
+            # ── Momentum-decay exit ───────────────────────────────────────────
+            # When MACD histogram turns clearly negative while position still has
+            # some profit (1-15%), exit before momentum fully reverses.
+            # Only for longs in normal conditions (not when deeply overbought — that's
+            # handled by scale-out — and not when trailing stop is about to fire).
+            if not is_short:
+                macd_data = {}
+                try:
+                    from services.indicators import compute_macd
+                    macd_data = compute_macd(closing_prices) if closing_prices else {}
+                except Exception:
+                    pass
+                macd_hist = macd_data.get("histogram", 0.0)
+                pnl = position.unrealized_pl_percent
+                if macd_hist < -0.1 and 1.0 <= pnl <= 15.0:
+                    decay_reason = (
+                        f"{position.symbol} momentum decaying: MACD hist {macd_hist:.3f} "
+                        f"while up {pnl:.1f}% — exiting before reversal"
+                    )
+                    logger.info(f"MOMENTUM_DECAY: {decay_reason}")
+                    log_bot_activity("scale_out", decay_reason,
+                                     symbol=position.symbol, cycle_id=_current_cycle_id)
+                    if position.symbol in _previous_positions:
+                        _previous_positions[position.symbol]["exit_reason"] = "momentum_decay"
+                    try:
+                        open_orders = alpaca_service.get_orders(limit=20)
+                        for o in open_orders:
+                            if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                                alpaca_service.cancel_order(o.id)
+                    except Exception:
+                        pass
+                    order = alpaca_service.submit_market_order(
+                        symbol=position.symbol, qty=int(float(position.qty)), side="sell"
+                    )
+                    if order:
+                        await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
+                        await manager.broadcast({"type": "ai_analysis", "data": {
+                            "reasoning": decay_reason, "last_action": "sell",
+                            "symbol": position.symbol, "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }})
+                    continue
 
             if is_short:
                 # Short position: check if we should cover (buy back)
@@ -687,6 +783,23 @@ async def run_trading_cycle():
             if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
                 continue
 
+            # ── Correlated-position cap: one instrument per leveraged group ──
+            # Holding TQQQ + SOXL = double exposure to the same tech/semi shock.
+            # If we already hold any symbol in the same correlated group, skip the entry.
+            if decision.action in ("buy", "short"):
+                grp = _corr_group(decision.symbol)
+                if grp:
+                    already_held = [s for s in held_symbols_set if s != decision.symbol and s in grp]
+                    if already_held:
+                        corr_msg = (
+                            f"{decision.action.upper()} {decision.symbol} blocked — "
+                            f"already hold {already_held} in same correlated group"
+                        )
+                        logger.info(f"Correlated cap: {corr_msg}")
+                        log_bot_activity("entry_rejected", corr_msg,
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+
             # ── Opening window: block new entries during first 15 min but allow exits ──
             if decision.action in ("buy", "short") and not entries_allowed:
                 logger.info(
@@ -749,6 +862,15 @@ async def run_trading_cycle():
             closing_prices = sym_data.get("closing_prices", [])
             current_price = sym_data.get("current_price") or 0
 
+            _rel_vol = sym_data.get("relative_volume", 1.0)
+            _macd_hist = None
+            try:
+                from services.indicators import compute_macd
+                _macd_data = compute_macd(closing_prices) if closing_prices else {}
+                _macd_hist = _macd_data.get("histogram")
+            except Exception:
+                pass
+
             confirmed, confirm_reason = should_confirm_entry(
                 symbol=decision.symbol,
                 action=decision.action,
@@ -756,6 +878,8 @@ async def run_trading_cycle():
                 current_price=current_price,
                 strategy_key=strategy_key,
                 positions_count=len(positions),
+                relative_volume=_rel_vol,
+                macd_histogram=_macd_hist,
             )
 
             if not confirmed:

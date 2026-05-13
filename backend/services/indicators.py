@@ -1,7 +1,7 @@
 def compute_rsi(prices: list[float], period: int = 14) -> float:
     """Compute RSI using Wilder's smoothed moving average (standard definition)."""
     if len(prices) < period + 1:
-        return 50.0  # neutral default
+        return None  # no data — caller must handle
 
     deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
     gains = [max(d, 0) for d in deltas]

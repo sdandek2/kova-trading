@@ -40,6 +40,8 @@ def should_confirm_entry(
     current_price: float,
     strategy_key: str = "balanced",
     positions_count: int = 0,
+    relative_volume: float = 1.0,
+    macd_histogram: float = None,
 ) -> tuple[bool, str]:
     """
     Strategy-aware entry confirmation.
@@ -61,7 +63,9 @@ def should_confirm_entry(
     from services.indicators import compute_rsi, compute_moving_averages
 
     yesterday_close = closing_prices[-2]
-    rsi = compute_rsi(closing_prices)
+    # compute_rsi returns None when there are fewer than 15 bars.
+    # Default to 50 (neutral) so no RSI-based rule fires on insufficient data.
+    rsi = compute_rsi(closing_prices) or 50.0
     mas = compute_moving_averages(closing_prices)
     ma20 = mas.get("ma20")
     is_aggressive = strategy_key == "aggressive"
@@ -107,6 +111,18 @@ def should_confirm_entry(
                             f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — "
                             f"parabolic, not a breakout (limit={ext_limit*100:.0f}%)"
                         )
+
+            # Rule 4: Volume confirmation — only block if portfolio is not thin AND volume is very low
+            if relative_volume < 0.7 and not needs_positions:
+                return False, (
+                    f"{symbol} relative volume {relative_volume:.1f}x — breakout not confirmed by volume, likely false move"
+                )
+
+            # Rule 5: MACD momentum confirmation — only block if histogram clearly negative AND RSI not deeply oversold AND portfolio not thin
+            if macd_histogram is not None and macd_histogram < -0.05 and rsi >= 45 and not needs_positions:
+                return False, (
+                    f"{symbol} MACD histogram {macd_histogram:.3f} — momentum negative, waiting for recovery"
+                )
 
             return True, (
                 f"{symbol} approved [AGGRESSIVE]: RSI={rsi:.1f}, "
