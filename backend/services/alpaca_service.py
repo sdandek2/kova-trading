@@ -142,13 +142,16 @@ def submit_market_order(
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
 
-                # First half: limit sell at TP price
+                # First half: limit sell at TP price.
+                # Use DAY (not GTC) so this order expires harmlessly at market close
+                # if the buy limit above never filled — prevents an accidental short position
+                # from an orphaned sell order lingering into the next trading day.
                 try:
                     limit_sell = LimitOrderRequest(
                         symbol=symbol,
                         qty=half_qty,
                         side=OrderSide.SELL,
-                        time_in_force=TimeInForce.GTC,
+                        time_in_force=TimeInForce.DAY,
                         limit_price=take_profit_price,
                     )
                     trading_client.submit_order(limit_sell)
@@ -156,13 +159,14 @@ def submit_market_order(
                 except Exception as e:
                     logger.warning(f"Partial limit sell failed (non-fatal): {e}")
 
-                # Second half: trailing stop to ride the winner
+                # Second half: trailing stop to ride the winner.
+                # Also DAY for the same reason — expires if buy never filled.
                 try:
                     trail_req = TrailingStopOrderRequest(
                         symbol=symbol,
                         qty=remaining_qty,
                         side=OrderSide.SELL,
-                        time_in_force=TimeInForce.GTC,
+                        time_in_force=TimeInForce.DAY,
                         trail_percent=stop_loss_pct * 100,
                     )
                     trading_client.submit_order(trail_req)
@@ -525,14 +529,15 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
             current_price = float(quote.ask_price) if quote and quote.ask_price else None
 
             symbol_bars = bars_dict.get(symbol, [])
+            closing_prices = [float(b.close) for b in symbol_bars]
             five_day_change = None
-            if symbol_bars and len(symbol_bars) >= 6:
-                oldest_5d = float(symbol_bars[-6].close)
-                newest = float(symbol_bars[-1].close)
+            if closing_prices and len(closing_prices) >= 6:
+                oldest_5d = closing_prices[-6]
+                newest = closing_prices[-1]
                 five_day_change = round((newest - oldest_5d) / oldest_5d * 100, 2) if oldest_5d else None
-            elif symbol_bars and len(symbol_bars) >= 2:
-                oldest = float(symbol_bars[0].close)
-                newest = float(symbol_bars[-1].close)
+            elif closing_prices and len(closing_prices) >= 2:
+                oldest = closing_prices[0]
+                newest = closing_prices[-1]
                 five_day_change = round((newest - oldest) / oldest * 100, 2) if oldest else None
 
             volume = int(symbol_bars[-1].volume) if symbol_bars else 0
@@ -544,6 +549,7 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
             snapshot[symbol] = {
                 "current_price": current_price,
                 "five_day_change_pct": five_day_change,
+                "closing_prices": closing_prices,  # included for RSI/MACD computation in Step 1
                 "volume": volume,
                 "avg_volume": avg_volume,
                 "relative_volume": relative_volume,

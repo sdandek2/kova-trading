@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -235,7 +236,8 @@ async def run_trading_cycle():
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
-        account = alpaca_service.get_account()
+        loop = asyncio.get_event_loop()
+        account = await loop.run_in_executor(None, alpaca_service.get_account)
         circuit_breaker_active = account.day_pl_percent < -_risk_settings["daily_loss_limit_pct"]
         if circuit_breaker_active:
             logger.warning(
@@ -259,17 +261,21 @@ async def run_trading_cycle():
                 }
             })
 
-        positions = alpaca_service.get_positions()
-        universe = alpaca_service.get_tradeable_universe()
+        positions = await loop.run_in_executor(None, alpaca_service.get_positions)
+        universe = await loop.run_in_executor(None, alpaca_service.get_tradeable_universe)
         logger.info(f"Universe: {len(universe)} stocks — 100% market-driven (top movers, volume, news, sectors)")
-        # Lightweight snapshot for broad scan (Step 1) — price + 5-day change only
-        snapshot_light = alpaca_service.get_market_snapshot_light(universe)
+        # Lightweight snapshot for broad scan (Step 1) — price + 5-day change + closing prices for indicators
+        snapshot_light = await loop.run_in_executor(
+            None, functools.partial(alpaca_service.get_market_snapshot_light, universe)
+        )
 
         # ── Fetch multi-source news ONCE per cycle ──
         # Used for both sentiment scoring AND passing headlines to the AI prompt
         news_articles = []
         try:
-            news_articles = alpaca_service.get_news(symbols=universe[:10], limit=30)
+            news_articles = await loop.run_in_executor(
+                None, functools.partial(alpaca_service.get_news, symbols=universe[:10], limit=30)
+            )
             logger.info(f"Fetched {len(news_articles)} news articles from multi-source feed")
         except Exception as e:
             logger.warning(f"Could not fetch news: {e}")
@@ -530,23 +536,27 @@ async def run_trading_cycle():
         elif _reserved > 0:
             logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
 
-        decisions = claude_service.analyze_and_decide(
-            market_snapshot=snapshot_light,
-            positions=positions,
-            account_cash=_tradeable_cash,
-            portfolio_value=account.portfolio_value,
-            sentiment=sentiment,
-            macro=macro,
-            sector_info=sector_info,
-            earnings_map=earnings_map,
-            geo_context=geo,
-            trend_forecast=trend_forecast,
-            news_headlines=news_headlines,
-            full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
-            sector_context=sector_context,
-            recent_trades=recent_trades,
-            earnings_plays=earnings_plays,
-            afternoon_pressure=afternoon_pressure,
+        decisions = await loop.run_in_executor(
+            None,
+            functools.partial(
+                claude_service.analyze_and_decide,
+                market_snapshot=snapshot_light,
+                positions=positions,
+                account_cash=_tradeable_cash,
+                portfolio_value=account.portfolio_value,
+                sentiment=sentiment,
+                macro=macro,
+                sector_info=sector_info,
+                earnings_map=earnings_map,
+                geo_context=geo,
+                trend_forecast=trend_forecast,
+                news_headlines=news_headlines,
+                full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
+                sector_context=sector_context,
+                recent_trades=recent_trades,
+                earnings_plays=earnings_plays,
+                afternoon_pressure=afternoon_pressure,
+            )
         )
 
         _last_analysis_at = datetime.now(timezone.utc)
@@ -631,7 +641,9 @@ async def run_trading_cycle():
                 _cycle_open_count += 1
 
             # ── Entry confirmation (strategy-aware) ──
-            deep = alpaca_service.get_market_snapshot([decision.symbol])
+            deep = await loop.run_in_executor(
+                None, functools.partial(alpaca_service.get_market_snapshot, [decision.symbol])
+            )
             sym_data = deep.get(decision.symbol) or snapshot_light.get(decision.symbol, {})
             closing_prices = sym_data.get("closing_prices", [])
             current_price = sym_data.get("current_price") or 0
@@ -745,9 +757,20 @@ async def run_trading_cycle():
                     f"| trades today: {_daily_trade_count[today]} | cycle opens: {_cycle_open_count}/{_max_trades_this_cycle}"
                 )
 
-                # Log position open / close to position_log
+                # Log position open / close to position_log.
+                # For limit orders, only log and seed watermarks if the order actually filled.
+                # An unfilled limit (filled_avg_price is None, status != "filled") must NOT be
+                # logged as an open position — doing so pollutes performance metrics with phantom
+                # trades and causes the cycle-detect logic to fire a false close next cycle.
+                order_filled = order.filled_avg_price is not None or order.status == "filled"
                 fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)
-                if decision.action == "short" and fill_price > 0:
+                if not order_filled:
+                    logger.info(
+                        f"Order submitted but not yet filled ({order.status}) — "
+                        f"skipping position_log entry for {decision.symbol}. "
+                        f"Will be picked up by cycle-detect once Alpaca confirms the fill."
+                    )
+                elif decision.action == "short" and fill_price > 0:
                     log_position_open(
                         symbol=decision.symbol,
                         entry_price=fill_price,
