@@ -27,7 +27,7 @@ struct TaxSummaryView: View {
                             ForEach(brackets, id: \.rate) { b in
                                 Button(b.label) {
                                     selectedRate = b.rate
-                                    Task { await load() }
+                                    Task { await load(rate: b.rate) }
                                 }
                                 .font(.subheadline).fontWeight(.semibold)
                                 .padding(.horizontal, 14).padding(.vertical, 8)
@@ -83,7 +83,7 @@ struct TaxSummaryView: View {
                                    valueColor: .primary)
                         Divider().padding(.leading, 16)
                         FinanceRow(label: "Estimated Tax",
-                                   value: "−\(formatDollar(s.tax.estimatedTax))",
+                                   value: "-$\(String(format: "%.2f", s.tax.estimatedTax))",
                                    valueColor: .red,
                                    bold: true)
                         Divider().padding(.leading, 16)
@@ -124,11 +124,11 @@ struct TaxSummaryView: View {
         .refreshable { await load() }
     }
 
-    private func load() async {
+    private func load(rate: Double? = nil) async {
         isLoading = true
         error = nil
         do {
-            summary = try await APIService.shared.getTaxSummary(bracketRate: selectedRate)
+            summary = try await APIService.shared.getTaxSummary(bracketRate: rate ?? selectedRate)
         } catch {
             self.error = "Could not load tax data: \(error.localizedDescription)"
         }
