@@ -478,7 +478,7 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
     _step3_priority = {"sell": 0, "buy": 1, "short": 1, "hold": 2}
     approved = sorted(approved, key=lambda t: _step3_priority.get(t.get("action", "hold"), 2))
 
-    for trade in approved[:3]:  # max 3 per cycle
+    for trade in approved:  # no cap here — sector/cash checks may discard some; trading_engine enforces max_trades_per_cycle
         sym = trade.get("symbol")
         action = trade.get("action", "hold")
         confidence = trade.get("confidence", "medium")
@@ -511,19 +511,27 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             continue
 
         # Sector correlation check
+        # Leveraged ETFs (SOXL, TQQQ, SPXL etc.) are exempt — they're already
+        # capped by _CORR_GROUPS in trading_engine.py. Counting them here would
+        # wrongly block individual stocks in the same sector (e.g. MU/NVDA blocked
+        # because SOXL already consumed the Semis slot).
         try:
+            from services.entry_timing import _LEVERAGED_ETFS as _LEV_ETFS
             from services.sector_momentum import get_sector_for_symbol
-            sym_sector = get_sector_for_symbol(sym)
-            sector_cap = current_strategy.get("sector_cap", 1)
-            existing_sector_count = sum(1 for s in sectors_bought if s == sym_sector)
-            held_in_sector = [p.symbol for p in positions if get_sector_for_symbol(p.symbol) == sym_sector]
-            if existing_sector_count >= sector_cap and sym_sector not in ("Unknown", "Broad"):
-                logger.info(f"Skipping {sym} — already buying {existing_sector_count} {sym_sector} stocks this cycle (cap={sector_cap})")
-                continue
-            if len(held_in_sector) >= sector_cap and sym_sector not in ("Unknown", "Broad"):
-                logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (cap={sector_cap})")
-                continue
-            sectors_bought.append(sym_sector)
+            if sym not in _LEV_ETFS:
+                sym_sector = get_sector_for_symbol(sym)
+                sector_cap = current_strategy.get("sector_cap", 1)
+                existing_sector_count = sum(1 for s in sectors_bought if s == sym_sector)
+                held_in_sector = [p.symbol for p in positions if p.symbol not in _LEV_ETFS and get_sector_for_symbol(p.symbol) == sym_sector]
+                if existing_sector_count >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                    logger.info(f"Skipping {sym} — already buying {existing_sector_count} {sym_sector} stocks this cycle (cap={sector_cap})")
+                    continue
+                if len(held_in_sector) >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                    logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (cap={sector_cap})")
+                    continue
+                sectors_bought.append(sym_sector)
+            else:
+                logger.debug(f"{sym} is a leveraged ETF — skipping sector cap check")
         except Exception:
             pass
 

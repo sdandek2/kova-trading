@@ -439,7 +439,9 @@ def get_tradeable_universe() -> list[str]:
 
     def add(symbols: list[str]):
         for s in symbols:
-            if s and s not in seen:
+            # Filter out non-US symbols (e.g. TSX:IMO, LSE:XXXX) — Alpaca US equity
+            # API rejects them with "invalid symbol" and pollutes the snapshot fetch.
+            if s and s not in seen and ":" not in s:
                 seen.add(s)
                 universe.append(s)
 
