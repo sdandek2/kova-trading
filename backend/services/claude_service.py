@@ -537,7 +537,14 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
                 effective_max_position = portfolio_value * _penny_pct
             else:
                 effective_max_position = max_position
-            max_shares = int(effective_max_position / price)
+            # Cap max_shares to what's actually affordable from remaining cash.
+            # Without this cap the bot computes max_shares from the strategy max_position
+            # (e.g. 20% of $30k = $6,000 → 78 TQQQ shares) and then skips the trade
+            # entirely when cash is only $1,000 — even though 13 affordable shares exist.
+            max_shares_by_strategy = int(effective_max_position / price)
+            max_shares_by_cash     = int(remaining_cash / price) if action == "buy" else max_shares_by_strategy
+            max_shares = min(max_shares_by_strategy, max_shares_by_cash)
+
             is_aggressive = current_strategy.get("key") == "aggressive"
             if qty_suggestion:
                 final_qty = min(int(qty_suggestion), max_shares)
@@ -546,8 +553,8 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
                 final_qty = max(1, int(max_shares * size_pct))
 
             cost = price * final_qty
-            if action == "buy" and (final_qty < 1 or cost > remaining_cash):
-                logger.info(f"Skipping {sym} — insufficient cash (need ${cost:.0f}, have ${remaining_cash:.0f})")
+            if action == "buy" and final_qty < 1:
+                logger.info(f"Skipping {sym} — insufficient cash (have ${remaining_cash:.0f}, price ${price:.2f})")
                 continue
             if action == "buy":
                 remaining_cash -= cost
@@ -565,9 +572,13 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             # if the bot buys the full rotated amount in the same cycle.
             price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or pos.current_price
             proceeds = price * final_qty
-            buffered_proceeds = proceeds * 0.90
+            # 80% buffer (down from 90%): bracket orders reserve funds for both the
+            # buy leg and stop-loss leg simultaneously, so the effective available
+            # cash is lower than the raw sell proceeds. 80% prevents negative cash
+            # when the bot rotates (sell + buy) within the same cycle.
+            buffered_proceeds = proceeds * 0.80
             remaining_cash += buffered_proceeds
-            logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} gross / +${buffered_proceeds:,.0f} usable (90% buffer) → remaining cash ${remaining_cash:,.0f}")
+            logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} gross / +${buffered_proceeds:,.0f} usable (80% buffer) → remaining cash ${remaining_cash:,.0f}")
         else:
             continue
 
