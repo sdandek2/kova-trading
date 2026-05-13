@@ -236,7 +236,7 @@ async def run_trading_cycle():
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         account = await loop.run_in_executor(None, alpaca_service.get_account)
         circuit_breaker_active = account.day_pl_percent < -_risk_settings["daily_loss_limit_pct"]
         if circuit_breaker_active:
