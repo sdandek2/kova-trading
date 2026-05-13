@@ -294,10 +294,19 @@ async def run_trading_cycle():
             if art.get("headline")
         ]
 
-        macro, sector_info = await asyncio.gather(
+        _gather_results = await asyncio.gather(
             loop.run_in_executor(None, get_macro_context),
             loop.run_in_executor(None, get_sector_rotation),
+            return_exceptions=True,
         )
+        macro = _gather_results[0] if not isinstance(_gather_results[0], Exception) else {
+            "market_regime": "neutral", "vix_level": "normal", "spy_trend": "neutral", "guidance": ""
+        }
+        sector_info = _gather_results[1] if not isinstance(_gather_results[1], Exception) else ""
+        if isinstance(_gather_results[0], Exception):
+            logger.warning(f"get_macro_context failed (using neutral defaults): {_gather_results[0]}")
+        if isinstance(_gather_results[1], Exception):
+            logger.warning(f"get_sector_rotation failed (using empty): {_gather_results[1]}")
 
         # Sector momentum scores — used to boost/reduce conviction per symbol
         from services.sector_momentum import get_sector_momentum_scores, get_sector_context_for_symbols
@@ -795,11 +804,38 @@ async def run_trading_cycle():
                 order_filled = order.filled_avg_price is not None or order.status == "filled"
                 fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)
                 if not order_filled:
+                    # Bracket/limit order submitted but not yet filled.
+                    # We still seed _previous_positions and watermarks with the estimated
+                    # entry price (current market price) so that:
+                    # (a) trailing stop logic works from the next cycle, and
+                    # (b) close detection has entry data when the position eventually closes.
+                    # log_position_open is deferred — the new-position detection block at cycle
+                    # start will call it with the actual Alpaca fill price once confirmed.
                     logger.info(
                         f"Order submitted but not yet filled ({order.status}) — "
-                        f"skipping position_log entry for {decision.symbol}. "
-                        f"Will be picked up by cycle-detect once Alpaca confirms the fill."
+                        f"seeding watermarks with estimated price ${fill_price:.2f} for {decision.symbol}. "
+                        f"position_log entry deferred until fill confirmed."
                     )
+                    if decision.action == "buy" and fill_price > 0:
+                        _position_high_watermarks[decision.symbol] = fill_price
+                        _save_watermarks()
+                        _previous_positions[decision.symbol] = {
+                            "qty": decision.quantity,
+                            "avg_entry_price": fill_price,
+                            "entry_time": datetime.now(timezone.utc),
+                            "exit_reason": "unknown",
+                            "side": "long",
+                        }
+                    elif decision.action == "short" and fill_price > 0:
+                        _short_low_watermarks[decision.symbol] = fill_price
+                        _save_watermarks()
+                        _previous_positions[decision.symbol] = {
+                            "qty": decision.quantity,
+                            "avg_entry_price": fill_price,
+                            "entry_time": datetime.now(timezone.utc),
+                            "exit_reason": "unknown",
+                            "side": "short",
+                        }
                 elif decision.action == "short" and fill_price > 0:
                     log_position_open(
                         symbol=decision.symbol,
@@ -875,7 +911,7 @@ async def run_trading_cycle():
                 )
 
                 await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
-                updated_positions = alpaca_service.get_positions()
+                updated_positions = await loop.run_in_executor(None, alpaca_service.get_positions)
                 await manager.broadcast({"type": "position_update", "data": [p.model_dump(mode="json") for p in updated_positions]})
 
     except Exception as e:
@@ -966,7 +1002,12 @@ async def _trading_loop():
             _premarket_scanned_date = today
             await run_premarket_scan()
 
-        await run_trading_cycle()
+        try:
+            await run_trading_cycle()
+        except asyncio.CancelledError:
+            raise  # let stop() work correctly
+        except Exception as _loop_err:
+            logger.error(f"Unhandled error in trading loop — cycle skipped, loop continues: {_loop_err}", exc_info=True)
 
         # Detect market close → save EOD snapshot once per day
         market_open_now = alpaca_service.is_market_open()
@@ -980,7 +1021,10 @@ async def _trading_loop():
             # (we're inside an async function) and avoids the DeprecationWarning from get_event_loop().
             try:
                 from services.eod_analysis_service import run_eod_analysis as _run_eod_analysis
-                asyncio.get_running_loop().run_in_executor(None, _run_eod_analysis)
+                _eod_future = asyncio.get_running_loop().run_in_executor(None, _run_eod_analysis)
+                _eod_future.add_done_callback(
+                    lambda f: logger.warning(f"EOD analysis failed: {f.exception()}") if f.exception() else None
+                )
                 logger.info("EOD analysis triggered in background thread.")
             except Exception as _eod_err:
                 logger.warning(f"Could not trigger EOD analysis: {_eod_err}")

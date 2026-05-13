@@ -483,8 +483,18 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
         action = trade.get("action", "hold")
         confidence = trade.get("confidence", "medium")
         qty_suggestion = trade.get("quantity_suggestion")
-        take_profit_pct = max(0.05, min(float(trade.get("take_profit_pct") or default_tp), 0.40))
-        stop_loss_pct = max(0.02, min(float(trade.get("stop_loss_pct") or default_sl), 0.10))
+
+        # Sanitize pct fields — Claude occasionally returns "15%" (string with %) or null.
+        # A raw float("15%") raises ValueError which would crash the entire loop and
+        # skip ALL remaining trades. Strip % and fall back to strategy defaults safely.
+        def _safe_pct(val, default):
+            try:
+                return float(str(val).replace("%", "").strip()) if val else default
+            except (ValueError, TypeError):
+                return default
+
+        take_profit_pct = max(0.05, min(_safe_pct(trade.get("take_profit_pct"), default_tp), 0.40))
+        stop_loss_pct   = max(0.02, min(_safe_pct(trade.get("stop_loss_pct"),   default_sl), 0.10))
         partial_exit = bool(trade.get("partial_exit", False))
         analysis = trade.get("analysis", "")
 

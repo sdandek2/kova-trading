@@ -142,37 +142,42 @@ def submit_market_order(
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
 
-                # First half: limit sell at TP price.
-                # Use DAY (not GTC) so this order expires harmlessly at market close
-                # if the buy limit above never filled — prevents an accidental short position
-                # from an orphaned sell order lingering into the next trading day.
-                try:
-                    limit_sell = LimitOrderRequest(
-                        symbol=symbol,
-                        qty=half_qty,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY,
-                        limit_price=take_profit_price,
-                    )
-                    trading_client.submit_order(limit_sell)
-                    logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
-                except Exception as e:
-                    logger.warning(f"Partial limit sell failed (non-fatal): {e}")
+                # Only place sell legs if the buy actually filled.
+                # Alpaca trailing stops require GTC (DAY is rejected with HTTP 422).
+                # If we placed GTC sell orders before the buy fills, they could
+                # execute independently and open an unintended short position.
+                # By gating on fill confirmation we guarantee the shares exist first.
+                buy_filled = order.filled_avg_price is not None or str(order.status) == "filled"
+                if buy_filled:
+                    # First half: limit sell at TP price (DAY — expires if not hit today)
+                    try:
+                        limit_sell = LimitOrderRequest(
+                            symbol=symbol,
+                            qty=half_qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                            limit_price=take_profit_price,
+                        )
+                        trading_client.submit_order(limit_sell)
+                        logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+                    except Exception as e:
+                        logger.warning(f"Partial limit sell failed (non-fatal): {e}")
 
-                # Second half: trailing stop to ride the winner.
-                # Also DAY for the same reason — expires if buy never filled.
-                try:
-                    trail_req = TrailingStopOrderRequest(
-                        symbol=symbol,
-                        qty=remaining_qty,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY,
-                        trail_percent=stop_loss_pct * 100,
-                    )
-                    trading_client.submit_order(trail_req)
-                    logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
-                except Exception as e:
-                    logger.warning(f"Trailing stop failed (non-fatal): {e}")
+                    # Second half: trailing stop — MUST use GTC (Alpaca rejects DAY for trailing stops)
+                    try:
+                        trail_req = TrailingStopOrderRequest(
+                            symbol=symbol,
+                            qty=remaining_qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.GTC,
+                            trail_percent=stop_loss_pct * 100,
+                        )
+                        trading_client.submit_order(trail_req)
+                        logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
+                    except Exception as e:
+                        logger.warning(f"Trailing stop failed (non-fatal): {e}")
+                else:
+                    logger.info(f"Partial-exit buy for {symbol} not yet filled — sell legs deferred until fill confirmed")
 
             else:
                 # ── Standard exit: LIMIT BRACKET order (limit entry + TP + SL) ──
