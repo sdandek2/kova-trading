@@ -9,6 +9,7 @@ struct RiskSettings: Codable {
     var max_trades_per_cycle: Int
     var max_penny_position_pct: Double
     var cycle_interval_seconds: Int
+    var profit_reserve_pct: Double
 
     // Safe defaults — mirrors backend _RISK_DEFAULTS (aggressive mode)
     static let defaults = RiskSettings(
@@ -19,7 +20,8 @@ struct RiskSettings: Codable {
         afternoon_pressure_hour: 13,
         max_trades_per_cycle: 3,
         max_penny_position_pct: 3.0,
-        cycle_interval_seconds: 600
+        cycle_interval_seconds: 600,
+        profit_reserve_pct: 0.0
     )
 
     init(daily_loss_limit_pct: Double = 6.0,
@@ -29,7 +31,8 @@ struct RiskSettings: Codable {
          afternoon_pressure_hour: Int = 13,
          max_trades_per_cycle: Int = 3,
          max_penny_position_pct: Double = 3.0,
-         cycle_interval_seconds: Int = 600) {
+         cycle_interval_seconds: Int = 600,
+         profit_reserve_pct: Double = 0.0) {
         self.daily_loss_limit_pct = daily_loss_limit_pct
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
@@ -38,6 +41,7 @@ struct RiskSettings: Codable {
         self.max_trades_per_cycle = max_trades_per_cycle
         self.max_penny_position_pct = max_penny_position_pct
         self.cycle_interval_seconds = cycle_interval_seconds
+        self.profit_reserve_pct = profit_reserve_pct
     }
 
     init(from decoder: Decoder) throws {
@@ -50,5 +54,6 @@ struct RiskSettings: Codable {
         max_trades_per_cycle    = (try? c.decode(Int.self,    forKey: .max_trades_per_cycle))    ?? 3
         max_penny_position_pct  = (try? c.decode(Double.self, forKey: .max_penny_position_pct))  ?? 3.0
         cycle_interval_seconds  = (try? c.decode(Int.self,    forKey: .cycle_interval_seconds))  ?? 600
+        profit_reserve_pct      = (try? c.decode(Double.self, forKey: .profit_reserve_pct))      ?? 0.0
     }
 }

@@ -108,6 +108,25 @@ struct AIView: View {
                                 .buttonStyle(.borderedProminent)
                             }
 
+                            HStack(spacing: 12) {
+                                NavigationLink {
+                                    TaxSummaryView()
+                                } label: {
+                                    Label("Est. Taxes", systemImage: "dollarsign.circle")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+
+                                NavigationLink {
+                                    ProfitReserveView()
+                                } label: {
+                                    Label("Profit Reserve", systemImage: "banknote")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.green)
+                            }
+
                             NavigationLink {
                                 EODReportView()
                             } label: {

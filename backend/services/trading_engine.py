@@ -32,7 +32,25 @@ _RISK_DEFAULTS = {
     "max_trades_per_cycle": 3,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
     "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
+    "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
 }
+
+_RESERVE_CACHE_KEY = "user_pref:reserved_cash"
+
+
+def get_reserved_cash() -> float:
+    """Return the current reserved cash balance (never used for trading)."""
+    val = cache_get(_RESERVE_CACHE_KEY)
+    return float(val) if val is not None else 0.0
+
+
+def add_to_reserve(amount: float) -> float:
+    """Add amount to reserved cash. Returns new total. Safe to call from any thread."""
+    current = get_reserved_cash()
+    new_total = round(current + amount, 2)
+    cache_set(_RESERVE_CACHE_KEY, new_total, 365 * 24 * 3600)
+    logger.info(f"Profit reserve: +${amount:.2f} → total ${new_total:.2f}")
+    return new_total
 
 
 def _load_risk_settings() -> dict:
@@ -339,6 +357,17 @@ async def run_trading_cycle():
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
                 )
+                # ── Profit reserve: take % of realized gain before it re-enters trading pool ──
+                try:
+                    reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                    if reserve_pct > 0:
+                        entry_p = prev.get("avg_entry_price") or 0
+                        qty_p   = prev.get("qty") or 0
+                        realized = (exit_price - entry_p) * qty_p if prev.get("side", "long") == "long" else (entry_p - exit_price) * qty_p
+                        if realized > 0:
+                            add_to_reserve(round(realized * reserve_pct, 2))
+                except Exception as _re:
+                    logger.warning(f"Profit reserve calc failed (non-fatal): {_re}")
                 log_bot_activity("position_closed",
                                  f"Position closed: {sym} exit=${exit_price:.2f} reason={prev.get('exit_reason','unknown')}",
                                  symbol=sym, cycle_id=_current_cycle_id)
@@ -483,10 +512,16 @@ async def run_trading_cycle():
         _cycle_open_count = 0
         _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 3))
 
+        # Subtract reserved cash so Claude never trades with it
+        _reserved = get_reserved_cash()
+        _tradeable_cash = max(0.0, float(account.cash) - _reserved)
+        if _reserved > 0:
+            logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
+
         decisions = claude_service.analyze_and_decide(
             market_snapshot=snapshot_light,
             positions=positions,
-            account_cash=account.cash,
+            account_cash=_tradeable_cash,
             portfolio_value=account.portfolio_value,
             sentiment=sentiment,
             macro=macro,
@@ -754,6 +789,18 @@ async def run_trading_cycle():
                         entry_time=prev.get("entry_time"),
                         side=prev.get("side", "long"),
                     )
+                    # ── Profit reserve on AI-initiated sells ──
+                    try:
+                        reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                        if reserve_pct > 0:
+                            entry_p  = prev.get("avg_entry_price") or 0
+                            qty_p    = prev.get("qty") or 0
+                            p_side   = prev.get("side", "long")
+                            realized = (fill_price - entry_p) * qty_p if p_side == "long" else (entry_p - fill_price) * qty_p
+                            if realized > 0:
+                                add_to_reserve(round(realized * reserve_pct, 2))
+                    except Exception as _re:
+                        logger.warning(f"Profit reserve (ai_sell) failed (non-fatal): {_re}")
 
                 log_bot_activity(
                     "approved",

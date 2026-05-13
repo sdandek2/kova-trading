@@ -250,4 +250,21 @@ class APIService {
     func triggerEODAnalysis() async throws {
         let _: [String: String] = try await fetch("/api/eod/run", method: "POST")
     }
+
+    // ── Finance: Tax summary ──
+    func getTaxSummary(bracketRate: Double = 0.22) async throws -> TaxSummary {
+        try await fetch("/api/finance/tax-summary?bracket_rate=\(bracketRate)")
+    }
+
+    // ── Finance: Profit reserve ──
+    func getReserve() async throws -> ReserveStatus {
+        try await fetch("/api/finance/reserve")
+    }
+
+    func resetReserve(amount: Double? = nil) async throws -> ReserveResetResponse {
+        var body: [String: Any] = ["confirm": true]
+        if let amt = amount { body["amount"] = amt }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        return try await fetch("/api/finance/reserve/reset", method: "POST", body: data)
+    }
 }
