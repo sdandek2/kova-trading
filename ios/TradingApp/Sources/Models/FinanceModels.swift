@@ -49,7 +49,12 @@ struct TaxBracket: Decodable, Identifiable {
     var id: String { label }
     let label: String
     let rate: Double
-    let description: String
+    let bracketDescription: String
+
+    enum CodingKeys: String, CodingKey {
+        case label, rate
+        case bracketDescription = "description"
+    }
 }
 
 // MARK: - Profit Reserve

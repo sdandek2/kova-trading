@@ -221,7 +221,8 @@ async def run_premarket_scan():
 
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
-           _position_high_watermarks, _previous_positions, _current_cycle_id
+           _position_high_watermarks, _previous_positions, _current_cycle_id, \
+           _ai_sold_symbols
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
@@ -333,7 +334,6 @@ async def run_trading_cycle():
         logger.info(f"Geopolitical risk: {geo['risk_level'].upper()} (score={geo['risk_score']}) | Themes: {geo['dominant_themes']}")
 
         # ── Detect position closes: symbols that were held last cycle but are gone now ──
-        global _ai_sold_symbols
         current_symbols = {p.symbol for p in positions}
         for sym, prev in _previous_positions.items():
             if sym not in current_symbols:

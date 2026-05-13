@@ -146,6 +146,7 @@ struct ProfitReserveView: View {
         }
     }
 
+    @MainActor
     private func load() async {
         isLoading = true
         error = nil
