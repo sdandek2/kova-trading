@@ -676,6 +676,18 @@ async def run_trading_cycle():
                             symbol=position.symbol, qty=int(float(position.qty)), side="sell"
                         )
                         if order:
+                            try:
+                                reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                                _prev_s = _previous_positions.get(position.symbol, {})
+                                entry_p_s = _prev_s.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                                exit_p_s  = float(position.current_price or entry_p_s)
+                                qty_s     = int(float(position.qty))
+                                if reserve_pct > 0 and entry_p_s > 0 and qty_s > 0:
+                                    realized_s = (exit_p_s - entry_p_s) * qty_s
+                                    if realized_s > 0:
+                                        add_to_reserve(round(realized_s * reserve_pct, 2))
+                            except Exception as _re:
+                                logger.warning(f"Profit reserve (stale_exit) failed (non-fatal): {_re}")
                             await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
                             await manager.broadcast({"type": "ai_analysis", "data": {
                                 "reasoning": stale_reason, "last_action": "sell",
@@ -727,6 +739,19 @@ async def run_trading_cycle():
                     )
                     if _ep_order:
                         _earnings_day_positions.discard(position.symbol)
+                        try:
+                            reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                            _prev_ep = _previous_positions.get(position.symbol, {})
+                            entry_p_ep = _prev_ep.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                            exit_p_ep  = float(position.current_price or entry_p_ep)
+                            qty_ep     = int(float(position.qty))
+                            is_short_ep = position.side == "short"
+                            if reserve_pct > 0 and entry_p_ep > 0 and qty_ep > 0:
+                                realized_ep = (exit_p_ep - entry_p_ep) * qty_ep if not is_short_ep else (entry_p_ep - exit_p_ep) * qty_ep
+                                if realized_ep > 0:
+                                    add_to_reserve(round(realized_ep * reserve_pct, 2))
+                        except Exception as _re:
+                            logger.warning(f"Profit reserve (earnings_eod) failed (non-fatal): {_re}")
                         await manager.broadcast({"type": "order_filled", "data": _ep_order.model_dump(mode="json")})
                         await manager.broadcast({"type": "ai_analysis", "data": {
                             "reasoning": _ep_exit_reason, "last_action": _ep_side,
@@ -772,6 +797,18 @@ async def run_trading_cycle():
                         symbol=position.symbol, qty=int(float(position.qty)), side="sell"
                     )
                     if order:
+                        try:
+                            reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                            _prev_md = _previous_positions.get(position.symbol, {})
+                            entry_p_md = _prev_md.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                            exit_p_md  = float(position.current_price or entry_p_md)
+                            qty_md     = int(float(position.qty))
+                            if reserve_pct > 0 and entry_p_md > 0 and qty_md > 0:
+                                realized_md = (exit_p_md - entry_p_md) * qty_md
+                                if realized_md > 0:
+                                    add_to_reserve(round(realized_md * reserve_pct, 2))
+                        except Exception as _re:
+                            logger.warning(f"Profit reserve (momentum_decay) failed (non-fatal): {_re}")
                         await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
                         await manager.broadcast({"type": "ai_analysis", "data": {
                             "reasoning": decay_reason, "last_action": "sell",
