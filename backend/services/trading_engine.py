@@ -294,15 +294,19 @@ async def run_trading_cycle():
             if art.get("headline")
         ]
 
-        macro = get_macro_context()
-        sector_info = get_sector_rotation()
+        macro, sector_info = await asyncio.gather(
+            loop.run_in_executor(None, get_macro_context),
+            loop.run_in_executor(None, get_sector_rotation),
+        )
 
         # Sector momentum scores — used to boost/reduce conviction per symbol
         from services.sector_momentum import get_sector_momentum_scores, get_sector_context_for_symbols
         sector_scores = {}
         sector_context = {}
         try:
-            sector_scores = get_sector_momentum_scores(lookback_days=3)
+            sector_scores = await loop.run_in_executor(
+                None, functools.partial(get_sector_momentum_scores, lookback_days=3)
+            )
             sector_context = get_sector_context_for_symbols(universe[:30], sector_scores)
             leading_sectors = [f"{s}({v:+.1f}%)" for s, v in sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
             logger.info(f"Sector momentum — Leading: {', '.join(leading_sectors)}")
@@ -313,11 +317,13 @@ async def run_trading_cycle():
         from services.db import get_recent_trade_outcomes
         recent_trades = []
         try:
-            recent_trades = get_recent_trade_outcomes(limit=10)
+            recent_trades = await loop.run_in_executor(None, functools.partial(get_recent_trade_outcomes, limit=10))
         except Exception as e:
             logger.warning(f"Could not fetch trade history (non-fatal): {e}")
 
-        earnings_map = get_upcoming_earnings(universe)
+        earnings_map = await loop.run_in_executor(
+            None, functools.partial(get_upcoming_earnings, universe)
+        )
 
         # Fetch strategy early — needed for scale-out logic and entry confirmation
         from services.strategy import get_strategy as _get_strategy
@@ -334,7 +340,7 @@ async def run_trading_cycle():
         except Exception as e:
             logger.warning(f"Earnings plays failed (non-fatal): {e}")
 
-        geo = get_geopolitical_context()
+        geo = await loop.run_in_executor(None, get_geopolitical_context)
         trend_forecast = get_trend_forecast(macro, geo)
         logger.info(f"Macro: {macro['market_regime']} | VIX: {macro['vix_level']} | SPY: {macro['spy_trend']}")
         logger.info(f"Geopolitical risk: {geo['risk_level'].upper()} (score={geo['risk_score']}) | Themes: {geo['dominant_themes']}")
