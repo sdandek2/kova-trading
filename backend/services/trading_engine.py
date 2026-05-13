@@ -442,6 +442,8 @@ async def run_trading_cycle():
                 log_bot_activity("position_closed",
                                  f"Position closed: {sym} exit=${exit_price:.2f} reason={prev.get('exit_reason','unknown')}",
                                  symbol=sym, cycle_id=_current_cycle_id)
+                # Clean up earnings-play tracking — position is gone, no EOD exit needed
+                _earnings_day_positions.discard(sym)
                 if sym in _position_high_watermarks:
                     del _position_high_watermarks[sym]
 
@@ -939,6 +941,9 @@ async def run_trading_cycle():
         # Per-cycle counter for new opens (buy/short). Sells, covers, and trailing stops never count.
         _cycle_open_count = 0
         _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 3))
+        # Symbols approved as earnings plays this cycle — added to _earnings_day_positions
+        # only AFTER the order is submitted (avoids polluting the set with blocked trades)
+        _earnings_play_pending: set = set()
 
         # _tradeable_cash already computed above (before pyramiding block) — reused here
 
@@ -1075,8 +1080,15 @@ async def run_trading_cycle():
                     continue
                 else:
                     # Directional signal — allow small position, cap at 5% portfolio, force EOD exit
-                    _ep_price = _sym_data.get("current_price") or 1
-                    _ep_max_qty = max(1, int(account_cash * 0.05 / _ep_price))
+                    _ep_price = _sym_data.get("current_price")
+                    if not _ep_price or _ep_price <= 0:
+                        logger.warning(f"Earnings play {decision.symbol}: no valid price, blocking")
+                        log_bot_activity("earnings_block",
+                                         f"{decision.symbol} earnings play skipped — price unavailable",
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+                    # Use portfolio_value for consistent sizing (same as all other position limits)
+                    _ep_max_qty = max(1, int(portfolio_value * 0.05 / _ep_price))
                     # Override direction: if AI predicted bearish but decision is BUY, flip to short (and vice versa)
                     _ep_action = "buy" if _ep_direction == "bullish" else "short"
                     if _ep_action != decision.action:
@@ -1084,10 +1096,11 @@ async def run_trading_cycle():
                             f"Earnings play {decision.symbol}: AI predicted {_ep_direction}, "
                             f"overriding action {decision.action} → {_ep_action}"
                         )
-                        decision = decision.model_copy(update={"action": _ep_action})
                     capped_qty = min(decision.quantity or _ep_max_qty, _ep_max_qty)
-                    decision = decision.model_copy(update={"quantity": capped_qty})
-                    _earnings_day_positions.add(decision.symbol)
+                    # Apply both overrides in one model_copy call
+                    decision = decision.model_copy(update={"action": _ep_action, "quantity": capped_qty})
+                    # Stage for registration — added to _earnings_day_positions only after order submits
+                    _earnings_play_pending.add(decision.symbol)
                     logger.info(
                         f"EARNINGS PLAY: {decision.action.upper()} {decision.symbol} x{capped_qty} "
                         f"— AI: {_ep_direction} [{_ep_confidence}]: {_ep_reasoning} | forced EOD exit"
@@ -1402,6 +1415,12 @@ async def run_trading_cycle():
                                 add_to_reserve(round(realized * reserve_pct, 2))
                     except Exception as _re:
                         logger.warning(f"Profit reserve (ai_sell) failed (non-fatal): {_re}")
+
+                # Confirm earnings play registration — order submitted, safe to track for EOD exit
+                if decision.action in ("buy", "short") and decision.symbol in _earnings_play_pending:
+                    _earnings_day_positions.add(decision.symbol)
+                    _earnings_play_pending.discard(decision.symbol)
+                    logger.info(f"Registered {decision.symbol} in _earnings_day_positions — forced EOD exit at 3:45 PM ET")
 
                 # "approved" = confirmed fill; "order_placed" = submitted but pending fill
                 # (bracket orders return status "new"/"accepted" at submission time)
