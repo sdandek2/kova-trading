@@ -263,7 +263,7 @@ Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly T
 EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}, {{"symbol": "SQQQ", "signal": "inverse_etf"}}]}}"""
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=800)
+        step1_raw = ask_ai(step1_prompt, max_tokens=1200)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
@@ -443,7 +443,7 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
 {{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
     try:
-        step2_raw = ask_ai(step2_prompt, max_tokens=1000)
+        step2_raw = ask_ai(step2_prompt, max_tokens=1800)
         if step2_raw.startswith("```"):
             step2_raw = step2_raw.split("```")[1]
             if step2_raw.startswith("json"):
