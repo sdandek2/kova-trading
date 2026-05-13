@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TaxSummaryView: View {
     @State private var summary: TaxSummary? = nil
-    @State private var selectedRate: Double = 0.22
+    @State private var selectedRate: Double = UserDefaults.standard.double(forKey: "taxBracketRate").nonZero ?? 0.22
     @State private var isLoading = true
     @State private var error: String? = nil
 
@@ -27,6 +27,7 @@ struct TaxSummaryView: View {
                             ForEach(brackets, id: \.rate) { b in
                                 Button(b.label) {
                                     selectedRate = b.rate
+                                    UserDefaults.standard.set(b.rate, forKey: "taxBracketRate")
                                     Task { await load(rate: b.rate) }
                                 }
                                 .font(.subheadline).fontWeight(.semibold)
@@ -184,4 +185,10 @@ private struct FinanceRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
+}
+
+private extension Double {
+    /// Returns nil if the value is zero — lets us use ?? to supply a default
+    /// when UserDefaults returns 0.0 for an unset key.
+    var nonZero: Double? { self == 0.0 ? nil : self }
 }
