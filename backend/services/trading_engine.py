@@ -16,6 +16,7 @@ from services.indicators import compute_atr, compute_rsi, volatility_adjusted_qu
 from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out, should_cover_short
 from services.earnings import get_upcoming_earnings
 from services.macro import get_macro_context, get_sector_rotation
+from services.macro_calendar import get_macro_event_today, is_fomc_entry_blocked, check_fda_event as check_fda_binary_event
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
 from websocket.manager import manager
 
@@ -273,6 +274,20 @@ async def run_trading_cycle():
                     "day_pl_percent": _day_pl_pct,
                 }
             })
+
+        # ── Macro calendar event check ────────────────────────────────────────
+        # FOMC: halve all new position sizes, block entries after 1:45 PM ET
+        # CPI / Jobs: reduce new position sizes 30%
+        try:
+            _macro_event = get_macro_event_today()
+            _macro_size_mult = _macro_event["position_size_multiplier"]
+            if _macro_event["event"]:
+                logger.info(f"Macro event today: {_macro_event['message']}")
+                log_bot_activity("macro_event", _macro_event["message"], cycle_id=_current_cycle_id)
+        except Exception as _me:
+            logger.warning(f"get_macro_event_today failed (non-fatal): {_me}")
+            _macro_event = {"event": None, "position_size_multiplier": 1.0, "message": ""}
+            _macro_size_mult = 1.0
 
         positions = await loop.run_in_executor(None, alpaca_service.get_positions)
         universe = await loop.run_in_executor(None, alpaca_service.get_tradeable_universe)
@@ -1047,6 +1062,18 @@ async def run_trading_cycle():
                 )
                 continue
 
+            # ── FOMC rate decision gate: block new entries after 1:45 PM ET ────
+            # Fed announces at 2 PM ET — 15-min buffer eliminates announcement spike risk.
+            if decision.action in ("buy", "short") and is_fomc_entry_blocked():
+                _fomc_block_msg = (
+                    f"{decision.action.upper()} {decision.symbol} blocked — "
+                    f"FOMC rate decision at 2 PM ET today. No new entries after 1:45 PM ET."
+                )
+                logger.info(f"FOMC gate: {_fomc_block_msg}")
+                log_bot_activity("entry_rejected", _fomc_block_msg,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
+
             # ── Circuit breaker: block new buys AND shorts when daily loss limit hit ──
             if decision.action in ("buy", "short") and circuit_breaker_active:
                 logger.info(f"Circuit breaker: skipping {decision.action.upper()} {decision.symbol} — daily loss limit active")
@@ -1105,7 +1132,7 @@ async def run_trading_cycle():
                                          symbol=decision.symbol, cycle_id=_current_cycle_id)
                         continue
                     # Use portfolio_value for consistent sizing (same as all other position limits)
-                    _ep_max_qty = max(1, int(portfolio_value * 0.05 / _ep_price))
+                    _ep_max_qty = max(1, int(float(account.portfolio_value) * 0.05 / _ep_price))
                     # Override direction: if AI predicted bearish but decision is BUY, flip to short (and vice versa)
                     _ep_action = "buy" if _ep_direction == "bullish" else "short"
                     if _ep_action != decision.action:
@@ -1127,6 +1154,67 @@ async def run_trading_cycle():
                                      f"[{_ep_direction.upper()} {_ep_confidence}] {_ep_reasoning} — forced EOD exit",
                                      symbol=decision.symbol, cycle_id=_current_cycle_id)
                     # Fall through to normal order execution below
+
+            # ── FDA binary event gate: same risk handling as earnings ──────────
+            # Detects FDA approval/rejection news for biotech/pharma stocks.
+            # Predicts direction — uncertain blocks outright, directional gets
+            # a small (5% portfolio) position with forced EOD exit.
+            if decision.action in ("buy", "short") and decision.symbol not in _earnings_play_pending:
+                _fda = check_fda_binary_event(decision.symbol, news_headlines)
+                if _fda.get("has_fda_event"):
+                    try:
+                        from services.claude_service import predict_earnings_direction as _pred_fda
+                        _fda_snap = snapshot_light.get(decision.symbol, {})
+                        _fda_ep = _pred_fda(
+                            symbol=decision.symbol,
+                            snapshot_data=_fda_snap,
+                            sentiment=sentiment,
+                            news_headlines=news_headlines,
+                        )
+                    except Exception as _fda_err:
+                        logger.warning(f"FDA prediction error for {decision.symbol}: {_fda_err}")
+                        _fda_ep = {"direction": "uncertain", "confidence": "low", "reasoning": "error"}
+
+                    _fda_dir  = _fda_ep.get("direction", "uncertain")
+                    _fda_conf = _fda_ep.get("confidence", "low")
+                    _fda_rsn  = _fda_ep.get("reasoning", "")
+
+                    if _fda_dir == "uncertain":
+                        logger.warning(
+                            f"FDA BLOCK: {decision.symbol} — prediction uncertain, binary gap risk. Blocking."
+                        )
+                        log_bot_activity("earnings_block",
+                                         f"{decision.action.upper()} {decision.symbol} blocked — "
+                                         f"FDA binary event today/tomorrow, AI prediction: uncertain. Blocking.",
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+                    else:
+                        _fda_price = snapshot_light.get(decision.symbol, {}).get("current_price")
+                        if not _fda_price or _fda_price <= 0:
+                            logger.warning(f"FDA play {decision.symbol}: no valid price, blocking")
+                            log_bot_activity("earnings_block",
+                                             f"{decision.symbol} FDA play skipped — price unavailable",
+                                             symbol=decision.symbol, cycle_id=_current_cycle_id)
+                            continue
+                        _fda_max_qty = max(1, int(float(account.portfolio_value) * 0.05 / _fda_price))
+                        _fda_action  = "buy" if _fda_dir == "bullish" else "short"
+                        if _fda_action != decision.action:
+                            logger.info(
+                                f"FDA play {decision.symbol}: AI predicted {_fda_dir}, "
+                                f"overriding {decision.action} → {_fda_action}"
+                            )
+                        capped_fda_qty = min(decision.quantity or _fda_max_qty, _fda_max_qty)
+                        decision = decision.model_copy(update={"action": _fda_action, "quantity": capped_fda_qty})
+                        _earnings_play_pending.add(decision.symbol)  # reuse EOD exit logic
+                        logger.info(
+                            f"FDA PLAY: {decision.action.upper()} {decision.symbol} x{capped_fda_qty} "
+                            f"— AI: {_fda_dir} [{_fda_conf}]: {_fda_rsn} | forced EOD exit"
+                        )
+                        log_bot_activity("approved",
+                                         f"FDA PLAY: {decision.action.upper()} {decision.symbol} x{capped_fda_qty} "
+                                         f"[{_fda_dir.upper()} {_fda_conf}] {_fda_rsn} — forced EOD exit",
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        # Fall through to normal order execution below
 
             # ── Cycle trade cap: limit new opens per cycle (sells/covers never blocked) ──
             # Slot is consumed HERE (before submission) so failed orders still use a slot
@@ -1284,6 +1372,18 @@ async def run_trading_cycle():
                 if scaled_qty != decision.quantity:
                     logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
                 decision.quantity = scaled_qty
+
+            # ── Macro event position size reduction ───────────────────────────
+            # FOMC day (0.5×) or CPI/Jobs day (0.7×) — shrink all new opens.
+            # Earnings/FDA plays already capped at 5% portfolio max — skip those.
+            if decision.action in ("buy", "short") and _macro_size_mult != 1.0 and decision.symbol not in _earnings_play_pending:
+                _pre_macro = decision.quantity
+                decision = decision.model_copy(update={"quantity": max(1, int(decision.quantity * _macro_size_mult))})
+                if decision.quantity != _pre_macro:
+                    logger.info(
+                        f"Macro sizing ({_macro_event['event'].upper()}): {decision.symbol} "
+                        f"{_pre_macro}→{decision.quantity} shares ({_macro_size_mult:.2f}×)"
+                    )
 
             # ── Pre-sell: cancel any open orders on this symbol ──
             # Rotation sells (and scale-outs) fail with "insufficient qty available"
