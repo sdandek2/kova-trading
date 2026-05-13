@@ -474,13 +474,14 @@ async def run_trading_cycle():
         _save_watermarks()
 
         # ── Correlated-position groups ────────────────────────────────────────
-        # Symbols in the same group move together (same underlying exposure).
-        # Holding 2+ from a group multiplies risk without diversifying.
-        # Used below to gate new entries only — existing positions are untouched.
+        # In AGGRESSIVE mode: allow up to 2 correlated leveraged ETFs — the whole
+        # point of aggressive is maximum upside exposure in bull regimes.
+        # In BALANCED/CONSERVATIVE: cap at 1 to avoid doubling sector risk.
         _CORR_GROUPS: list[set] = [
             {"TQQQ", "SOXL", "TECL", "FNGU", "SPXL", "UPRO", "UDOW", "TNA"},   # leveraged long
             {"SQQQ", "SOXS", "TECS", "FNGS", "SPXS", "SPXU", "SDOW", "TZA"},   # leveraged short
         ]
+        _corr_cap = 2 if strategy_key == "aggressive" else 1
 
         def _corr_group(sym: str) -> set | None:
             for g in _CORR_GROUPS:
@@ -489,6 +490,62 @@ async def run_trading_cycle():
             return None
 
         held_symbols_set = {p.symbol for p in positions}
+
+        # ── Tradeable cash: subtract profit reserve so pyramid/scale logic can use it ──
+        # Defined early so both pyramiding (below) and Claude's analysis (further down) share the same value.
+        _reserved = get_reserved_cash()
+        _tradeable_cash = max(0.0, float(account.cash) - _reserved)
+        if _reserved > float(account.cash):
+            logger.warning(f"⚠️ Profit reserve (${_reserved:,.2f}) exceeds available cash (${account.cash:,.2f}) — tradeable cash is $0.")
+        elif _reserved > 0:
+            logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
+
+        # ── Pyramid: add to winning positions (aggressive only) ──────────────
+        # When a long position is up 5-15% with strong momentum (MACD positive,
+        # RSI < 72, no first-scale-out yet), add 25% more — let winners compound.
+        # Cap: only pyramid once per position, only in aggressive mode, only if cash exists.
+        if strategy_key == "aggressive":
+            for position in positions:
+                if position.side == "short":
+                    continue
+                pnl = position.unrealized_pl_percent
+                # Only pyramid in the "sweet spot" — clearly working but not yet overbought
+                if not (5.0 <= pnl <= 18.0):
+                    continue
+                # Only pyramid once (re-use scale_out_counts as proxy — if any trim has fired, skip)
+                if _scale_out_counts.get(position.symbol, 0) > 0:
+                    continue
+                sym_data_p = snapshot_light.get(position.symbol, {})
+                cp = sym_data_p.get("closing_prices", [])
+                if not cp:
+                    continue
+                try:
+                    from services.indicators import compute_macd as _cmacd
+                    _mh = (_cmacd(cp) or {}).get("histogram", 0.0)
+                except Exception:
+                    _mh = 0.0
+                _rsi_p = (compute_rsi(cp) or 50.0)
+                # Strong momentum: MACD histogram positive AND RSI not overbought
+                if _mh > 0.05 and _rsi_p < 72:
+                    # 25% add-on capped by strategy max_position and available cash
+                    add_qty = max(1, int(float(position.qty) * 0.25))
+                    p_price = sym_data_p.get("current_price") or position.current_price
+                    add_cost = add_qty * p_price
+                    if add_cost <= _tradeable_cash * 0.5:  # never spend >50% of cash on a pyramid
+                        pyramid_reason = (
+                            f"{position.symbol} pyramid: up {pnl:.1f}%, MACD={_mh:.3f}, "
+                            f"RSI={_rsi_p:.0f} — adding {add_qty} shares to winner"
+                        )
+                        logger.info(f"PYRAMID: {pyramid_reason}")
+                        log_bot_activity("approved", pyramid_reason,
+                                         symbol=position.symbol, cycle_id=_current_cycle_id)
+                        pyr_order = alpaca_service.submit_market_order(
+                            symbol=position.symbol, qty=add_qty, side="buy"
+                        )
+                        if pyr_order:
+                            _tradeable_cash -= add_cost
+                            await manager.broadcast({"type": "order_filled",
+                                                     "data": pyr_order.model_dump(mode="json")})
 
         # ── Scale-out: review existing positions for profit-taking / loss cuts ──
         for position in positions:
@@ -550,7 +607,10 @@ async def run_trading_cycle():
                     pass
                 macd_hist = macd_data.get("histogram", 0.0)
                 pnl = position.unrealized_pl_percent
-                if macd_hist < -0.1 and 1.0 <= pnl <= 15.0:
+                # Threshold -0.3: requires a clear, sustained negative histogram —
+                # not just intraday noise. A brief dip to -0.05 or -0.1 is normal
+                # consolidation; -0.3+ is genuine momentum reversal.
+                if macd_hist < -0.3 and 1.0 <= pnl <= 15.0:
                     decay_reason = (
                         f"{position.symbol} momentum decaying: MACD hist {macd_hist:.3f} "
                         f"while up {pnl:.1f}% — exiting before reversal"
@@ -717,13 +777,7 @@ async def run_trading_cycle():
         _cycle_open_count = 0
         _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 3))
 
-        # Subtract reserved cash so Claude never trades with it
-        _reserved = get_reserved_cash()
-        _tradeable_cash = max(0.0, float(account.cash) - _reserved)
-        if _reserved > float(account.cash):
-            logger.warning(f"⚠️ Profit reserve (${_reserved:,.2f}) exceeds available cash (${account.cash:,.2f}) — tradeable cash is $0. Consider withdrawing reserve.")
-        elif _reserved > 0:
-            logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
+        # _tradeable_cash already computed above (before pyramiding block) — reused here
 
         decisions = await loop.run_in_executor(
             None,
@@ -783,17 +837,17 @@ async def run_trading_cycle():
             if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
                 continue
 
-            # ── Correlated-position cap: one instrument per leveraged group ──
-            # Holding TQQQ + SOXL = double exposure to the same tech/semi shock.
-            # If we already hold any symbol in the same correlated group, skip the entry.
+            # ── Correlated-position cap ───────────────────────────────────────
+            # Aggressive: allow up to 2 correlated leveraged ETFs (TQQQ + SOXL is a
+            # valid bull-regime stack). Balanced/conservative: cap at 1.
             if decision.action in ("buy", "short"):
                 grp = _corr_group(decision.symbol)
                 if grp:
                     already_held = [s for s in held_symbols_set if s != decision.symbol and s in grp]
-                    if already_held:
+                    if len(already_held) >= _corr_cap:
                         corr_msg = (
                             f"{decision.action.upper()} {decision.symbol} blocked — "
-                            f"already hold {already_held} in same correlated group"
+                            f"already hold {already_held} in same correlated group (cap={_corr_cap})"
                         )
                         logger.info(f"Correlated cap: {corr_msg}")
                         log_bot_activity("entry_rejected", corr_msg,
