@@ -177,7 +177,7 @@ struct ProfitReserveView: View {
             let result = try await APIService.shared.resetReserve()
             await MainActor.run {
                 resetSuccess = result.message
-                reserve?.reservedCash == 0  // will refresh below
+                // balance will refresh via load() below
             }
             await load()
         } catch {

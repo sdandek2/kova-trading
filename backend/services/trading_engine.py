@@ -335,6 +335,12 @@ async def run_trading_cycle():
         current_symbols = {p.symbol for p in positions}
         for sym, prev in _previous_positions.items():
             if sym not in current_symbols:
+                # Skip symbols already handled by an AI sell/cover in the previous cycle —
+                # log_position_close and reserve were already applied when the decision executed.
+                if prev.get("exit_reason") == "ai_sell":
+                    logger.debug(f"Skipping cycle-detect close for {sym} — already handled as ai_sell")
+                    continue
+
                 # Position was closed — determine exit price from Alpaca orders
                 exit_price = prev.get("avg_entry_price", 0)  # fallback
                 is_prev_short = prev.get("side") == "short"
@@ -360,9 +366,9 @@ async def run_trading_cycle():
                 # ── Profit reserve: take % of realized gain before it re-enters trading pool ──
                 try:
                     reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
-                    if reserve_pct > 0:
-                        entry_p = prev.get("avg_entry_price") or 0
-                        qty_p   = prev.get("qty") or 0
+                    entry_p = prev.get("avg_entry_price") or 0
+                    qty_p   = prev.get("qty") or 0
+                    if reserve_pct > 0 and entry_p > 0 and qty_p > 0:
                         realized = (exit_price - entry_p) * qty_p if prev.get("side", "long") == "long" else (entry_p - exit_price) * qty_p
                         if realized > 0:
                             add_to_reserve(round(realized * reserve_pct, 2))
@@ -792,10 +798,10 @@ async def run_trading_cycle():
                     # ── Profit reserve on AI-initiated sells ──
                     try:
                         reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
-                        if reserve_pct > 0:
-                            entry_p  = prev.get("avg_entry_price") or 0
-                            qty_p    = prev.get("qty") or 0
-                            p_side   = prev.get("side", "long")
+                        entry_p  = prev.get("avg_entry_price") or 0
+                        qty_p    = prev.get("qty") or 0
+                        p_side   = prev.get("side", "long")
+                        if reserve_pct > 0 and entry_p > 0 and qty_p > 0:
                             realized = (fill_price - entry_p) * qty_p if p_side == "long" else (entry_p - fill_price) * qty_p
                             if realized > 0:
                                 add_to_reserve(round(realized * reserve_pct, 2))
