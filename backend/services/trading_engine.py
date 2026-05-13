@@ -1669,9 +1669,42 @@ async def _trading_loop():
     from datetime import timedelta
     _cleanup_counter = 0
     _premarket_scanned_date = None  # track which date we last ran the pre-market scan
-    _eod_saved_date = None          # track which date we last saved the EOD snapshot
+    # Restore _eod_saved_date from cache so multiple deploys on the same day
+    # don't re-run the EOD report (cache_get returns None if key missing/expired)
+    _eod_saved_date_str = cache_get("eod_saved_date")
+    try:
+        from datetime import date as _date
+        _eod_saved_date = _date.fromisoformat(_eod_saved_date_str) if _eod_saved_date_str else None
+    except Exception:
+        _eod_saved_date = None
     _market_was_open = False        # detect open→closed transition
     while _is_running:
+        # ── EOD catchup: handles bot restarts after market close ──────────────
+        # Normal flow relies on open→closed transition which is missed if the
+        # bot (re)starts after 4 PM ET. Check once per day and self-guard with
+        # _eod_saved_date so it never runs twice on the same calendar day.
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.date()
+        if _eod_saved_date != today and not alpaca_service.is_market_open():
+            try:
+                from zoneinfo import ZoneInfo as _ZI_eod
+                _now_et_eod = datetime.now(_ZI_eod("America/New_York"))
+            except Exception:
+                _now_et_eod = datetime.now(timezone.utc) - timedelta(hours=4)
+            if _now_et_eod.hour >= 16:   # 4 PM ET — market has definitely closed
+                logger.info("Post-market restart detected — running EOD catchup")
+                _eod_saved_date = today   # guard first so a crash can't double-fire
+                cache_set("eod_saved_date", today.isoformat(), 86400)  # persist across restarts
+                await _save_eod_snapshot()
+                try:
+                    from services.eod_analysis_service import run_eod_analysis as _run_eod_catchup
+                    _catchup_future = asyncio.get_running_loop().run_in_executor(None, _run_eod_catchup)
+                    _catchup_future.add_done_callback(
+                        lambda f: logger.warning(f"EOD catchup failed: {f.exception()}") if f.exception() else None
+                    )
+                    logger.info("EOD catchup analysis triggered.")
+                except Exception as _ce:
+                    logger.warning(f"EOD catchup trigger failed: {_ce}")
         # Run pre-market scan once per day at 13:00-14:00 UTC (9-10 AM EST)
         now_utc = datetime.now(timezone.utc)
         today = now_utc.date()
@@ -1690,6 +1723,7 @@ async def _trading_loop():
         market_open_now = alpaca_service.is_market_open()
         if _market_was_open and not market_open_now and _eod_saved_date != today:
             _eod_saved_date = today
+            cache_set("eod_saved_date", today.isoformat(), 86400)  # persist across restarts
             logger.info("Market just closed — saving EOD snapshot and running AI analysis.")
             await _save_eod_snapshot()
             # Run Claude-powered EOD analysis in a background thread so it doesn't block the loop.

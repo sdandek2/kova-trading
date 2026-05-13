@@ -92,6 +92,27 @@ def get_trade_history(limit: int = Query(50, ge=1, le=500)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch trade history: {e}")
 
 
+@router.post("/eod/run")
+async def trigger_eod_analysis():
+    """
+    Manually trigger the EOD snapshot + AI analysis.
+    Use this when the daily report didn't run (e.g. after a server restart post-close).
+    """
+    import asyncio
+    try:
+        from services.trading_engine import _save_eod_snapshot
+        await _save_eod_snapshot()
+        from services.eod_analysis_service import run_eod_analysis as _run_eod
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(None, _run_eod)
+        future.add_done_callback(
+            lambda f: None if not f.exception() else None
+        )
+        return {"message": "EOD analysis triggered — report will be ready in ~30 seconds"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"EOD trigger failed: {e}")
+
+
 @router.get("/macro")
 def get_macro():
     from services.macro import get_macro_context, get_sector_rotation
