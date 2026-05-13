@@ -57,6 +57,7 @@ struct BotActivityRow: View {
     var iconColor: Color {
         switch event.event_type {
         case "approved":        return .green
+        case "order_placed":    return .blue
         case "entry_rejected":  return .orange
         case "earnings_block":  return .yellow
         case "circuit_breaker": return .red
@@ -80,7 +81,7 @@ struct BotActivityRow: View {
                     if let sym = event.symbol {
                         Text(sym).font(.caption).fontWeight(.semibold)
                     }
-                    Text(event.event_type.replacingOccurrences(of: "_", with: " ").capitalized)
+                    Text(event.eventLabel)
                         .font(.caption2).foregroundStyle(.secondary)
                     Spacer()
                     if let ts = event.timestamp {

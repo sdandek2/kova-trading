@@ -533,6 +533,22 @@ async def run_trading_cycle():
                     side=order_side,
                 )
                 if order:
+                    # ── Profit reserve on scale-outs and trailing stops ──
+                    # Previously only AI sells and cycle-detect closes added to reserve.
+                    # Scale-outs/trailing stops realize gains too — they should contribute.
+                    try:
+                        reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                        prev = _previous_positions.get(position.symbol, {})
+                        entry_p = prev.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                        exit_p  = float(position.current_price or entry_p)
+                        if reserve_pct > 0 and entry_p > 0 and exit_qty > 0:
+                            realized = (exit_p - entry_p) * exit_qty if not is_short else (entry_p - exit_p) * exit_qty
+                            if realized > 0:
+                                add_to_reserve(round(realized * reserve_pct, 2))
+                                logger.info(f"Profit reserve: +${realized * reserve_pct:.2f} from {action_label} {position.symbol}")
+                    except Exception as _re:
+                        logger.warning(f"Profit reserve ({action_label}) failed (non-fatal): {_re}")
+
                     await manager.broadcast({"type": "order_filled", "data": order.model_dump(mode="json")})
                     await manager.broadcast({
                         "type": "ai_analysis",
@@ -544,12 +560,19 @@ async def run_trading_cycle():
                         },
                     })
 
-        # ── Time-of-day filter: skip chaotic opening 15 minutes ──
+        # ── Time-of-day filter ──
+        # "closed"      → skip entire cycle (pre-market / after-hours)
+        # "exits_only"  → 9:30-9:45 AM: run AI analysis but block new entries (buy/short)
+        #                  allows AI to exit stale/losing positions immediately at open
+        # "full"        → normal trading
         from services.entry_timing import is_good_trading_window
-        window_ok, window_reason = is_good_trading_window()
-        if not window_ok:
+        window_mode, window_reason = is_good_trading_window()
+        if window_mode == "closed":
             logger.info(f"Trading window: {window_reason} — skipping cycle")
             return
+        entries_allowed = (window_mode == "full")
+        if not entries_allowed:
+            logger.info(f"Trading window: {window_reason}")
 
         # ── Daily trade floor: configurable via /api/risk/settings ──
         now_utc = datetime.now(timezone.utc)
@@ -631,6 +654,14 @@ async def run_trading_cycle():
             await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
 
             if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
+                continue
+
+            # ── Opening window: block new entries during first 15 min but allow exits ──
+            if decision.action in ("buy", "short") and not entries_allowed:
+                logger.info(
+                    f"Opening window: skipping {decision.action.upper()} {decision.symbol} "
+                    f"— new entries blocked until 9:45 AM EST"
+                )
                 continue
 
             # ── Circuit breaker: block new buys AND shorts when daily loss limit hit ──
@@ -904,9 +935,14 @@ async def run_trading_cycle():
                     except Exception as _re:
                         logger.warning(f"Profit reserve (ai_sell) failed (non-fatal): {_re}")
 
+                # "approved" = confirmed fill; "order_placed" = submitted but pending fill
+                # (bracket orders return status "new"/"accepted" at submission time)
+                _log_event_type = "approved" if order_filled else "order_placed"
+                _status_note = f"filled @ ${fill_price:.2f}" if order_filled else f"pending fill (status={order.status})"
                 log_bot_activity(
-                    "approved",
-                    f"{decision.action.upper()} {decision.symbol} x{decision.quantity} @ ${fill_price:.2f} — {decision.reasoning[:120]}",
+                    _log_event_type,
+                    f"{decision.action.upper()} {decision.symbol} x{decision.quantity} @ ${fill_price:.2f} — "
+                    f"[{_status_note}] {decision.reasoning[:100]}",
                     symbol=decision.symbol, cycle_id=_current_cycle_id,
                 )
 

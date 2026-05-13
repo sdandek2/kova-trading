@@ -293,32 +293,45 @@ def should_cover_short(
     return False, 0.0, ""
 
 
-def is_good_trading_window() -> tuple[bool, str]:
+def is_good_trading_window() -> tuple[str, str]:
     """
-    Time-of-day filter. Avoids the chaotic first 15 minutes after open
-    where spreads are wide and moves are often reversed.
-    Returns (should_trade: bool, reason: str)
+    Time-of-day filter.
+    Returns (mode: str, reason: str) where mode is one of:
+      "full"        — normal trading, entries + exits allowed
+      "exits_only"  — first 15 min after open: allow AI exits, block new entries
+      "closed"      — outside market hours, skip entire cycle
 
-    Market hours (EST = UTC-4 in summer, UTC-5 in winter):
-    - 9:30 AM open = 13:30 UTC
-    - 9:45 AM = 13:45 UTC  ← start trading
+    Why exits_only instead of blocking everything:
+    9:30-9:45 AM is chaotic for NEW entries (wide spreads, opening volatility).
+    But if we already hold a losing/stale position, we want to exit ASAP — not wait
+    15 extra minutes while the loss compounds. Trailing stops and scale-outs already
+    run before this check; this opens the door for AI-decided sells too.
+
+    Market hours (EDT = UTC-4 in summer):
+    - 9:30 AM open  = 13:30 UTC
+    - 9:45 AM       = 13:45 UTC  ← entries allowed from here
     - 4:00 PM close = 20:00 UTC
     """
     now_utc = datetime.now(timezone.utc)
     hour, minute = now_utc.hour, now_utc.minute
     minutes_since_midnight_utc = hour * 60 + minute
 
-    market_open_utc = 13 * 60 + 30    # 9:30 AM EST
-    trading_start_utc = 13 * 60 + 45  # 9:45 AM EST — skip opening volatility
+    market_open_utc  = 13 * 60 + 30   # 9:30 AM EST
+    entries_start_utc = 13 * 60 + 45  # 9:45 AM EST — skip opening volatility for new entries
     market_close_utc = 20 * 60        # 4:00 PM EST
 
-    if minutes_since_midnight_utc < trading_start_utc:
-        return False, "Opening 15 min window — waiting for volatility to settle"
+    if minutes_since_midnight_utc < market_open_utc:
+        return "closed", "Pre-market — market not yet open"
     if minutes_since_midnight_utc >= market_close_utc:
-        return False, "Market closed"
+        return "closed", "Market closed"
+    if minutes_since_midnight_utc < entries_start_utc:
+        return "exits_only", (
+            f"Opening 15 min window — exits allowed, new entries blocked "
+            f"({entries_start_utc - minutes_since_midnight_utc} min until entries open)"
+        )
 
     # Power hour (3-4 PM EST = 19:00-20:00 UTC) — best liquidity for exits
     if minutes_since_midnight_utc >= 19 * 60:
-        return True, "Power hour — prime exit window"
+        return "full", "Power hour — prime exit window"
 
-    return True, "Normal trading hours"
+    return "full", "Normal trading hours"

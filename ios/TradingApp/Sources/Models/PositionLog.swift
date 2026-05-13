@@ -71,6 +71,7 @@ struct BotActivity: Decodable, Identifiable {
     var eventColor: String {
         switch event_type {
         case "approved":        return "green"
+        case "order_placed":    return "blue"      // submitted, awaiting fill confirmation
         case "entry_rejected":  return "orange"
         case "earnings_block":  return "yellow"
         case "circuit_breaker": return "red"
@@ -85,6 +86,7 @@ struct BotActivity: Decodable, Identifiable {
     var eventIcon: String {
         switch event_type {
         case "approved":        return "checkmark.circle.fill"
+        case "order_placed":    return "clock.arrow.circlepath"  // pending fill
         case "entry_rejected":  return "xmark.circle"
         case "earnings_block":  return "calendar.badge.exclamationmark"
         case "circuit_breaker": return "exclamationmark.triangle.fill"
@@ -93,6 +95,22 @@ struct BotActivity: Decodable, Identifiable {
         case "cover_short":     return "arrow.down.forward.circle.fill"
         case "position_closed": return "circle.fill"
         default:                return "info.circle"
+        }
+    }
+
+    /// Human-readable label for the activity log header row
+    var eventLabel: String {
+        switch event_type {
+        case "approved":        return "Approved"
+        case "order_placed":    return "Order Pending"
+        case "entry_rejected":  return "Entry Rejected"
+        case "earnings_block":  return "Earnings Block"
+        case "circuit_breaker": return "Circuit Breaker"
+        case "trailing_stop":   return "Trailing Stop"
+        case "scale_out":       return "Scale Out"
+        case "cover_short":     return "Cover Short"
+        case "position_closed": return "Position Closed"
+        default: return event_type.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 }
