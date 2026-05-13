@@ -14,6 +14,81 @@ def _get_watchlist() -> list[str]:
     return load_watchlist()
 
 
+def predict_earnings_direction(
+    symbol: str,
+    snapshot_data: dict,
+    sentiment: dict = None,
+    news_headlines: list = None,
+) -> dict:
+    """
+    Make a directional prediction for a stock reporting earnings today/tomorrow.
+    Returns {"direction": "bullish"|"bearish"|"uncertain", "confidence": "high"|"medium"|"low", "reasoning": str}
+
+    Signals used:
+    - 5-day price drift (smart money positioning before report)
+    - RSI: >70 = priced for perfection (miss → big drop), <40 = beaten down (beat → squeeze)
+    - Relative volume: 2x+ into earnings = conviction; <0.8x = lack of interest
+    - News sentiment: positive headlines = analyst upgrades, guidance raises
+    """
+    closing_prices = snapshot_data.get("closing_prices", [])
+    indicators = compute_all(closing_prices) if closing_prices else {}
+    rsi = indicators.get("rsi", "N/A")
+    macd_hist = indicators.get("macd", {}).get("histogram", "N/A")
+    mas = indicators.get("moving_averages", {})
+    price = snapshot_data.get("current_price", "N/A")
+    five_day = snapshot_data.get("five_day_change_pct", "N/A")
+    rel_vol = snapshot_data.get("relative_volume", 1.0)
+    news_count = (sentiment or {}).get(symbol, 0)
+
+    relevant_headlines = ""
+    if news_headlines:
+        matches = [h for h in news_headlines if symbol.lower() in h.lower()][:5]
+        if matches:
+            relevant_headlines = "\n".join(f"  • {h}" for h in matches)
+
+    prompt = f"""Predict whether {symbol} will react POSITIVELY or NEGATIVELY to its earnings report releasing today/tomorrow.
+
+Signals:
+- Price: ${price} | 5-day change: {five_day}%
+- RSI: {rsi} | MACD histogram: {macd_hist}
+- MA20: ${mas.get('ma20', 'N/A')} | MA50: ${mas.get('ma50', 'N/A')}
+- Relative volume: {rel_vol:.1f}x | News mentions: {news_count}
+{f'- Headlines:{chr(10)}{relevant_headlines}' if relevant_headlines else ''}
+
+Interpretation guide:
+- Stock up 5-15% past week + high volume = market expects a beat → bullish lean
+- Stock falling + low volume = fear of miss → bearish lean
+- RSI > 70 into earnings = priced for perfection, any miss = large drop → bearish risk
+- RSI < 40 into earnings = beaten down, any beat = short squeeze → bullish risk
+- Strong positive news (upgrades, guidance raises) → bullish
+- Negative news (guidance cuts, sector headwinds, lawsuits) → bearish
+- Mixed or insufficient signals → uncertain
+
+Return ONLY valid JSON, no markdown:
+{{"direction": "bullish", "confidence": "high", "reasoning": "one sentence"}}
+
+Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
+
+    try:
+        raw = ask_ai(prompt, max_tokens=150)
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        import json as _json
+        result = _json.loads(raw.strip())
+        direction = result.get("direction", "uncertain")
+        confidence = result.get("confidence", "low")
+        reasoning = result.get("reasoning", "")
+        if direction not in ("bullish", "bearish", "uncertain"):
+            direction = "uncertain"
+        logger.info(f"Earnings prediction {symbol}: {direction} [{confidence}] — {reasoning}")
+        return {"direction": direction, "confidence": confidence, "reasoning": reasoning}
+    except Exception as e:
+        logger.warning(f"Earnings prediction failed for {symbol} (defaulting uncertain): {e}")
+        return {"direction": "uncertain", "confidence": "low", "reasoning": "prediction failed"}
+
+
 def analyze_and_decide(
     market_snapshot: dict,
     positions: list,

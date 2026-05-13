@@ -104,6 +104,7 @@ _pyramid_counts: dict = {}             # symbol → int (how many pyramid adds t
 # Re-entry tracking: when we scale out partially, record the qty BEFORE the trim so we
 # can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
 _pre_scaleout_qty: dict = {}           # symbol → int (qty held before first scale-out)
+_earnings_day_positions: set = set()   # symbols entered as earnings plays — forced EOD exit
 
 
 def _save_watermarks() -> None:
@@ -232,7 +233,7 @@ async def run_premarket_scan():
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
-           _ai_sold_symbols
+           _ai_sold_symbols, _earnings_day_positions
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
@@ -665,6 +666,40 @@ async def run_trading_cycle():
                             }})
                         continue  # skip scale-out check for this position
 
+            # ── Earnings play forced EOD exit ─────────────────────────────────
+            # Positions entered as earnings plays must exit by 3:45 PM ET —
+            # never hold through the actual earnings report after close.
+            if position.symbol in _earnings_day_positions:
+                try:
+                    from zoneinfo import ZoneInfo
+                    _now_et = datetime.now(ZoneInfo("America/New_York"))
+                except Exception:
+                    from datetime import timedelta
+                    _now_et = datetime.now(timezone.utc) - timedelta(hours=4)
+                _mins_et = _now_et.hour * 60 + _now_et.minute
+                if _mins_et >= 15 * 60 + 45:  # 3:45 PM ET
+                    _ep_exit_reason = (
+                        f"{position.symbol} earnings play — forced exit at 3:45 PM ET "
+                        f"(P&L: {position.unrealized_pl_percent:+.1f}%) — never hold through report"
+                    )
+                    logger.info(f"EARNINGS EOD EXIT: {_ep_exit_reason}")
+                    log_bot_activity("scale_out", _ep_exit_reason,
+                                     symbol=position.symbol, cycle_id=_current_cycle_id)
+                    if position.symbol in _previous_positions:
+                        _previous_positions[position.symbol]["exit_reason"] = "earnings_eod_exit"
+                    _ep_side = "sell" if position.side == "long" else "buy"
+                    _ep_order = alpaca_service.submit_market_order(
+                        symbol=position.symbol, qty=int(float(position.qty)), side=_ep_side
+                    )
+                    if _ep_order:
+                        _earnings_day_positions.discard(position.symbol)
+                        await manager.broadcast({"type": "order_filled", "data": _ep_order.model_dump(mode="json")})
+                        await manager.broadcast({"type": "ai_analysis", "data": {
+                            "reasoning": _ep_exit_reason, "last_action": _ep_side,
+                            "symbol": position.symbol, "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }})
+                    continue  # skip other exit checks for this position
+
             # ── Momentum-decay exit ───────────────────────────────────────────
             # When MACD histogram turns clearly negative while position still has
             # some profit (1-15%), exit before momentum fully reverses.
@@ -998,24 +1033,70 @@ async def run_trading_cycle():
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 continue
 
-            # ── Hard earnings block: never buy OR short into earnings today/tomorrow ──
-            # Gap risk on an earnings miss/beat can blow through any stop loss on both sides.
-            # Claude is informed about earnings flags but this is the enforcement layer.
+            # ── Earnings prediction gate: replace hard block with AI directional call ──
+            # Instead of always blocking, ask Claude to predict bullish/bearish/uncertain.
+            # - bullish/bearish + any confidence → small position (5% max), forced EOD exit
+            # - uncertain → hard block (old behaviour)
+            # Never hold through the actual report — all earnings plays must exit by 3:45 PM ET.
             if decision.action in ("buy", "short") and earnings_map and earnings_map.get(decision.symbol) == "today/tomorrow":
-                logger.warning(
-                    f"EARNINGS BLOCK: skipping BUY {decision.symbol} — earnings today/tomorrow, "
-                    f"gap risk too high. Wait until after the report."
-                )
-                log_bot_activity("earnings_block",
-                                 f"BUY {decision.symbol} blocked — earnings today/tomorrow, gap risk too high",
-                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
-                await manager.broadcast({"type": "ai_analysis", "data": {
-                    "reasoning": f"Earnings block: {decision.symbol} reports today/tomorrow — binary gap risk. Skipping buy, will re-evaluate after report.",
-                    "last_action": "waiting",
-                    "symbol": decision.symbol,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }})
-                continue
+                try:
+                    from services.claude_service import predict_earnings_direction
+                    _sym_data = snapshot_light.get(decision.symbol, {})
+                    _ep = predict_earnings_direction(
+                        symbol=decision.symbol,
+                        snapshot_data=_sym_data,
+                        sentiment=sentiment,
+                        news_headlines=news_headlines,
+                    )
+                except Exception as _ep_err:
+                    logger.warning(f"Earnings prediction error for {decision.symbol}: {_ep_err}")
+                    _ep = {"direction": "uncertain", "confidence": "low", "reasoning": "error"}
+
+                _ep_direction   = _ep.get("direction", "uncertain")
+                _ep_confidence  = _ep.get("confidence", "low")
+                _ep_reasoning   = _ep.get("reasoning", "")
+
+                if _ep_direction == "uncertain":
+                    # No clear signal — hard block as before
+                    logger.warning(
+                        f"EARNINGS BLOCK: {decision.symbol} — prediction uncertain, "
+                        f"gap risk too high. Blocking."
+                    )
+                    log_bot_activity("earnings_block",
+                                     f"{decision.action.upper()} {decision.symbol} blocked — earnings today/tomorrow, "
+                                     f"AI prediction: uncertain. Gap risk too high.",
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    await manager.broadcast({"type": "ai_analysis", "data": {
+                        "reasoning": f"Earnings block: {decision.symbol} — prediction uncertain, binary gap risk. Skipping.",
+                        "last_action": "waiting",
+                        "symbol": decision.symbol,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }})
+                    continue
+                else:
+                    # Directional signal — allow small position, cap at 5% portfolio, force EOD exit
+                    _ep_price = _sym_data.get("current_price") or 1
+                    _ep_max_qty = max(1, int(account_cash * 0.05 / _ep_price))
+                    # Override direction: if AI predicted bearish but decision is BUY, flip to short (and vice versa)
+                    _ep_action = "buy" if _ep_direction == "bullish" else "short"
+                    if _ep_action != decision.action:
+                        logger.info(
+                            f"Earnings play {decision.symbol}: AI predicted {_ep_direction}, "
+                            f"overriding action {decision.action} → {_ep_action}"
+                        )
+                        decision = decision.model_copy(update={"action": _ep_action})
+                    capped_qty = min(decision.quantity or _ep_max_qty, _ep_max_qty)
+                    decision = decision.model_copy(update={"quantity": capped_qty})
+                    _earnings_day_positions.add(decision.symbol)
+                    logger.info(
+                        f"EARNINGS PLAY: {decision.action.upper()} {decision.symbol} x{capped_qty} "
+                        f"— AI: {_ep_direction} [{_ep_confidence}]: {_ep_reasoning} | forced EOD exit"
+                    )
+                    log_bot_activity("approved",
+                                     f"EARNINGS PLAY: {decision.action.upper()} {decision.symbol} x{capped_qty} "
+                                     f"[{_ep_direction.upper()} {_ep_confidence}] {_ep_reasoning} — forced EOD exit",
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    # Fall through to normal order execution below
 
             # ── Cycle trade cap: limit new opens per cycle (sells/covers never blocked) ──
             # Slot is consumed HERE (before submission) so failed orders still use a slot
