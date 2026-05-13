@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
+from services.trading_engine import _RESERVE_CACHE_KEY
 
 router = APIRouter(prefix="/api/finance", tags=["finance"])
 
@@ -148,13 +149,15 @@ def reset_reserve(req: ReserveResetRequest):
     current = get_reserved_cash()
 
     if req.amount is not None:
+        if float(req.amount) < 0:
+            return {"error": "amount must be non-negative"}
         deduct = min(float(req.amount), current)
         new_balance = round(current - deduct, 2)
     else:
         deduct = current
         new_balance = 0.0
 
-    cache_set("user_pref:reserved_cash", new_balance, 365 * 24 * 3600)
+    cache_set(_RESERVE_CACHE_KEY, new_balance, 365 * 24 * 3600)
     return {
         "withdrawn":     round(deduct, 2),
         "new_balance":   new_balance,

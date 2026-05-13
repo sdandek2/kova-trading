@@ -162,9 +162,16 @@ struct ProfitReserveView: View {
         guard !isSavingPct else { return }
         isSavingPct = true
         Task {
-            if var settings = try? await APIService.shared.getRiskSettings() {
+            do {
+                var settings = try await APIService.shared.getRiskSettings()
                 settings.profit_reserve_pct = reservePct
-                try? await APIService.shared.setRiskSettings(settings)
+                try await APIService.shared.setRiskSettings(settings)
+            } catch {
+                await MainActor.run {
+                    self.error = "Failed to save reserve rate — \(error.localizedDescription)"
+                    // Reset slider to server value so user sees the actual saved rate
+                }
+                await load()
             }
             await MainActor.run { isSavingPct = false }
         }
@@ -175,11 +182,12 @@ struct ProfitReserveView: View {
         resetSuccess = nil
         do {
             let result = try await APIService.shared.resetReserve()
-            await MainActor.run {
-                resetSuccess = result.message
-                // balance will refresh via load() below
-            }
+            // Reload first so balance updates, then show success message
             await load()
+            await MainActor.run { resetSuccess = result.message }
+            // Auto-clear success after 3s
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await MainActor.run { resetSuccess = nil }
         } catch {
             await MainActor.run {
                 self.error = "Withdraw failed: \(error.localizedDescription)"

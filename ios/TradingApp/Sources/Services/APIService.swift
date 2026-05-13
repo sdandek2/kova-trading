@@ -253,7 +253,7 @@ class APIService {
 
     // ── Finance: Tax summary ──
     func getTaxSummary(bracketRate: Double = 0.22) async throws -> TaxSummary {
-        try await fetch("/api/finance/tax-summary?bracket_rate=\(bracketRate)")
+        try await fetch("/api/finance/tax-summary?bracket_rate=\(String(format: "%.2f", bracketRate))")
     }
 
     // ── Finance: Profit reserve ──
@@ -267,6 +267,7 @@ class APIService {
         if let amt = amount { body["amount"] = amt }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)

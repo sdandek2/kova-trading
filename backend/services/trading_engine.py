@@ -93,6 +93,7 @@ _position_high_watermarks: dict = _load_watermarks()    # symbol → peak price 
 _short_low_watermarks: dict = _load_short_watermarks()  # symbol → lowest price seen while holding short position
 _previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time, side} for close detection
 _current_cycle_id: Optional[str] = None  # UUID refreshed each cycle for activity log grouping
+_ai_sold_symbols: set = set()          # symbols sold by AI this cycle — guards against double reserve on Alpaca lag
 
 
 def _save_watermarks() -> None:
@@ -332,13 +333,16 @@ async def run_trading_cycle():
         logger.info(f"Geopolitical risk: {geo['risk_level'].upper()} (score={geo['risk_score']}) | Themes: {geo['dominant_themes']}")
 
         # ── Detect position closes: symbols that were held last cycle but are gone now ──
+        global _ai_sold_symbols
         current_symbols = {p.symbol for p in positions}
         for sym, prev in _previous_positions.items():
             if sym not in current_symbols:
-                # Skip symbols already handled by an AI sell/cover in the previous cycle —
-                # log_position_close and reserve were already applied when the decision executed.
-                if prev.get("exit_reason") == "ai_sell":
+                # Skip symbols handled by an AI sell — reserve + log already applied.
+                # Use a persistent set rather than exit_reason (which can be overwritten
+                # by _previous_positions rebuild if Alpaca propagation lags a cycle).
+                if sym in _ai_sold_symbols:
                     logger.debug(f"Skipping cycle-detect close for {sym} — already handled as ai_sell")
+                    _ai_sold_symbols.discard(sym)
                     continue
 
                 # Position was closed — determine exit price from Alpaca orders
@@ -521,7 +525,9 @@ async def run_trading_cycle():
         # Subtract reserved cash so Claude never trades with it
         _reserved = get_reserved_cash()
         _tradeable_cash = max(0.0, float(account.cash) - _reserved)
-        if _reserved > 0:
+        if _reserved > float(account.cash):
+            logger.warning(f"⚠️ Profit reserve (${_reserved:,.2f}) exceeds available cash (${account.cash:,.2f}) — tradeable cash is $0. Consider withdrawing reserve.")
+        elif _reserved > 0:
             logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
 
         decisions = claude_service.analyze_and_decide(
@@ -796,6 +802,7 @@ async def run_trading_cycle():
                         side=prev.get("side", "long"),
                     )
                     # ── Profit reserve on AI-initiated sells ──
+                    _ai_sold_symbols.add(decision.symbol)  # guard cycle-detect from double-counting
                     try:
                         reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
                         entry_p  = prev.get("avg_entry_price") or 0
