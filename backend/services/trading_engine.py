@@ -1055,13 +1055,15 @@ async def run_trading_cycle():
                 timestamp=_last_analysis_at,
             )
             cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
+            _rsn_up = (decision.reasoning or "").upper()
+            _conf_val = "high" if "[HIGH]" in _rsn_up else ("low" if "[LOW]" in _rsn_up else "medium")
             log_trade_decision({
                 "timestamp":       _last_analysis_at,
                 "action":          decision.action,
                 "symbol":          decision.symbol,
                 "quantity":        decision.quantity,
                 "reasoning":       decision.reasoning,
-                "confidence":      None,
+                "confidence":      _conf_val,
                 "market_regime":   macro.get("market_regime"),
                 "geo_risk":        geo.get("risk_level"),
                 "take_profit_pct": decision.take_profit_pct,
@@ -1091,6 +1093,27 @@ async def run_trading_cycle():
                                          symbol=decision.symbol, cycle_id=_current_cycle_id)
                         continue
 
+            # ── Same-symbol conflict check ────────────────────────────────────
+            # Block going long on a symbol we're already short, and vice versa.
+            # SOXL long + SOXL short = net zero exposure while paying twice the spread.
+            if decision.action in ("buy", "short"):
+                _existing_conflict = next((p for p in positions if p.symbol == decision.symbol), None)
+                if _existing_conflict:
+                    _is_conflict = (
+                        (decision.action == "buy" and _existing_conflict.side == "short") or
+                        (decision.action == "short" and _existing_conflict.side == "long")
+                    )
+                    if _is_conflict:
+                        _conflict_msg = (
+                            f"{decision.action.upper()} {decision.symbol} blocked — "
+                            f"already holding {_existing_conflict.side} position. "
+                            f"Conflicting long+short on same symbol creates net-zero exposure."
+                        )
+                        logger.info(f"Conflict check: {_conflict_msg}")
+                        log_bot_activity("entry_rejected", _conflict_msg,
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+
             # ── Opening window: block new entries during first 15 min but allow exits ──
             if decision.action in ("buy", "short") and not entries_allowed:
                 logger.info(
@@ -1116,6 +1139,20 @@ async def run_trading_cycle():
                 logger.info(f"Circuit breaker: skipping {decision.action.upper()} {decision.symbol} — daily loss limit active")
                 log_bot_activity("circuit_breaker",
                                  f"{decision.action.upper()} {decision.symbol} blocked — daily loss limit active",
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
+
+            # ── Earnings play duplicate block ─────────────────────────────────
+            # Once a stock is entered as an earnings play and is in _earnings_day_positions,
+            # block any further buys. The 5% cap applies per-buy, so without this guard
+            # the bot accumulates 3× the intended exposure across 3 cycles.
+            if decision.action in ("buy", "short") and decision.symbol in _earnings_day_positions:
+                _ep_dup_msg = (
+                    f"{decision.action.upper()} {decision.symbol} blocked — already holding as earnings play "
+                    f"(forced EOD exit at 3:45 PM ET). No additional buys allowed."
+                )
+                logger.info(f"Earnings play duplicate: {_ep_dup_msg}")
+                log_bot_activity("earnings_block", _ep_dup_msg,
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 continue
 
@@ -1421,6 +1458,54 @@ async def run_trading_cycle():
                         f"Macro sizing ({_macro_event['event'].upper()}): {decision.symbol} "
                         f"{_pre_macro}→{decision.quantity} shares ({_macro_size_mult:.2f}×)"
                     )
+
+            # ── Per-stock concentration cap ───────────────────────────────────
+            # Prevents accumulating too much of any single stock across repeated cycles.
+            # Each cycle buy passes individual sizing checks but without a total cap,
+            # 11 buys of QUCY at 3%/buy = 33% portfolio in one name.
+            # Hard cap: 10% for regular stocks, same as max_penny_position_pct for stocks <$5.
+            # Reduces qty to fit if partially over; blocks entirely if already at/over cap.
+            if decision.action in ("buy", "short"):
+                _conc_existing = next((p for p in positions if p.symbol == decision.symbol), None)
+                # abs() because Alpaca returns negative market_value for short positions
+                _conc_existing_val = abs(float(_conc_existing.market_value)) if _conc_existing else 0.0
+                _conc_port_val = float(account.portfolio_value)
+                _conc_price = current_price or 1
+                _conc_new_cost = decision.quantity * _conc_price
+                # Use penny cap for <$5 stocks, otherwise respect strategy's max_position_pct.
+                # Using strategy's own limit means: once a full-size position is held,
+                # further buys of the same stock are blocked. Pyramid adds (which go through
+                # a separate code path above) are unaffected.
+                _is_penny_conc = _conc_price < 5.0
+                if _is_penny_conc:
+                    _conc_cap_pct = _risk_settings.get("max_penny_position_pct", 3.0) / 100.0
+                else:
+                    _conc_cap_pct = strat["max_position_pct"]  # e.g. 0.30 aggressive, 0.10 balanced
+                _conc_cap_dollars = _conc_port_val * _conc_cap_pct
+
+                if _conc_existing_val >= _conc_cap_dollars * 0.95:
+                    # Already at or above the cap — block entirely
+                    _conc_msg = (
+                        f"{decision.action.upper()} {decision.symbol} blocked — "
+                        f"concentration cap reached: ${_conc_existing_val:,.0f} held "
+                        f"({_conc_existing_val / _conc_port_val * 100:.1f}%) ≥ "
+                        f"{_conc_cap_pct * 100:.0f}% cap (${_conc_cap_dollars:,.0f})"
+                    )
+                    logger.info(f"Concentration cap: {_conc_msg}")
+                    log_bot_activity("entry_rejected", _conc_msg,
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    continue
+                elif _conc_existing_val + _conc_new_cost > _conc_cap_dollars:
+                    # Partially over — reduce qty to stay within cap
+                    _allowed = max(0.0, _conc_cap_dollars - _conc_existing_val)
+                    _capped_qty = max(1, int(_allowed / _conc_price))
+                    logger.info(
+                        f"Concentration cap: {decision.symbol} reducing "
+                        f"{decision.quantity}→{_capped_qty} shares "
+                        f"(existing ${_conc_existing_val:,.0f} + new fits "
+                        f"within {_conc_cap_pct * 100:.0f}% cap ${_conc_cap_dollars:,.0f})"
+                    )
+                    decision = decision.model_copy(update={"quantity": _capped_qty})
 
             # ── Pre-sell: cancel any open orders on this symbol ──
             # Rotation sells (and scale-outs) fail with "insufficient qty available"
