@@ -247,26 +247,29 @@ async def run_trading_cycle():
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
         loop = asyncio.get_running_loop()
         account = await loop.run_in_executor(None, alpaca_service.get_account)
-        circuit_breaker_active = account.day_pl_percent < -_risk_settings["daily_loss_limit_pct"]
+        # Bug fix: cast to float — Alpaca SDK can return Decimal or string in some versions,
+        # which causes TypeError on f"{:.2f}" formatting and comparison with negative threshold.
+        _day_pl_pct = float(account.day_pl_percent)
+        circuit_breaker_active = _day_pl_pct < -_risk_settings["daily_loss_limit_pct"]
         if circuit_breaker_active:
             logger.warning(
-                f"⛔ Circuit breaker active: down {account.day_pl_percent:.2f}% today "
+                f"⛔ Circuit breaker active: down {_day_pl_pct:.2f}% today "
                 f"(limit: -{_risk_settings['daily_loss_limit_pct']}%). "
                 f"New buys blocked — exits and scale-outs still allowed."
             )
             log_circuit_breaker(
-                day_pl_percent=account.day_pl_percent,
+                day_pl_percent=_day_pl_pct,
                 portfolio_value=account.portfolio_value,
                 limit_pct=_risk_settings["daily_loss_limit_pct"],
             )
             log_bot_activity("circuit_breaker",
-                             f"Daily loss limit hit: down {account.day_pl_percent:.2f}% (limit -{_risk_settings['daily_loss_limit_pct']}%). New buys blocked.",
+                             f"Daily loss limit hit: down {_day_pl_pct:.2f}% (limit -{_risk_settings['daily_loss_limit_pct']}%). New buys blocked.",
                              cycle_id=_current_cycle_id)
             await manager.broadcast({
                 "type": "circuit_breaker",
                 "data": {
                     "reason": f"Daily loss limit of {_risk_settings['daily_loss_limit_pct']}% hit — new buys blocked",
-                    "day_pl_percent": account.day_pl_percent,
+                    "day_pl_percent": _day_pl_pct,
                 }
             })
 
@@ -441,6 +444,11 @@ async def run_trading_cycle():
                 if sym in _position_high_watermarks:
                     del _position_high_watermarks[sym]
 
+        # Bug fix: flush stale _ai_sold_symbols entries — symbols that are still in
+        # positions should stay guarded; symbols gone for >1 cycle should be cleared
+        # so future re-entries don't get their log_position_close permanently suppressed.
+        _ai_sold_symbols = {s for s in _ai_sold_symbols if s in current_symbols}
+
         # Update _previous_positions for next cycle — include side so short closes are identified correctly.
         # Bug fix: preserve entry_time from previous cycle so the 48h stale-exit rule can actually
         # trigger. Old code reset entry_time to now() every cycle, so hours_held was always ~0.17h.
@@ -521,6 +529,20 @@ async def run_trading_cycle():
         # Track symbols pyramided this cycle so re-entry logic skips them
         # (position.qty is stale pre-pyramid; re-entry on same cycle would compute wrong qty)
         _pyramided_this_cycle: set = set()
+
+        # ── Time-of-day gate (pre-scale-out check) ───────────────────────────
+        # Bug fix: was checked AFTER scale-out/momentum-decay order submissions.
+        # Pre-market orders (window="closed") were firing trailing stops and stale
+        # exits before market open. Now checked here so no orders go out when closed.
+        # "exits_only" still allows scale-outs/trailing stops (intentional).
+        from services.entry_timing import is_good_trading_window
+        window_mode, window_reason = is_good_trading_window()
+        if window_mode == "closed":
+            logger.info(f"Trading window: {window_reason} — skipping cycle")
+            return
+        entries_allowed = (window_mode == "full")
+        if not entries_allowed:
+            logger.info(f"Trading window: {window_reason}")
 
         # ── Pyramid: add to winning positions (aggressive only) ──────────────
         # Two tiers — let the best trades compound as far as they'll go:
@@ -859,18 +881,7 @@ async def run_trading_cycle():
                     await manager.broadcast({"type": "order_filled", "data": re_order.model_dump(mode="json")})
 
         # ── Time-of-day filter ──
-        # "closed"      → skip entire cycle (pre-market / after-hours)
-        # "exits_only"  → 9:30-9:45 AM: run AI analysis but block new entries (buy/short)
-        #                  allows AI to exit stale/losing positions immediately at open
-        # "full"        → normal trading
-        from services.entry_timing import is_good_trading_window
-        window_mode, window_reason = is_good_trading_window()
-        if window_mode == "closed":
-            logger.info(f"Trading window: {window_reason} — skipping cycle")
-            return
-        entries_allowed = (window_mode == "full")
-        if not entries_allowed:
-            logger.info(f"Trading window: {window_reason}")
+        # window_mode / entries_allowed already set above (before scale-out block)
 
         # ── Daily trade floor: configurable via /api/risk/settings ──
         now_utc = datetime.now(timezone.utc)

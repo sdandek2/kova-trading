@@ -489,7 +489,9 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
         # skip ALL remaining trades. Strip % and fall back to strategy defaults safely.
         def _safe_pct(val, default):
             try:
-                return float(str(val).replace("%", "").strip()) if val else default
+                # Bug fix: use `is not None` not truthiness — val=0 is a valid float
+                # and `if val` would wrongly treat 0% as missing and return the default.
+                return float(str(val).replace("%", "").strip()) if val is not None else default
             except (ValueError, TypeError):
                 return default
 
@@ -563,6 +565,9 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
         elif action == "sell":
             pos = next((p for p in positions if p.symbol == sym and p.side == "long"), None)
             if not pos:
+                # Bug fix: log warning instead of silent skip — helps diagnose cases
+                # where Claude issues a sell on a short position or a stale symbol.
+                logger.warning(f"Sell for {sym} skipped — no long position found (held as short or already closed)")
                 continue
             final_qty = max(1, round(float(pos.qty)))
             # Add estimated proceeds to remaining_cash so a subsequent buy in

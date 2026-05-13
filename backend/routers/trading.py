@@ -79,7 +79,15 @@ def get_trade_history(limit: int = Query(50, ge=1, le=500)):
             rows = cur.fetchall()
         columns = ["id", "timestamp", "action", "symbol", "quantity",
                    "reasoning", "confidence", "market_regime", "geo_risk"]
-        return [dict(zip(columns, row)) for row in rows]
+        # Bug fix: psycopg2 returns timestamp as a datetime object which FastAPI
+        # cannot JSON-serialize from a plain dict. Convert to ISO string explicitly.
+        result = []
+        for row in rows:
+            d = dict(zip(columns, row))
+            if d.get("timestamp") and hasattr(d["timestamp"], "isoformat"):
+                d["timestamp"] = d["timestamp"].isoformat()
+            result.append(d)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch trade history: {e}")
 

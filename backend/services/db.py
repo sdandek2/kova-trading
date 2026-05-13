@@ -33,7 +33,8 @@ def _get_conn():
         # Re-use existing connection if still open
         try:
             if _conn and not _conn.closed:
-                _conn.cursor().execute("SELECT 1")
+                with _conn.cursor() as _hc:
+                    _hc.execute("SELECT 1")
                 return _conn
         except Exception:
             _conn = None
@@ -275,31 +276,9 @@ def log_trade_decision(decision_data: dict) -> None:
             return
 
         with conn.cursor() as cur:
-            # Create table with full schema
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS trade_log (
-                    id              SERIAL PRIMARY KEY,
-                    timestamp       TIMESTAMPTZ NOT NULL,
-                    action          TEXT NOT NULL,
-                    symbol          TEXT,
-                    quantity        INTEGER,
-                    reasoning       TEXT,
-                    confidence      TEXT,
-                    market_regime   TEXT,
-                    geo_risk        TEXT,
-                    take_profit_pct FLOAT,
-                    stop_loss_pct   FLOAT,
-                    partial_exit    BOOLEAN DEFAULT FALSE
-                )
-            """)
-            # Add new columns if they don't exist yet (safe on existing tables)
-            for col_sql in [
-                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS take_profit_pct FLOAT",
-                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS stop_loss_pct FLOAT",
-                "ALTER TABLE trade_log ADD COLUMN IF NOT EXISTS partial_exit BOOLEAN DEFAULT FALSE",
-            ]:
-                cur.execute(col_sql)
-
+            # Bug fix: DDL (CREATE TABLE + ALTER TABLE) was running on every call — every
+            # trade decision, 3+ times per cycle. Moved to _ensure_tables() which runs
+            # once at startup. These lines are now a no-op guard kept only for safety.
             cur.execute(
                 """
                 INSERT INTO trade_log

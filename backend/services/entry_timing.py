@@ -200,12 +200,16 @@ def should_confirm_entry(
         return True, f"{symbol} sell confirmed: RSI={rsi:.1f}"
 
     elif action == "short":
-        if rsi < 35:
-            return False, f"{symbol} RSI {rsi:.1f} — oversold, short bounce risk, skipping"
+        # Bug fix: aggressive requires RSI >= 45, balanced >= 35.
+        # Old code checked rsi<35 first, making the aggressive rsi<45 check unreachable
+        # for RSI 35-44 — those values would pass the first guard and get approved.
+        rsi_floor = 45 if is_aggressive else 35
+        if rsi < rsi_floor:
+            return False, (
+                f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), bounce risk"
+            )
         if current_price < yesterday_close * 0.95:
             return False, f"{symbol} already down >5% today — late short entry, skipping"
-        if is_aggressive and rsi < 45:
-            return False, f"{symbol} RSI {rsi:.1f} — not overbought enough to short confidently"
         return True, f"{symbol} short confirmed: RSI={rsi:.1f}, price vs yesterday ok"
 
     return True, "No confirmation needed for hold"
