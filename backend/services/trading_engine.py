@@ -596,7 +596,7 @@ async def run_trading_cycle():
                 p_price = sym_data_p.get("current_price") or position.current_price
 
                 # Tier 1: sweet spot — clearly working, not yet overbought
-                tier1 = (5.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 72 and pyrs_taken == 0
+                tier1 = (5.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 75 and pyrs_taken == 0
                 # Tier 2: extended winner — add smaller on continued strength
                 # Bug fix: was 22.0 leaving an 18-22% dead zone. Now 19.0 closes the gap.
                 tier2 = (19.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
@@ -1021,8 +1021,8 @@ async def run_trading_cycle():
                 _rsi_re = (compute_rsi(cp_re) or 50.0)
                 _price_re = sd.get("current_price") or position.current_price
                 # Must be near MA20 (pulled back properly) with resuming momentum
-                near_ma20 = _ma20_re and (_price_re <= _ma20_re * 1.06)
-                if not (near_ma20 and _mh_re > 0.0 and _rsi_re < 58):
+                near_ma20 = _ma20_re and (_price_re <= _ma20_re * 1.10)
+                if not (near_ma20 and _mh_re > 0.0 and _rsi_re < 65):
                     continue
                 reentry_cost = reentry_qty * _price_re
                 if reentry_cost > _tradeable_cash * 0.35:
