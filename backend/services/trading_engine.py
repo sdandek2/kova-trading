@@ -13,7 +13,7 @@ from services.db import (
     get_trade_performance_summary,
 )
 from services.indicators import compute_atr, compute_rsi, volatility_adjusted_quantity
-from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out, should_cover_short
+from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out, should_cover_short, get_cooldown_symbols
 from services.earnings import get_upcoming_earnings
 from services.macro import get_macro_context, get_sector_rotation
 from services.macro_calendar import get_macro_event_today, is_fomc_entry_blocked, check_fda_event as check_fda_binary_event
@@ -647,6 +647,63 @@ async def run_trading_cycle():
 
             is_short = position.side == "short"
 
+            # ── Gap-down exit: opening window (9:30–9:55 AM ET) ──────────────
+            # If a held long is already down >2% in the first 25 minutes of trading,
+            # exit immediately. Opening weakness is highly predictive — stocks falling
+            # hard at open rarely recover same day. Don't wait for the -6% circuit breaker.
+            if not is_short:
+                try:
+                    from zoneinfo import ZoneInfo
+                    _now_et_gap = datetime.now(ZoneInfo("America/New_York"))
+                except Exception:
+                    _now_et_gap = datetime.now(timezone.utc) - timedelta(hours=4)
+                _mins_gap = _now_et_gap.hour * 60 + _now_et_gap.minute
+                _in_opening_window = (9 * 60 + 30) <= _mins_gap <= (9 * 60 + 55)
+                if _in_opening_window and position.unrealized_pl_percent < -2.0:
+                    gap_reason = (
+                        f"{position.symbol} down {position.unrealized_pl_percent:.1f}% "
+                        f"in opening window (first 25 min) — gap-down exit before further loss"
+                    )
+                    logger.info(f"GAP_DOWN_EXIT: {gap_reason}")
+                    log_bot_activity("scale_out", gap_reason,
+                                     symbol=position.symbol, cycle_id=_current_cycle_id)
+                    if position.symbol in _previous_positions:
+                        _previous_positions[position.symbol]["exit_reason"] = "gap_down_exit"
+                    # Cancel any open bracket/GTC orders first
+                    try:
+                        open_orders = alpaca_service.get_orders(limit=20)
+                        for o in open_orders:
+                            if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                                alpaca_service.cancel_order(o.id)
+                    except Exception:
+                        pass
+                    gap_order = alpaca_service.submit_market_order(
+                        symbol=position.symbol,
+                        qty=int(float(position.qty)),
+                        side="sell",
+                    )
+                    if gap_order:
+                        _ai_sold_symbols.add(position.symbol)
+                        try:
+                            reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                            _prev_gap = _previous_positions.get(position.symbol, {})
+                            entry_p_gap = _prev_gap.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                            exit_p_gap = float(position.current_price or entry_p_gap)
+                            qty_gap = int(float(position.qty))
+                            if reserve_pct > 0 and entry_p_gap > 0 and qty_gap > 0:
+                                realized_gap = (exit_p_gap - entry_p_gap) * qty_gap
+                                if realized_gap > 0:
+                                    add_to_reserve(round(realized_gap * reserve_pct, 2))
+                        except Exception as _re:
+                            logger.warning(f"Profit reserve (gap_down) failed (non-fatal): {_re}")
+                        await manager.broadcast({"type": "order_filled", "data": gap_order.model_dump(mode="json")})
+                        await manager.broadcast({"type": "ai_analysis", "data": {
+                            "reasoning": gap_reason, "last_action": "sell",
+                            "symbol": position.symbol,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }})
+                    continue  # skip all other exit checks for this position
+
             # ── Stale-position cleanup ────────────────────────────────────────
             # A position flat for 48+ hours is dead money — exit and redeploy.
             # Only triggers for longs between -1% and +3% P&L (truly flat).
@@ -1016,6 +1073,11 @@ async def run_trading_cycle():
 
         # _tradeable_cash already computed above (before pyramiding block) — reused here
 
+        # Pass cooldown symbols so Claude stops nominating already-rejected stocks
+        _cooldown_syms = get_cooldown_symbols()
+        if _cooldown_syms:
+            logger.info(f"Rejection cooldown symbols (excluded from Step 1): {_cooldown_syms}")
+
         decisions = await loop.run_in_executor(
             None,
             functools.partial(
@@ -1036,6 +1098,7 @@ async def run_trading_cycle():
                 recent_trades=recent_trades,
                 earnings_plays=earnings_plays,
                 afternoon_pressure=afternoon_pressure,
+                rejected_symbols=_cooldown_syms,
             )
         )
 

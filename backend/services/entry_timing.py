@@ -51,6 +51,16 @@ def clear_rejection_cooldown(symbol: str) -> None:
         _REJECTION_COOLDOWN.pop(symbol, None)
 
 
+def get_cooldown_symbols() -> list[str]:
+    """Return list of symbols currently in rejection cooldown — fed into Step 1 so Claude stops nominating them."""
+    with _REJECTION_COOLDOWN_LOCK:
+        now = datetime.now(timezone.utc)
+        return [
+            sym for sym, last in _REJECTION_COOLDOWN.items()
+            if (now - last).total_seconds() / 60 < _REJECTION_COOLDOWN_MINUTES
+        ]
+
+
 def _ma20_extension_limit(symbol: str, price: float = 0.0) -> float:
     """
     Return the maximum allowed % extension above MA20 for this symbol.
