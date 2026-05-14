@@ -22,7 +22,7 @@ _BROAD_ETFS = {
 # Thread-safe: the dict is shared across executor threads via the lock below.
 _REJECTION_COOLDOWN: dict = {}
 _REJECTION_COOLDOWN_LOCK = threading.Lock()
-_REJECTION_COOLDOWN_MINUTES = 30
+_REJECTION_COOLDOWN_MINUTES = 15  # aggressive: shorter cooldown so symbols re-enter sooner
 
 
 def _is_in_rejection_cooldown(symbol: str) -> tuple[bool, str]:
@@ -91,11 +91,12 @@ def should_confirm_entry(
     """
     Strategy-aware entry confirmation.
 
-    AGGRESSIVE mode (designed for 2-5 trades/day):
+    AGGRESSIVE mode (designed for 5-10 trades/day):
     - Only blocks on confirmed panic selling (>5% down + volume collapse)
-    - RSI ceiling raised to 80
+    - RSI ceiling: 92 for leveraged ETFs (momentum instruments), 85 for all others
     - MA20 extension: ticker-aware (penny=40%, leveraged=18%, broad=12%, stocks=10%)
     - Thin portfolio (<3 positions) lowers bar further, capped at 1.5× normal limit
+    - Volume threshold lowered to 0.4x (was 0.7x) — don't miss momentum on quiet days
 
     BALANCED / CONSERVATIVE mode:
     - Down >2% from yesterday → skip
@@ -131,8 +132,11 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
 
-            if rsi > 80:
-                reason = f"{symbol} RSI {rsi:.1f} — extremely overbought even for aggressive"
+            # Leveraged ETFs are momentum instruments — high RSI IS the signal.
+            # Only block at extreme levels. Regular stocks capped at 85.
+            rsi_ceiling = 92 if symbol in _LEVERAGED_ETFS else 85
+            if rsi > rsi_ceiling:
+                reason = f"{symbol} RSI {rsi:.1f} — above {rsi_ceiling} ceiling, too extended even for aggressive"
                 _record_rejection(symbol)
                 return False, reason
 
@@ -158,16 +162,20 @@ def should_confirm_entry(
                         _record_rejection(symbol)
                         return False, reason
 
-            if relative_volume < 0.7 and not needs_positions:
+            if relative_volume < 0.4 and not needs_positions:
                 reason = (
-                    f"{symbol} relative volume {relative_volume:.1f}x — breakout not confirmed by volume"
+                    f"{symbol} relative volume {relative_volume:.1f}x — too thin even for aggressive"
                 )
                 _record_rejection(symbol)
                 return False, reason
 
-            if macd_histogram is not None and macd_histogram < -0.05 and rsi >= 45 and not needs_positions:
+            # Only block on strongly negative MACD — mild dips are fine in aggressive mode.
+            # Also skip this check for leveraged ETFs (momentum instruments often diverge).
+            if (macd_histogram is not None and macd_histogram < -0.15
+                    and rsi >= 45 and not needs_positions
+                    and symbol not in _LEVERAGED_ETFS):
                 reason = (
-                    f"{symbol} MACD histogram {macd_histogram:.3f} — momentum negative, waiting for recovery"
+                    f"{symbol} MACD histogram {macd_histogram:.3f} — momentum strongly negative, waiting for recovery"
                 )
                 _record_rejection(symbol)
                 return False, reason
