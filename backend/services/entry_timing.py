@@ -223,17 +223,25 @@ def should_confirm_entry(
         return True, f"{symbol} sell confirmed: RSI={rsi:.1f}"
 
     elif action == "short":
-        # Bug fix: aggressive requires RSI >= 45, balanced >= 35.
-        # Old code checked rsi<35 first, making the aggressive rsi<45 check unreachable
-        # for RSI 35-44 — those values would pass the first guard and get approved.
-        rsi_floor = 45 if is_aggressive else 35
+        # Short requires genuine overbought conditions — not just any RSI.
+        # RSI 65 minimum for aggressive (stock must be overbought before we short).
+        # RSI 45 was too low — shorting a stock already pulling back risks a bounce.
+        rsi_floor = 65 if is_aggressive else 55
         if rsi < rsi_floor:
             return False, (
-                f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), bounce risk"
+                f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), not overbought enough to short"
             )
         if current_price < yesterday_close * 0.95:
             return False, f"{symbol} already down >5% today — late short entry, skipping"
-        return True, f"{symbol} short confirmed: RSI={rsi:.1f}, price vs yesterday ok"
+        # MACD must be turning negative — don't short into still-positive momentum
+        from services.indicators import compute_macd as _cm
+        _macd_s = _cm(closing_prices)
+        _hist_s = _macd_s.get("histogram", 0) or 0
+        if _hist_s > 0.05:
+            return False, (
+                f"{symbol} MACD histogram {_hist_s:.3f} — momentum still positive, too early to short"
+            )
+        return True, f"{symbol} short confirmed: RSI={rsi:.1f}, MACD hist={_hist_s:.3f}"
 
     return True, "No confirmation needed for hold"
 

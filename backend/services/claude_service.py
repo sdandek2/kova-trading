@@ -292,10 +292,33 @@ Factor these into your trade approvals — confirm or override based on today's 
         # Never block trading — EOD context is a bonus, not a requirement
         logger.debug(f"EOD feedback load skipped (non-fatal): {_eod_exc}")
 
-    # ── Inject inverse ETFs on bearish days ──
+    # ── Macro direction guard — align portfolio with market regime ──
     regime = (macro or {}).get("market_regime", "")
     vix = (macro or {}).get("vix_level", "low")
+    spy_trend = (macro or {}).get("spy_trend", "neutral")
     is_bearish_day = regime in ("bear", "volatile", "bearish", "risk-off") or vix in ("extreme_fear", "elevated", "extreme", "high")
+    is_bull_day = regime in ("bull", "bullish", "strong_bull") or spy_trend in ("uptrend", "bullish", "strong_uptrend")
+
+    regime_direction_note = ""
+    if is_bull_day and not is_bearish_day:
+        regime_direction_note = """
+## ⚠️ BULL MARKET REGIME — Direction Override
+SPY is in an UPTREND. The market is going UP today.
+- DO NOT short individual stocks unless RSI > 78 AND sector is clearly weak AND MACD is negative
+- PRIORITY: longs in leading sectors, leveraged ETFs (TQQQ, SOXL, SPXL, UPRO)
+- A wrong-direction short in a bull market is a guaranteed loss — avoid it
+- If you have existing shorts, assess whether they should be covered
+- Fighting the market trend is the #1 profit killer — go WITH the trend
+"""
+    elif is_bearish_day:
+        regime_direction_note = """
+## ⚠️ BEAR MARKET REGIME — Direction Override
+SPY is in a DOWNTREND. The market is going DOWN today.
+- DO NOT open new longs in individual stocks or leveraged bull ETFs
+- PRIORITY: inverse ETFs (SQQQ, SPXS, SOXS, SDOW), short candidates with RSI > 70
+- A wrong-direction long in a bear market loses money — go WITH the downtrend
+"""
+
     bearish_etf_note = ""
     if is_bearish_day:
         bearish_etf_note = """
@@ -325,7 +348,7 @@ Buy inverse ETFs exactly like regular stocks — they profit automatically as th
     step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
-{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
+{regime_direction_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
@@ -494,7 +517,7 @@ ROTATION RULES:
 """
 
     step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
-{pressure_note}
+{pressure_note}{regime_direction_note}
 {eod_step2_context}{performance_text}
 {portfolio_context}
 Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}

@@ -298,12 +298,30 @@ async def run_trading_cycle():
         )
 
         # ── Pre-breakout scan: find stocks near MA20 before they extend ──────
-        # Runs immediately after snapshot so Claude's Step 1 prompt includes
-        # early setups before they get rejected for MA20 extension next cycle.
+        # Pulls yesterday's EOD watchlist symbols so the thesis carries forward
+        # into today's scan — those stocks get guaranteed slots regardless of
+        # how many universe candidates score higher.
         _prebreakout_candidates = []
         try:
             from services.breakout_scanner import scan_prebreakout_candidates
-            _prebreakout_candidates = scan_prebreakout_candidates(snapshot_light, top_n=6)
+            from services.eod_analysis_service import get_latest_eod_report as _get_eod
+            _eod_watchlist_syms = []
+            try:
+                _eod = _get_eod()
+                if _eod and isinstance(_eod, dict):
+                    _wl = (_eod.get("analysis") or {}).get("tomorrow_watchlist") or []
+                    _eod_watchlist_syms = [w.get("symbol") for w in _wl if w.get("symbol")]
+                    if _eod_watchlist_syms:
+                        logger.info(f"EOD watchlist for breakout scan: {_eod_watchlist_syms}")
+            except Exception as _eod_err:
+                logger.debug(f"Could not load EOD watchlist for scanner (non-fatal): {_eod_err}")
+
+            _prebreakout_candidates = scan_prebreakout_candidates(
+                snapshot_light,
+                top_n=6,
+                watchlist_symbols=_eod_watchlist_syms,
+                sentiment=sentiment,
+            )
         except Exception as _pbs_err:
             logger.warning(f"Pre-breakout scan failed (non-fatal): {_pbs_err}")
 
