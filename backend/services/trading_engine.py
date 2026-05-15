@@ -311,9 +311,15 @@ async def run_trading_cycle():
                 _eod = _get_eod()
                 if _eod and isinstance(_eod, dict):
                     _wl = (_eod.get("analysis") or {}).get("tomorrow_watchlist") or []
-                    _eod_watchlist_syms = [w.get("symbol") for w in _wl if w.get("symbol")]
+                    _all_watchlist = [w.get("symbol") for w in _wl if w.get("symbol")]
+                    # Filter out symbols currently held as shorts — they shouldn't
+                    # appear as buy candidates and cause "no long position found" warnings
+                    _short_symbols = {p.symbol for p in positions if getattr(p, "side", "long") == "short"}
+                    _eod_watchlist_syms = [s for s in _all_watchlist if s not in _short_symbols]
                     if _eod_watchlist_syms:
                         logger.info(f"EOD watchlist for breakout scan: {_eod_watchlist_syms}")
+                    if _short_symbols & set(_all_watchlist):
+                        logger.info(f"EOD watchlist filtered out short positions: {_short_symbols & set(_all_watchlist)}")
             except Exception as _eod_err:
                 logger.debug(f"Could not load EOD watchlist for scanner (non-fatal): {_eod_err}")
 

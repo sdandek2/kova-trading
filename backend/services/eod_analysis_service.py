@@ -230,6 +230,8 @@ Strategy: {strat['name']}
 ## Entries Rejected by Risk Filters
 {rejection_text}
 
+Important: In tomorrow_watchlist, do NOT add symbols currently held as SHORT positions with action "buy". If a symbol in open positions is marked [short], only include it with action "short" or "watch".
+
 Respond with ONLY this JSON — no markdown, no explanation:
 {{
   "headline": "One sentence summary of today (e.g. 'Strong bull day +2.1% — NVDA and SOXL led gains')",

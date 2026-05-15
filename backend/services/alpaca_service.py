@@ -830,7 +830,8 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
                     "source": source,
                 })
         except Exception as e:
-            logger.warning(f"RSS parse error ({source}): {e}")
+            # Downgrade to debug — some feeds (Nasdaq Trader) have permanently malformed XML
+            logger.debug(f"RSS parse error ({source}): {e}")
         return articles
 
     def _parse_atom(xml_text: str, source: str, symbol_hints: list[str] = []) -> list[dict]:
@@ -872,7 +873,8 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
                 return _parse_atom(resp.text, source, symbol_hints)
             return _parse_rss(resp.text, source, symbol_hints)
         except Exception as e:
-            logger.warning(f"{source} fetch failed (non-fatal): {e}")
+            # Downgrade Reuters DNS failure to debug — Railway blocks external DNS for some feeds
+            logger.debug(f"{source} fetch failed (non-fatal): {e}")
             return []
 
     # ── Build task list ───────────────────────────────────────────────────────

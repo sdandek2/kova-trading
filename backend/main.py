@@ -1,5 +1,11 @@
 import logging
+import warnings
 from contextlib import asynccontextmanager
+
+# Suppress Pydantic v2 serializer warning from alpaca-py SDK
+# ("Expected `enum` but got `str`") — caused by alpaca-py passing string values
+# to fields typed as enums in their internal models. Harmless but spams logs.
+warnings.filterwarnings("ignore", message=".*Expected `enum` but got `str`.*")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
