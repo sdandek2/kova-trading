@@ -373,9 +373,27 @@ def get_market_snapshot(symbols: list[str]) -> dict:
 
             volume = int(symbol_bars[-1].volume) if symbol_bars else 0
             volumes = [int(b.volume) for b in symbol_bars]
-            last_20_volumes = volumes[-20:] if len(volumes) >= 20 else volumes
+            # Exclude today's partial bar from the historical average
+            historical_volumes = volumes[:-1] if len(volumes) > 1 else volumes
+            last_20_volumes = historical_volumes[-20:] if len(historical_volumes) >= 20 else historical_volumes
             avg_volume = int(sum(last_20_volumes) / len(last_20_volumes)) if last_20_volumes else 0
-            relative_volume = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
+            # Project today's partial volume to a full-day estimate based on time elapsed.
+            # Without this, a stock with 15M shares at 11 AM looks "thin" vs a 50M daily avg
+            # even though it's perfectly on pace for a normal day.
+            market_open_minutes = 9.5 * 60    # 9:30 AM ET in minutes since midnight
+            market_close_minutes = 16.0 * 60  # 4:00 PM ET
+            total_session_minutes = market_close_minutes - market_open_minutes  # 390 min
+            now_et = datetime.now(timezone.utc)
+            # Convert UTC to ET (UTC-4 in summer, UTC-5 in winter — use fixed offset as approximation)
+            import time as _time
+            et_offset = -4 if _time.daylight else -5
+            now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
+            minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
+            day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
+            projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume
+
+            relative_volume = round(projected_volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
             snapshot[symbol] = {
                 "current_price": current_price,
@@ -549,9 +567,24 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
 
             volume = int(symbol_bars[-1].volume) if symbol_bars else 0
             volumes = [int(b.volume) for b in symbol_bars]
-            last_20_volumes = volumes[-20:] if len(volumes) >= 20 else volumes
+            # Exclude today's partial bar from the historical average
+            historical_volumes = volumes[:-1] if len(volumes) > 1 else volumes
+            last_20_volumes = historical_volumes[-20:] if len(historical_volumes) >= 20 else historical_volumes
             avg_volume = int(sum(last_20_volumes) / len(last_20_volumes)) if last_20_volumes else 0
-            relative_volume = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
+            # Project today's partial volume to a full-day estimate based on time elapsed
+            market_open_minutes = 9.5 * 60
+            market_close_minutes = 16.0 * 60
+            total_session_minutes = market_close_minutes - market_open_minutes
+            now_et = datetime.now(timezone.utc)
+            import time as _time
+            et_offset = -4 if _time.daylight else -5
+            now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
+            minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
+            day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
+            projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume
+
+            relative_volume = round(projected_volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
             snapshot[symbol] = {
                 "current_price": current_price,
