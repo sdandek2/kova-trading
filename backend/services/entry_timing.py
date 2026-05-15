@@ -353,7 +353,7 @@ def should_cover_short(
             return True, 0.50, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering half, letting rest ride"
         elif position_unrealized_pl_percent >= 10.0 and rsi < 35:
             return True, 0.33, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} oversold — trimming 33%"
-        elif position_unrealized_pl_percent <= -5.0:
+        elif position_unrealized_pl_percent <= -3.5:
             return True, 1.0, f"{symbol} SHORT down {abs(position_unrealized_pl_percent):.1f}% (price rose) — covering to stop loss"
     else:
         if position_unrealized_pl_percent >= 12.0:
