@@ -333,6 +333,7 @@ Scan the stocks above. Identify the TOP 7 best opportunities based on technicals
 - BULLISH regime: favor longs and leveraged ETFs
 - BEARISH regime: favor inverse ETFs and short candidates (RSI > 72 + bearish sector)
 - NEUTRAL: balanced mix
+- short_candidate: ONLY nominate when RSI > 65 AND MACD histogram < 0.5. RSI below 65 = not overbought, skip it. MACD above 0.5 = momentum too strong, skip it.
 Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
 
 Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown.
@@ -500,7 +501,7 @@ For EACH candidate decide: BUY, SHORT, or SKIP.
 Rules:
 - Approve up to 3 trades per cycle (mix of longs and shorts)
 - BUY: standard long position — profit when price rises
-- SHORT: sell shares short — profit when price FALLS. Best for: RSI > 72 + MACD histogram near zero or negative (< 0.1) + bearish sector + no upcoming earnings. NEVER short when MACD histogram is strongly positive (> 1.0) — momentum will stop you out immediately
+- SHORT: sell shares short — profit when price FALLS. Requires: RSI > 65 AND MACD histogram < 0.5. Ideal: RSI > 72 + MACD negative + bearish sector + no upcoming earnings. SKIP if RSI ≤ 65 or MACD ≥ 0.5 — the system will reject it and waste the slot
 - SELL: close an existing long position (for rotation or profit-taking)
 - Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
 - In bearish regime: prioritize inverse ETF buys + individual stock shorts
