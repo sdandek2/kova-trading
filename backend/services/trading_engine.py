@@ -318,7 +318,7 @@ async def run_trading_cycle():
 
             _prebreakout_candidates = scan_prebreakout_candidates(
                 snapshot_light,
-                top_n=6,
+                top_n=10,
                 watchlist_symbols=_eod_watchlist_syms,
                 sentiment=sentiment,
             )
@@ -1272,22 +1272,42 @@ async def run_trading_cycle():
                 _ep_reasoning   = _ep.get("reasoning", "")
 
                 if _ep_direction == "uncertain":
-                    # No clear signal — hard block as before
-                    logger.warning(
-                        f"EARNINGS BLOCK: {decision.symbol} — prediction uncertain, "
-                        f"gap risk too high. Blocking."
-                    )
-                    log_bot_activity("earnings_block",
-                                     f"{decision.action.upper()} {decision.symbol} blocked — earnings today/tomorrow, "
-                                     f"AI prediction: uncertain. Gap risk too high.",
-                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
-                    await manager.broadcast({"type": "ai_analysis", "data": {
-                        "reasoning": f"Earnings block: {decision.symbol} — prediction uncertain, binary gap risk. Skipping.",
-                        "last_action": "waiting",
-                        "symbol": decision.symbol,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }})
-                    continue
+                    # Uncertain earnings — aggressive mode gets a tiny 2% position
+                    # with forced EOD exit to capture intraday momentum while avoiding
+                    # overnight gap risk. Balanced mode still blocks outright.
+                    if is_aggressive:
+                        _ep_price_u = _sym_data.get("current_price")
+                        if not _ep_price_u or _ep_price_u <= 0:
+                            logger.warning(f"Earnings uncertain {decision.symbol}: no price, blocking")
+                            continue
+                        _ep_max_qty_u = max(1, int(float(account.portfolio_value) * 0.02 / _ep_price_u))
+                        capped_qty_u = min(decision.quantity or _ep_max_qty_u, _ep_max_qty_u)
+                        decision = decision.model_copy(update={"quantity": capped_qty_u})
+                        _earnings_play_pending.add(decision.symbol)
+                        logger.info(
+                            f"EARNINGS UNCERTAIN (aggressive): {decision.action.upper()} {decision.symbol} "
+                            f"x{capped_qty_u} — tiny 2% position, forced EOD exit"
+                        )
+                        log_bot_activity("approved",
+                                         f"EARNINGS UNCERTAIN: {decision.action.upper()} {decision.symbol} x{capped_qty_u} "
+                                         f"— 2% position cap, forced EOD exit (intraday momentum only)",
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        # Fall through to normal order execution
+                    else:
+                        logger.warning(
+                            f"EARNINGS BLOCK: {decision.symbol} — prediction uncertain, gap risk too high."
+                        )
+                        log_bot_activity("earnings_block",
+                                         f"{decision.action.upper()} {decision.symbol} blocked — earnings today/tomorrow, "
+                                         f"AI prediction: uncertain. Gap risk too high.",
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        await manager.broadcast({"type": "ai_analysis", "data": {
+                            "reasoning": f"Earnings block: {decision.symbol} — prediction uncertain, binary gap risk. Skipping.",
+                            "last_action": "waiting",
+                            "symbol": decision.symbol,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }})
+                        continue
                 else:
                     # Directional signal — allow small position, cap at 5% portfolio, force EOD exit
                     _ep_price = _sym_data.get("current_price")

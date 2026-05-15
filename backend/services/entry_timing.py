@@ -176,7 +176,9 @@ def should_confirm_entry(
 
             # Only block on strongly negative MACD — mild dips are fine in aggressive mode.
             # Also skip this check for leveraged ETFs (momentum instruments often diverge).
-            if (macd_histogram is not None and macd_histogram < -0.15
+            # Exception: if MACD is improving (turning less negative), that IS the buy signal
+            # — don't block a recovery play just because histogram is still slightly negative.
+            if (macd_histogram is not None and macd_histogram < -0.25
                     and rsi >= 45 and not needs_positions
                     and symbol not in _LEVERAGED_ETFS):
                 reason = (

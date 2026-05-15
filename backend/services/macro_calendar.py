@@ -103,7 +103,7 @@ def get_macro_event_today() -> dict:
         return {
             "event": "fomc",
             "risk_level": "high",
-            "position_size_multiplier": 0.50,   # half size on FOMC day
+            "position_size_multiplier": 0.75,   # aggressive: 0.75x on FOMC (was 0.5x — too conservative, FOMC days have big moves)
             "block_entries_after_et": 13 * 60 + 45,  # 1:45 PM ET — 15 min before 2 PM announcement
             "message": f"FOMC rate decision today — position sizes halved, no new entries after 1:45 PM ET",
         }
@@ -112,7 +112,7 @@ def get_macro_event_today() -> dict:
         return {
             "event": "cpi",
             "risk_level": "medium",
-            "position_size_multiplier": 0.70,   # 30% smaller on CPI day
+            "position_size_multiplier": 0.85,   # aggressive: 0.85x on CPI day (was 0.7x)
             "block_entries_after_et": None,
             "message": f"CPI release today — position sizes reduced 30% (market volatility risk)",
         }
@@ -121,9 +121,9 @@ def get_macro_event_today() -> dict:
         return {
             "event": "jobs",
             "risk_level": "medium",
-            "position_size_multiplier": 0.70,
+            "position_size_multiplier": 0.85,
             "block_entries_after_et": None,
-            "message": f"Jobs report today — position sizes reduced 30% (market volatility risk)",
+            "message": f"Jobs report today — position sizes reduced 15% (market volatility risk)",
         }
 
     return {
