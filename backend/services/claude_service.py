@@ -292,47 +292,13 @@ Factor these into your trade approvals — confirm or override based on today's 
         # Never block trading — EOD context is a bonus, not a requirement
         logger.debug(f"EOD feedback load skipped (non-fatal): {_eod_exc}")
 
-    # ── Macro direction guard — align portfolio with market regime ──
+    # ── Macro context — informational only, no direction override ──
+    # Claude decides individually per stock based on its own signals (RSI, MACD, sector momentum).
+    # SPY trend is provided as context but does NOT force a long/short direction.
     regime = (macro or {}).get("market_regime", "")
-    vix = (macro or {}).get("vix_level", "low")
-    spy_trend = (macro or {}).get("spy_trend", "neutral")
-    is_bearish_day = regime in ("bear", "volatile", "bearish", "risk-off") or vix in ("extreme_fear", "elevated", "extreme", "high")
-    is_bull_day = regime in ("bull", "bullish", "strong_bull") or spy_trend in ("uptrend", "bullish", "strong_uptrend")
-
+    is_bearish_day = False  # no longer used to block longs
     regime_direction_note = ""
-    if is_bull_day and not is_bearish_day:
-        regime_direction_note = """
-## ⚠️ BULL MARKET REGIME — Direction Override
-SPY is in an UPTREND. The market is going UP today.
-- DO NOT short individual stocks unless RSI > 78 AND sector is clearly weak AND MACD is negative
-- PRIORITY: longs in leading sectors, leveraged ETFs (TQQQ, SOXL, SPXL, UPRO)
-- A wrong-direction short in a bull market is a guaranteed loss — avoid it
-- If you have existing shorts, assess whether they should be covered
-- Fighting the market trend is the #1 profit killer — go WITH the trend
-"""
-    elif is_bearish_day:
-        regime_direction_note = """
-## ⚠️ BEAR MARKET REGIME — Direction Override
-SPY is in a DOWNTREND. The market is going DOWN today.
-- DO NOT open new longs in individual stocks or leveraged bull ETFs
-- PRIORITY: inverse ETFs (SQQQ, SPXS, SOXS, SDOW), short candidates with RSI > 70
-- A wrong-direction long in a bear market loses money — go WITH the downtrend
-"""
-
     bearish_etf_note = ""
-    if is_bearish_day:
-        bearish_etf_note = """
-## Bearish / Inverse ETF Opportunities (market regime is BEARISH — PRIORITIZE these)
-These ETFs profit when the market FALLS. Use them aggressively today:
-  • SQQQ  — 3x inverse QQQ (tech/growth bear play)
-  • SPXU  — 3x inverse S&P 500
-  • SPXS  — 1x inverse S&P 500 (less volatile)
-  • SOXS  — 3x inverse semiconductors
-  • SDOW  — 3x inverse Dow Jones
-  • TZA   — 3x inverse Russell 2000 (small-cap bear)
-  • UVXY  — long VIX volatility (spikes when market panics)
-Buy inverse ETFs exactly like regular stocks — they profit automatically as the index falls.
-"""
 
     # Build rejected symbols note for Step 1
     rejected_note = ""
