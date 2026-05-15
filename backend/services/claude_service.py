@@ -363,7 +363,7 @@ Buy inverse ETFs exactly like regular stocks — they profit automatically as th
 - [SECTOR:signal:pct%]: sector momentum — BULLISH sector supports longs, BEARISH sector supports shorts
 - [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
-Scan the stocks above. Identify the TOP 5 best opportunities based on technicals and macro context.
+Scan the stocks above. Identify the TOP 7 best opportunities based on technicals and macro context.
 - BULLISH regime: favor longs and leveraged ETFs
 - BEARISH regime: favor inverse ETFs and short candidates (RSI > 72 + bearish sector)
 - NEUTRAL: balanced mix
@@ -399,7 +399,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
                               reasoning="Market scan complete — no clear entry signals this cycle. All candidates in neutral territory or insufficient catalyst. Holding.")]
 
     # ── Step 2: Deep dive — evaluate ALL candidates, approve up to 3 trades ──
-    top_symbols = [o["symbol"] for o in opportunities[:5]]
+    top_symbols = [o["symbol"] for o in opportunities[:7]]
 
     # Fetch full historical data for all candidates
     deep_data = {}
@@ -426,7 +426,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
         logger.warning(f"Intraday bars failed (non-fatal): {e}")
 
     candidate_detail = []
-    for opp in opportunities[:5]:
+    for opp in opportunities[:7]:
         sym = opp["symbol"]
         data = deep_data.get(sym) or market_snapshot.get(sym, {})
         closing_prices = data.get("closing_prices", [])
@@ -541,7 +541,7 @@ Rules:
 - MUST approve at least 1 trade if any candidate has medium+ signal
 
 For LONG trades:
-- take_profit_pct: realistic upside (0.08-0.40). Strong catalyst=0.15-0.25, leveraged ETF=0.20-0.35
+- take_profit_pct: realistic upside. Leveraged ETF (TQQQ/SOXL/SPXL)=0.30-0.80 on bull days, strong catalyst=0.20-0.40, normal stock=0.10-0.30. Let winners run — don't cap early.
 - stop_loss_pct: trailing stop (0.03-0.08)
 
 For SHORT trades:
@@ -605,7 +605,11 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             except (ValueError, TypeError):
                 return default
 
-        take_profit_pct = max(0.05, min(_safe_pct(trade.get("take_profit_pct"), default_tp), 0.40))
+        # TP cap: 0.80 for leveraged ETFs (TQQQ/SOXL can run 60-100%+ on bull weeks),
+        # 0.60 for all others. Old 0.40 cap was cutting winners short on strong moves.
+        from services.entry_timing import _LEVERAGED_ETFS as _lev_check
+        _tp_cap = 0.80 if sym in _lev_check else 0.60
+        take_profit_pct = max(0.05, min(_safe_pct(trade.get("take_profit_pct"), default_tp), _tp_cap))
         stop_loss_pct   = max(0.02, min(_safe_pct(trade.get("stop_loss_pct"),   default_sl), 0.10))
         partial_exit = bool(trade.get("partial_exit", False))
         analysis = trade.get("analysis", "")

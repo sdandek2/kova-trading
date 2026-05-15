@@ -59,31 +59,43 @@ def get_macro_context() -> dict:
             elif price < ma20:
                 context["spy_trend"] = "downtrend"
 
-        # VIX proxy via UVXY
+        # VIX proxy via UVXY (1.5× leveraged VIX futures — decays ~5-10%/month)
+        # Because UVXY decays, its MA10 baseline drifts lower over time. Using a
+        # low multiplier like 1.3× fires "extreme fear" on normal volatile days.
+        # Raised to 1.5× (extreme) and 1.2× (elevated) to reduce false bear signals.
         uvxy_bars = bars_dict.get("UVXY", [])
         if len(uvxy_bars) >= 10:
             u_closes = [float(b.close) for b in uvxy_bars]
             u_ma10 = sum(u_closes[-10:]) / 10
             u_price = u_closes[-1]
 
-            if u_price > u_ma10 * 1.3:
+            if u_price > u_ma10 * 1.5:
                 context["vix_level"] = "extreme_fear"
-            elif u_price > u_ma10 * 1.1:
+            elif u_price > u_ma10 * 1.2:
                 context["vix_level"] = "elevated"
             elif u_price < u_ma10 * 0.9:
                 context["vix_level"] = "low_fear"
 
         # Determine regime + guidance
+        # Key fix: UVXY alone cannot trigger bear mode. A fear spike on a bull
+        # day (SPY trending up) is a volatility event, not a regime change.
+        # Bear mode now requires SPY to actually be in a downtrend.
         trend = context["spy_trend"]
         vix = context["vix_level"]
 
         if trend in ("strong_uptrend", "uptrend") and vix in ("low_fear", "normal"):
             context["market_regime"] = "bull"
             context["guidance"] = "Market is bullish with low fear. Favor long positions and momentum plays. Be aggressive."
-        elif trend in ("strong_downtrend", "downtrend") or vix == "extreme_fear":
+        elif trend in ("strong_downtrend", "downtrend"):
+            # SPY is clearly declining — bear mode regardless of UVXY
             context["market_regime"] = "bear"
-            context["guidance"] = "Market is bearish or fear is extreme. Prefer inverse ETFs (SOXS, SQQQ, SPXS) or stay in cash."
-        elif vix == "elevated":
+            context["guidance"] = "Market is bearish. Prefer inverse ETFs (SOXS, SQQQ, SPXS) or stay in cash."
+        elif vix == "extreme_fear" and trend in ("uptrend", "strong_uptrend"):
+            # Fear spike on a bull day — mixed signal. Reduce size but don't suppress longs.
+            context["market_regime"] = "volatile"
+            context["guidance"] = "Fear spike on otherwise bullish market. Reduce position sizes by 30%. Longs still favored — do NOT avoid long positions."
+        elif vix in ("extreme_fear", "elevated"):
+            # Fear elevated with neutral trend — cautious but not bear
             context["market_regime"] = "volatile"
             context["guidance"] = "Volatility is elevated. Reduce position sizes by 50%. Avoid high-beta stocks."
 

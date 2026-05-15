@@ -217,9 +217,9 @@ def should_confirm_entry(
             return True, f"{symbol} passes entry confirmation: RSI={rsi:.1f}, price vs MA20 ok"
 
     elif action == "sell":
-        rsi_floor = 20 if is_aggressive else 25
-        if rsi < rsi_floor:
-            return False, f"{symbol} RSI is {rsi:.1f} — oversold, may bounce, holding"
+        # No RSI floor on sells. An oversold RSI during a sell signal means the
+        # stock is in a panic-selling cascade — exactly when you want to exit, not hold.
+        # Blocking sells here traps capital in deteriorating positions.
         return True, f"{symbol} sell confirmed: RSI={rsi:.1f}"
 
     elif action == "short":
