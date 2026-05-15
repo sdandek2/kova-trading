@@ -439,8 +439,13 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
     pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
 
     # ── Rotation context: assess each held position for momentum strength ──
+    # SHORT positions are excluded — they cannot be closed via SELL action,
+    # only via the engine's cover logic. Including them causes Claude to waste
+    # a decision slot on a sell that will always be rejected.
     rotation_lines = []
     for p in positions:
+        if getattr(p, "side", "long") == "short":
+            continue  # shorts managed by engine, not Claude rotation
         sym_data = deep_data.get(p.symbol) or market_snapshot.get(p.symbol, {})
         closing_prices = sym_data.get("closing_prices", [])
         indicators = compute_all(closing_prices) if closing_prices else {}
