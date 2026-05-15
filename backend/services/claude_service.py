@@ -477,6 +477,7 @@ ROTATION RULES:
 - You MAY sell a weak/flat position to fund a significantly better opportunity
 - Only rotate if new opportunity conviction is clearly higher than the position being sold
 - NEVER rotate a STRONG momentum position
+- SELL action is ONLY valid for [LONG] positions — NEVER issue sell on a [SHORT] position (shorts are covered automatically by the system, not via sell)
 - To rotate: add a {{"symbol": "X", "action": "sell", "analysis": "rotating to fund better opp"}} BEFORE the buy in your trades array
 - Sell proceeds are immediately available as cash for the next buy in the same cycle
 - Max 1 rotation per cycle (1 sell + 1 buy)
@@ -499,7 +500,7 @@ For EACH candidate decide: BUY, SHORT, or SKIP.
 Rules:
 - Approve up to 3 trades per cycle (mix of longs and shorts)
 - BUY: standard long position — profit when price rises
-- SHORT: sell shares short — profit when price FALLS. Best for: RSI > 72 + bearish sector + no upcoming earnings
+- SHORT: sell shares short — profit when price FALLS. Best for: RSI > 72 + MACD histogram near zero or negative (< 0.1) + bearish sector + no upcoming earnings. NEVER short when MACD histogram is strongly positive (> 1.0) — momentum will stop you out immediately
 - SELL: close an existing long position (for rotation or profit-taking)
 - Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
 - In bearish regime: prioritize inverse ETF buys + individual stock shorts
