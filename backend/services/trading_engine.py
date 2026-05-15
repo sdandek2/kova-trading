@@ -654,6 +654,12 @@ async def run_trading_cycle():
                     continue
 
                 add_qty = max(1, int(float(position.qty) * add_pct))
+                # Skip pyramid if it adds less than 3 shares — a 1-share add on a tiny
+                # position is meaningless noise (wastes an order, barely moves the position).
+                # This happens when position.qty is small (e.g. 1 share × 25% = 0 → min=1).
+                if add_qty < 3:
+                    logger.debug(f"Pyramid skipped: {position.symbol} add_qty={add_qty} < 3 — position too small to pyramid meaningfully")
+                    continue
                 add_cost = add_qty * p_price
                 if add_cost <= _tradeable_cash * 0.40:  # never spend >40% of cash on one pyramid
                     pyramid_reason = (
