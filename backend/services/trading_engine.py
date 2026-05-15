@@ -22,7 +22,7 @@ from websocket.manager import manager
 
 logger = logging.getLogger(__name__)
 
-TRADING_INTERVAL_SECONDS = 300  # 5 minutes
+TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
 _RISK_CACHE_KEY = "user_pref:risk_settings"
 _RISK_DEFAULTS = {
@@ -30,10 +30,10 @@ _RISK_DEFAULTS = {
     "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
     "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
-    "afternoon_pressure_hour": 11,  # pressure kicks in at 11 AM ET — catches the mid-morning lull
+    "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM ET
     "max_trades_per_cycle": 5,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
-    "cycle_interval_seconds": 300,  # how often the bot runs (seconds); 600=10min, 300=5min
+    "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
     "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
 }
 
