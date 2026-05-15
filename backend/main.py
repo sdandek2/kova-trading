@@ -64,9 +64,18 @@ def health():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    import asyncio
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()  # keep connection alive
+            try:
+                # Wait for client message with 30s timeout
+                await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # No message in 30s — send ping to keep connection alive
+                # Prevents Railway proxy and iOS NAT from dropping idle connections
+                await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
         manager.disconnect(websocket)
