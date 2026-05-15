@@ -247,7 +247,7 @@ Respond with ONLY this JSON — no markdown, no explanation:
 }}"""
 
     try:
-        raw = ask_ai(prompt, max_tokens=1200)
+        raw = ask_ai(prompt, max_tokens=2000)
         # Strip markdown if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
