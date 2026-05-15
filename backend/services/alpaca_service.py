@@ -34,10 +34,18 @@ def get_account() -> AccountInfo:
     day_pl = portfolio_value - prev_value
     day_pl_percent = (day_pl / prev_value * 100) if prev_value else 0.0
 
+    # daytrading_buying_power is only set on margin accounts subject to PDT rules.
+    # On cash accounts it's 0 or None — fall back to 0 safely.
+    try:
+        dt_bp = float(account.daytrading_buying_power) if account.daytrading_buying_power else 0.0
+    except Exception:
+        dt_bp = 0.0
+
     return AccountInfo(
         portfolio_value=portfolio_value,
         cash=float(account.cash),
         buying_power=float(account.buying_power),
+        daytrading_buying_power=dt_bp,
         day_pl=day_pl,
         day_pl_percent=round(day_pl_percent, 2),
     )

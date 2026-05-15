@@ -301,6 +301,7 @@ async def run_trading_cycle():
         # Pulls yesterday's EOD watchlist symbols so the thesis carries forward
         # into today's scan — those stocks get guaranteed slots regardless of
         # how many universe candidates score higher.
+        sentiment = {}  # initialized here so pre-breakout scan can use it; recomputed after news fetch
         _prebreakout_candidates = []
         try:
             from services.breakout_scanner import scan_prebreakout_candidates
@@ -571,6 +572,16 @@ async def run_trading_cycle():
             logger.warning(f"⚠️ Profit reserve (${_reserved:,.2f}) exceeds available cash (${account.cash:,.2f}) — tradeable cash is $0.")
         elif _reserved > 0:
             logger.info(f"Cash available for trading: ${_tradeable_cash:,.2f} (${_reserved:,.2f} in profit reserve)")
+
+        # ── PDT guard: cap tradeable cash to day trading buying power on margin accounts ──
+        # On margin accounts under $25k, Alpaca enforces a day trading buying power limit
+        # that is much lower than total cash. Without this cap the bot sizes trades it
+        # cannot actually execute, causing "insufficient day trading buying power" errors.
+        # On cash accounts daytrading_buying_power is 0 — skip the cap in that case.
+        _dt_bp = float(account.daytrading_buying_power)
+        if _dt_bp > 0 and _dt_bp < _tradeable_cash:
+            logger.info(f"PDT cap: day trading buying power ${_dt_bp:,.2f} < cash ${_tradeable_cash:,.2f} — capping tradeable cash")
+            _tradeable_cash = _dt_bp
 
         # Track symbols pyramided this cycle so re-entry logic skips them
         # (position.qty is stale pre-pyramid; re-entry on same cycle would compute wrong qty)

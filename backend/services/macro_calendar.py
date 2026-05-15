@@ -162,6 +162,10 @@ def check_fda_event(symbol: str, news_headlines: list, sector: str = "") -> dict
     if not news_headlines:
         return {"has_fda_event": False, "timing": None}
 
+    # Only apply FDA logic to biotech/pharma stocks — not tech, retail, etc.
+    if sector and sector not in _BIOTECH_SECTORS:
+        return {"has_fda_event": False, "timing": None}
+
     symbol_lower = symbol.lower()
     for headline in news_headlines:
         headline_lower = headline.lower()
