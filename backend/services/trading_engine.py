@@ -946,7 +946,7 @@ async def run_trading_cycle():
                 # should_scale_out fires every cycle, halving the position each time
                 # until it's nearly gone. Instead we require each successive trim to
                 # reach a 15pp higher threshold: 20% → 35% → 50% → 65% ...
-                if scale_out and "trailing stop" not in reason.lower() and "loss" not in reason.lower():
+                if scale_out and "trailing stop" not in reason.lower() and "loss" not in reason.lower() and "rsi" not in reason.lower():
                     count = _scale_out_counts.get(position.symbol, 0)
                     next_threshold = 20.0 + count * 15.0  # 20, 35, 50, 65 ...
                     pnl = position.unrealized_pl_percent
