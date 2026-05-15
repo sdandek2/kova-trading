@@ -232,7 +232,7 @@ Strategy: {strat['name']}
 
 Important: In tomorrow_watchlist, do NOT add symbols currently held as SHORT positions with action "buy". If a symbol in open positions is marked [short], only include it with action "short" or "watch".
 
-Respond with ONLY this JSON — no markdown, no explanation:
+Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep all text fields brief (headline: 1 sentence, key_insight: 2-3 sentences max, bullet points: 10 words each). Total response must fit within 1200 tokens:
 {{
   "headline": "One sentence summary of today (e.g. 'Strong bull day +2.1% — NVDA and SOXL led gains')",
   "performance_grade": "A/B/C/D/F",
@@ -247,7 +247,7 @@ Respond with ONLY this JSON — no markdown, no explanation:
 }}"""
 
     try:
-        raw = ask_ai(prompt, max_tokens=2000)
+        raw = ask_ai(prompt, max_tokens=1200)
         # Strip markdown if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
