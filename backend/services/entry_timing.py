@@ -140,11 +140,12 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
 
-            # Leveraged ETFs: skip MA20 extension check entirely.
-            # Their MA20 is distorted by 3× daily rebalancing — a 19% extension
-            # on TQQQ often just means QQQ is in a normal uptrend. RSI (capped at 92)
-            # is the correct overbought signal for these instruments.
-            if ma20 and symbol not in _LEVERAGED_ETFS:
+            # Aggressive mode: skip MA20 extension check entirely.
+            # In aggressive mode, momentum IS the strategy. RSI (capped at 85/92),
+            # MACD, and volume are the real guards. MA20 extension is an
+            # anti-momentum filter — it conflicts with the aggressive thesis.
+            # Leveraged ETFs also exempt: their MA20 is distorted by 3x daily rebalancing.
+            if ma20 and symbol not in _LEVERAGED_ETFS and not is_aggressive:
                 ext_limit = _ma20_extension_limit(symbol, current_price)
                 hard_cap  = ext_limit * 1.5
                 pct_above = (current_price / ma20 - 1) * 100

@@ -106,6 +106,7 @@ def analyze_and_decide(
     earnings_plays: list = None,       # pre-earnings play candidates
     afternoon_pressure: bool = False,  # True if < 2 trades by 2 PM — lower bar
     rejected_symbols: list = None,     # symbols in rejection cooldown — Claude must not nominate these
+    prebreakout_candidates: list = None,  # pre-breakout setups from breakout_scanner — prioritise these
 ) -> list:
     current_strategy = strategy_service.get_strategy()
     max_position = portfolio_value * current_strategy["max_position_pct"]
@@ -315,10 +316,16 @@ Buy inverse ETFs exactly like regular stocks — they profit automatically as th
     if rejected_symbols:
         rejected_note = f"\n⛔ DO NOT nominate these symbols — currently in rejection cooldown (overextended/overbought): {', '.join(rejected_symbols)}\nFind different opportunities instead.\n"
 
+    # Pre-breakout candidates — inject at top of Step 1 so Claude sees them first
+    prebreakout_note = ""
+    if prebreakout_candidates:
+        from services.breakout_scanner import format_for_prompt as _fmt_breakout
+        prebreakout_note = "\n" + _fmt_breakout(prebreakout_candidates) + "\n"
+
     step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
-{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
+{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 

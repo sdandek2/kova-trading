@@ -297,6 +297,16 @@ async def run_trading_cycle():
             None, functools.partial(alpaca_service.get_market_snapshot_light, universe)
         )
 
+        # ── Pre-breakout scan: find stocks near MA20 before they extend ──────
+        # Runs immediately after snapshot so Claude's Step 1 prompt includes
+        # early setups before they get rejected for MA20 extension next cycle.
+        _prebreakout_candidates = []
+        try:
+            from services.breakout_scanner import scan_prebreakout_candidates
+            _prebreakout_candidates = scan_prebreakout_candidates(snapshot_light, top_n=6)
+        except Exception as _pbs_err:
+            logger.warning(f"Pre-breakout scan failed (non-fatal): {_pbs_err}")
+
         # ── Fetch multi-source news ONCE per cycle ──
         # Used for both sentiment scoring AND passing headlines to the AI prompt
         news_articles = []
@@ -525,7 +535,7 @@ async def run_trading_cycle():
             {"TQQQ", "SOXL", "TECL", "FNGU", "SPXL", "UPRO", "UDOW", "TNA"},   # leveraged long
             {"SQQQ", "SOXS", "TECS", "FNGS", "SPXS", "SPXU", "SDOW", "TZA"},   # leveraged short
         ]
-        _corr_cap = 2 if strategy_key == "aggressive" else 1
+        _corr_cap = 3 if strategy_key == "aggressive" else 1
 
         def _corr_group(sym: str) -> set | None:
             for g in _CORR_GROUPS:
@@ -1099,6 +1109,7 @@ async def run_trading_cycle():
                 earnings_plays=earnings_plays,
                 afternoon_pressure=afternoon_pressure,
                 rejected_symbols=_cooldown_syms,
+                prebreakout_candidates=_prebreakout_candidates,
             )
         )
 
