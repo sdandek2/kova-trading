@@ -1637,6 +1637,26 @@ async def run_trading_cycle():
                     )
                     decision = decision.model_copy(update={"quantity": _capped_qty})
 
+            # ── Final affordability check against tradeable cash (PDT-aware) ──
+            # Vol-adjust, conviction, and sector sizing all use portfolio_value which
+            # can far exceed day trading buying power on margin accounts. This final
+            # check ensures the order actually fits within available cash after all
+            # sizing multipliers have been applied.
+            if decision.action == "buy" and current_price and current_price > 0:
+                _max_affordable = int(_tradeable_cash / current_price)
+                if decision.quantity > _max_affordable:
+                    if _max_affordable < 1:
+                        logger.info(
+                            f"Skipping {decision.symbol} — insufficient buying power "
+                            f"(need ${current_price:.2f}/share, have ${_tradeable_cash:.2f})"
+                        )
+                        continue
+                    logger.info(
+                        f"Affordability cap: {decision.symbol} {decision.quantity}→{_max_affordable} shares "
+                        f"(buying power ${_tradeable_cash:.2f} / price ${current_price:.2f})"
+                    )
+                    decision = decision.model_copy(update={"quantity": _max_affordable})
+
             # ── Pre-sell: cancel any open orders on this symbol ──
             # Rotation sells (and scale-outs) fail with "insufficient qty available"
             # when a GTC bracket/limit sell order from the original entry is still open,
