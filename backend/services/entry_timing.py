@@ -274,54 +274,61 @@ def should_scale_out(
     trail_pct: float = 0.05,
 ) -> tuple[bool, float, str]:
     """
-    Partial profit-taking and loss-cutting rules, with trailing stop support.
+    Partial profit-taking and loss-cutting for LONG positions.
 
-    Dynamic trailing stop: caller computes trail_pct based on P&L:
-    - P&L >= 25% → 2% trail
-    - P&L >= 15% → 3% trail
-    - P&L < 15%  → 5% trail (standard)
+    Exit logic (RSI-aware):
+    - RSI > 75 AND profit > 5%  → trim 33% (momentum tiring, overbought)
+    - RSI > 80 AND profit > 8%  → trim 50% (significantly overbought with good gains)
+    - Profit > 15%              → sell 50%, let rest ride with trailing stop
+    - Trailing stop             → asset-aware (7% leveraged ETFs, 5% individual stocks)
+    - Stop loss                 → down 6% → full exit
     """
     is_aggressive = strategy_key == "aggressive"
 
-    # ── Trailing stop ──
-    # Bug fix: use explicit None/positive checks — falsy 0.0 price would silently
-    # disable the trailing stop or compute a bogus 100% drop.
+    # ── Asset-aware trailing stop ──────────────────────────────────────────────
+    # Leveraged ETFs (SOXL, TQQQ etc.) need wider trail — they swing 6-9% intraday.
+    # A 5% trail fires on normal noise for 3x instruments.
+    _is_leveraged = symbol in _LEVERAGED_ETFS
+    _effective_trail = 0.07 if _is_leveraged else trail_pct  # 7% lev ETFs, caller-set for others
+
     if (high_watermark is not None and current_price is not None
             and high_watermark > 0 and current_price > 0
             and position_unrealized_pl_percent > 2.0):
         drop_from_peak = (high_watermark - current_price) / high_watermark
-        if drop_from_peak >= trail_pct:
+        if drop_from_peak >= _effective_trail:
             return True, 1.0, (
                 f"{symbol} trailing stop hit: dropped {drop_from_peak*100:.1f}% from peak "
                 f"${high_watermark:.2f} → ${current_price:.2f} "
-                f"(trail={trail_pct*100:.0f}%, still up {position_unrealized_pl_percent:.1f}% from entry) — locking in gains"
+                f"(trail={_effective_trail*100:.0f}%, still up {position_unrealized_pl_percent:.1f}% from entry) — locking in gains"
             )
 
-    if is_aggressive:
-        if position_unrealized_pl_percent >= 20.0:
+    # ── RSI-based exits: recognize when upward momentum is exhausting ──────────
+    if rsi is not None:
+        if rsi > 80 and position_unrealized_pl_percent >= 8.0:
             return True, 0.50, (
-                f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 50% profits, letting 50% ride"
+                f"{symbol} RSI {rsi:.1f} — significantly overbought with {position_unrealized_pl_percent:.1f}% gain — trimming 50%"
             )
-        elif position_unrealized_pl_percent >= 12.0 and rsi > 75:
+        elif rsi > 75 and position_unrealized_pl_percent >= 5.0:
             return True, 0.33, (
-                f"{symbol} up {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} — trimming 33%"
+                f"{symbol} RSI {rsi:.1f} — overbought with {position_unrealized_pl_percent:.1f}% gain — trimming 33%"
             )
-        elif position_unrealized_pl_percent <= -6.0:
+
+    # ── Profit target ──────────────────────────────────────────────────────────
+    if position_unrealized_pl_percent >= 15.0:
+        return True, 0.50, (
+            f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 50% profits, letting 50% ride with trailing stop"
+        )
+
+    # ── Stop loss ──────────────────────────────────────────────────────────────
+    if is_aggressive:
+        if position_unrealized_pl_percent <= -6.0:
             return True, 1.0, (
                 f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses, redeploying cash"
             )
     else:
-        if position_unrealized_pl_percent >= 15.0:
-            return True, 0.75, (
-                f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 75% profits"
-            )
-        elif position_unrealized_pl_percent >= 8.0 and rsi > 70:
-            return True, 0.50, (
-                f"{symbol} up {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} — taking 50% profits"
-            )
-        elif position_unrealized_pl_percent <= -5.0 and rsi < 35:
+        if position_unrealized_pl_percent <= -5.0:
             return True, 1.0, (
-                f"{symbol} down {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} — cutting losses"
+                f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
             )
 
     return False, 0.0, ""
@@ -336,32 +343,55 @@ def should_cover_short(
     trail_pct: float = 0.05,
     strategy_key: str = "aggressive",
 ) -> tuple[bool, float, str]:
-    is_aggressive = strategy_key == "aggressive"
+    """
+    Partial profit-taking and loss-cutting for SHORT positions.
 
-    # Bug fix: explicit None/positive checks (same as should_scale_out)
+    Exit logic (RSI-aware):
+    - RSI < 30               → cover 100% regardless of profit (deeply oversold, reversal imminent)
+    - RSI < 40 AND profit > 3% → cover 50% (momentum exhausting, take half off)
+    - Profit > 10%           → cover 50%, let rest ride with trailing stop
+    - Trailing stop          → asset-aware (8% leveraged ETFs, 5% individual stocks)
+    - Stop loss              → price rises 3.5% from entry → full cover
+    """
+    # ── Asset-aware trailing stop ──────────────────────────────────────────────
+    # Leveraged ETFs shorted need wider trail — SOXL can spike 6-7% on a single
+    # news event even while trending down. 5% trail fires on normal intraday noise.
+    _is_leveraged = symbol in _LEVERAGED_ETFS
+    _effective_trail = 0.08 if _is_leveraged else trail_pct  # 8% lev ETFs, 5% individual stocks
+
     if (low_watermark is not None and current_price is not None
             and low_watermark > 0 and current_price > 0
             and position_unrealized_pl_percent > 2.0):
         rise_from_low = (current_price - low_watermark) / low_watermark
-        if rise_from_low >= trail_pct:
+        if rise_from_low >= _effective_trail:
             return True, 1.0, (
                 f"{symbol} SHORT trailing stop: price rose {rise_from_low*100:.1f}% from low "
                 f"${low_watermark:.2f} → ${current_price:.2f} "
-                f"(still up {position_unrealized_pl_percent:.1f}% from entry) — locking in short gains"
+                f"(trail={_effective_trail*100:.0f}%, still up {position_unrealized_pl_percent:.1f}% from entry) — locking in short gains"
             )
 
-    if is_aggressive:
-        if position_unrealized_pl_percent >= 15.0:
-            return True, 0.50, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering half, letting rest ride"
-        elif position_unrealized_pl_percent >= 10.0 and rsi < 35:
-            return True, 0.33, f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% with RSI {rsi:.1f} oversold — trimming 33%"
-        elif position_unrealized_pl_percent <= -3.5:
-            return True, 1.0, f"{symbol} SHORT down {abs(position_unrealized_pl_percent):.1f}% (price rose) — covering to stop loss"
-    else:
-        if position_unrealized_pl_percent >= 12.0:
-            return True, 1.0, f"{symbol} SHORT hit target +{position_unrealized_pl_percent:.1f}% — covering"
-        elif position_unrealized_pl_percent <= -4.0:
-            return True, 1.0, f"{symbol} SHORT stop: down {abs(position_unrealized_pl_percent):.1f}% — covering"
+    # ── RSI-based exits: recognize when downward momentum is exhausting ────────
+    if rsi is not None:
+        if rsi < 30:
+            return True, 1.0, (
+                f"{symbol} RSI {rsi:.1f} — deeply oversold, reversal imminent — covering 100%"
+            )
+        elif rsi < 40 and position_unrealized_pl_percent >= 3.0:
+            return True, 0.50, (
+                f"{symbol} RSI {rsi:.1f} — momentum exhausting with {position_unrealized_pl_percent:.1f}% gain — covering 50%"
+            )
+
+    # ── Profit target ──────────────────────────────────────────────────────────
+    if position_unrealized_pl_percent >= 10.0:
+        return True, 0.50, (
+            f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering 50%, letting rest ride with trailing stop"
+        )
+
+    # ── Stop loss: price rising against short ─────────────────────────────────
+    if position_unrealized_pl_percent <= -3.5:
+        return True, 1.0, (
+            f"{symbol} SHORT down {abs(position_unrealized_pl_percent):.1f}% (price rose against short) — covering to stop loss"
+        )
 
     return False, 0.0, ""
 
