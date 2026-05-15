@@ -86,14 +86,18 @@ def get_macro_context() -> dict:
         if trend in ("strong_uptrend", "uptrend") and vix in ("low_fear", "normal"):
             context["market_regime"] = "bull"
             context["guidance"] = "Market is bullish with low fear. Favor long positions and momentum plays. Be aggressive."
+        elif trend in ("strong_uptrend", "uptrend") and vix == "elevated":
+            # Bullish trend but UVXY picking up — reduce size slightly, longs still favored
+            context["market_regime"] = "volatile"
+            context["guidance"] = "Bullish trend with elevated fear. Reduce position sizes by 20%. Longs still favored — do NOT avoid long positions."
+        elif trend in ("strong_uptrend", "uptrend") and vix == "extreme_fear":
+            # Fear spike on a bull day — mixed signal. Reduce size but don't suppress longs.
+            context["market_regime"] = "volatile"
+            context["guidance"] = "Fear spike on otherwise bullish market. Reduce position sizes by 30%. Longs still favored — do NOT avoid long positions."
         elif trend in ("strong_downtrend", "downtrend"):
             # SPY is clearly declining — bear mode regardless of UVXY
             context["market_regime"] = "bear"
             context["guidance"] = "Market is bearish. Prefer inverse ETFs (SOXS, SQQQ, SPXS) or stay in cash."
-        elif vix == "extreme_fear" and trend in ("uptrend", "strong_uptrend"):
-            # Fear spike on a bull day — mixed signal. Reduce size but don't suppress longs.
-            context["market_regime"] = "volatile"
-            context["guidance"] = "Fear spike on otherwise bullish market. Reduce position sizes by 30%. Longs still favored — do NOT avoid long positions."
         elif vix in ("extreme_fear", "elevated"):
             # Fear elevated with neutral trend — cautious but not bear
             context["market_regime"] = "volatile"

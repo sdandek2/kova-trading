@@ -1460,8 +1460,10 @@ async def run_trading_cycle():
                 }})
                 continue  # Try next decision, don't abort the whole cycle
 
-            if decision.action == "buy":
+            if decision.action == "buy" and decision.symbol not in _earnings_play_pending:
                 # Volatility-adjusted sizing
+                # Skip for earnings plays — their quantity was already capped at 2-5%
+                # of portfolio; running vol-adjust here would silently override that cap.
                 atr = compute_atr(
                     highs=sym_data.get("high_prices", []),
                     lows=sym_data.get("low_prices", []),
