@@ -114,6 +114,7 @@ def analyze_and_decide(
     positions_text = "\n".join([
         f"  - {p.symbol} [{getattr(p, 'side', 'long').upper()}]: {p.qty} shares @ avg ${p.avg_entry_price:.2f}, "
         f"current ${p.current_price:.2f}, P&L: ${p.unrealized_pl:.2f} ({p.unrealized_pl_percent:.1f}%)"
+        + (" ⚠️ SHORT — system-managed, do NOT issue sell or buy on this" if getattr(p, "side", "long") == "short" else "")
         for p in positions
     ]) or "  None"
 
