@@ -557,20 +557,11 @@ For SHORT trades:
 Respond in JSON — only include approved trades (put any sell/rotation BEFORE the buy):
 {{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
-    # ── Inject override into step2 + save both prompts for viewer ───────────
+    # ── Inject override into step2 ───────────────────────────────────────────
     # step1 override was already injected above before it was sent.
-    # step2_prompt is now fully built — inject and save.
+    # step2_prompt is now fully built — inject override before sending.
     if _prompt_override:
         step2_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
-    try:
-        from services.db import set_setting as _set_setting
-        _set_setting("last_prompts", {
-            "step1": step1_prompt,
-            "step2": step2_prompt,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-        })
-    except Exception as _pe:
-        logger.debug(f"Prompt save non-fatal: {_pe}")
 
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=1800)
@@ -589,6 +580,16 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
                 raise ValueError(f"Could not extract JSON from Step 2 response: {step2_raw[:200]}")
         approved = step2_data.get("trades", [])
         logger.info(f"Step 2 — Approved {len(approved)} trades: {[t.get('symbol') for t in approved]} | Skipped: {step2_data.get('skipped','')}")
+        # ── Save both prompts for viewer — only on successful cycle ──────────
+        try:
+            from services.db import set_setting as _set_setting
+            _set_setting("last_prompts", {
+                "step1": step1_prompt,
+                "step2": step2_prompt,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as _pe:
+            logger.debug(f"Prompt save non-fatal: {_pe}")
     except Exception as e:
         logger.error(f"Step 2 failed: {e}. Raw: {step2_raw[:300] if 'step2_raw' in locals() else 'none'}")
         return [TradeDecision(action="hold", symbol=None, quantity=None,
