@@ -108,6 +108,14 @@ def analyze_and_decide(
     rejected_symbols: list = None,     # symbols in rejection cooldown — Claude must not nominate these
     prebreakout_candidates: list = None,  # pre-breakout setups from breakout_scanner — prioritise these
 ) -> list:
+    # ── Load prompt override (injected into both steps below) ───────────────
+    _prompt_override = ""
+    try:
+        from services.db import get_setting as _gs
+        _prompt_override = (_gs("prompt_override") or "").strip()
+    except Exception:
+        pass
+
     # ── Trading budget cap ──────────────────────────────────────────────────
     # If a budget is set (e.g. $2,000), the bot sizes as if the portfolio is
     # only that amount — the rest of the account sits untouched.
@@ -360,6 +368,9 @@ Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_et
 Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown.
 EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}, {{"symbol": "SQQQ", "signal": "inverse_etf"}}]}}"""
 
+    if _prompt_override:
+        step1_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
+
     try:
         step1_raw = ask_ai(step1_prompt, max_tokens=1200)
         if step1_raw.startswith("```"):
@@ -546,6 +557,21 @@ For SHORT trades:
 Respond in JSON — only include approved trades (put any sell/rotation BEFORE the buy):
 {{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
+    # ── Inject override into step2 + save both prompts for viewer ───────────
+    # step1 override was already injected above before it was sent.
+    # step2_prompt is now fully built — inject and save.
+    if _prompt_override:
+        step2_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
+    try:
+        from services.db import set_setting as _set_setting
+        _set_setting("last_prompts", {
+            "step1": step1_prompt,
+            "step2": step2_prompt,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as _pe:
+        logger.debug(f"Prompt save non-fatal: {_pe}")
+
     try:
         step2_raw = ask_ai(step2_prompt, max_tokens=1800)
         if step2_raw.startswith("```"):
@@ -652,7 +678,7 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
             if action == "buy" and price < 5.0:
                 from services import trading_engine as _te
                 _penny_pct = float(_te._risk_settings.get("max_penny_position_pct", 3.0)) / 100.0
-                effective_max_position = portfolio_value * _penny_pct
+                effective_max_position = effective_portfolio * _penny_pct
             else:
                 effective_max_position = max_position
             # Cap max_shares to what's actually affordable from remaining cash.

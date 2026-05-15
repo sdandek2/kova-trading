@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", message=".*Expected `enum` but got `str`.*")
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -55,6 +55,7 @@ app.include_router(picks.router)
 app.include_router(watchlist.router)
 app.include_router(eod.router)
 app.include_router(finance.router)
+app.include_router(prompt.router)
 
 
 @app.get("/health")

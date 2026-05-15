@@ -3,6 +3,7 @@ import SwiftUI
 struct BotActivityView: View {
     @State private var events: [BotActivity] = []
     @State private var isLoading = true
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,23 +21,40 @@ struct BotActivityView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if isLoading { ProgressView().scaleEffect(0.8) }
+                if isLoading {
+                    ProgressView().scaleEffect(0.8)
+                } else if !events.isEmpty {
+                    Button(action: { withAnimation { isExpanded.toggle() } }) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding()
 
             if !events.isEmpty {
                 Divider().padding(.horizontal)
 
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(events) { event in
-                            BotActivityRow(event: event)
-                            Divider().padding(.leading, 52)
-                        }
-                    }
-                    .padding(.bottom, 8)
+                // Always show the most recent event
+                if let latest = events.first {
+                    BotActivityRow(event: latest)
                 }
-                .frame(maxHeight: 320)
+
+                // Show the rest if expanded
+                if isExpanded && events.count > 1 {
+                    ForEach(events.dropFirst()) { event in
+                        Divider().padding(.leading, 52)
+                        BotActivityRow(event: event)
+                    }
+                }
+
+                if events.count > 1 {
+                    Button(action: { withAnimation { isExpanded.toggle() } }) {
+                        Text(isExpanded ? "Show less" : "Show \(events.count - 1) more events")
+                            .font(.caption).foregroundStyle(.blue)
+                    }
+                    .padding(.horizontal, 16).padding(.bottom, 12).padding(.top, 4)
+                }
             }
         }
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))

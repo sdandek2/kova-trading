@@ -58,6 +58,9 @@
 		F3E4D5C6B7A8F3E4D5C6B7A8 /* FinanceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */; };
 		F4E5D6C7B8A9F4E5D6C7B8A9 /* TaxSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B8C7D6E5F4A9B8C7D6E5F4 /* TaxSummaryView.swift */; };
 		F5E6D7C8B9A0F5E6D7C8B9A0 /* ProfitReserveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A9C8D7E6F5B0A9C8D7E6F5 /* ProfitReserveView.swift */; };
+		C1D2E3F4A5B6C1D2E3F4A5B6 /* BotSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2E3F4A5B6C7D2E3F4A5B6C7 /* BotSettings.swift */; };
+		C2D3E4F5A6B7C2D3E4F5A6B7 /* TradingBudgetCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E4F5A6B7C8D3E4F5A6B7C8 /* TradingBudgetCard.swift */; };
+		C3D4E5F6A7B8C3D4E5F6A7B8 /* PromptViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6A7B8C9D4E5F6A7B8C9AA /* PromptViewerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -114,6 +117,9 @@
 		A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FinanceModels.swift; path = Sources/Models/FinanceModels.swift; sourceTree = "<group>"; };
 		A9B8C7D6E5F4A9B8C7D6E5F4 /* TaxSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TaxSummaryView.swift; path = Sources/Views/Finance/TaxSummaryView.swift; sourceTree = "<group>"; };
 		B0A9C8D7E6F5B0A9C8D7E6F5 /* ProfitReserveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfitReserveView.swift; path = Sources/Views/Finance/ProfitReserveView.swift; sourceTree = "<group>"; };
+		D2E3F4A5B6C7D2E3F4A5B6C7 /* BotSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotSettings.swift; path = Sources/Models/BotSettings.swift; sourceTree = "<group>"; };
+		D3E4F5A6B7C8D3E4F5A6B7C8 /* TradingBudgetCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TradingBudgetCard.swift; path = Sources/Views/AI/TradingBudgetCard.swift; sourceTree = "<group>"; };
+		D4E5F6A7B8C9D4E5F6A7B8C9AA /* PromptViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PromptViewerView.swift; path = Sources/Views/AI/PromptViewerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -183,6 +189,9 @@
 				A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */,
 				A9B8C7D6E5F4A9B8C7D6E5F4 /* TaxSummaryView.swift */,
 				B0A9C8D7E6F5B0A9C8D7E6F5 /* ProfitReserveView.swift */,
+				D2E3F4A5B6C7D2E3F4A5B6C7 /* BotSettings.swift */,
+				D3E4F5A6B7C8D3E4F5A6B7C8 /* TradingBudgetCard.swift */,
+				D4E5F6A7B8C9D4E5F6A7B8C9AA /* PromptViewerView.swift */,
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
@@ -324,6 +333,9 @@
 				F3E4D5C6B7A8F3E4D5C6B7A8 /* FinanceModels.swift in Sources */,
 				F4E5D6C7B8A9F4E5D6C7B8A9 /* TaxSummaryView.swift in Sources */,
 				F5E6D7C8B9A0F5E6D7C8B9A0 /* ProfitReserveView.swift in Sources */,
+				C1D2E3F4A5B6C1D2E3F4A5B6 /* BotSettings.swift in Sources */,
+				C2D3E4F5A6B7C2D3E4F5A6B7 /* TradingBudgetCard.swift in Sources */,
+				C3D4E5F6A7B8C3D4E5F6A7B8 /* PromptViewerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -255,6 +255,54 @@ class APIService {
         let _: [String: String] = try await fetch("/api/eod/run", method: "POST")
     }
 
+    // ── Trading Budget ──
+    func getTradingBudget() async throws -> BudgetStatus {
+        try await fetch("/api/risk/budget")
+    }
+
+    func setTradingBudget(_ amount: Double?) async throws {
+        guard let url = URL(string: baseURL + "/api/risk/budget") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        if let amount = amount {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["amount": amount])
+        } else {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["amount": NSNull()])
+        }
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
+    }
+
+    // ── Prompt Viewer + Override ──
+    func getLastPrompts() async throws -> PromptData {
+        try await fetch("/api/prompt/last")
+    }
+
+    func getPromptOverride() async throws -> PromptOverrideStatus {
+        try await fetch("/api/prompt/override")
+    }
+
+    func setPromptOverride(_ text: String?) async throws {
+        guard let url = URL(string: baseURL + "/api/prompt/override") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        if let text = text, !text.isEmpty {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+        } else {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": NSNull()])
+        }
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
+    }
+
     // ── Finance: Tax summary ──
     func getTaxSummary(bracketRate: Double = 0.22) async throws -> TaxSummary {
         try await fetch("/api/finance/tax-summary?bracket_rate=\(String(format: "%.2f", bracketRate))")

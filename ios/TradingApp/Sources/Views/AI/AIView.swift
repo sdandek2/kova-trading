@@ -111,7 +111,35 @@ struct AIView: View {
 
                             WatchlistEditorView()
 
+                            TradingBudgetCard()
+
                             RiskSettingsCard()
+
+                            // ── Prompt Viewer / Override ──
+                            NavigationLink {
+                                PromptViewerView()
+                            } label: {
+                                HStack {
+                                    ZStack {
+                                        Circle().fill(Color.purple.opacity(0.12)).frame(width: 36, height: 36)
+                                        Image(systemName: "text.badge.plus")
+                                            .foregroundStyle(.purple).font(.system(size: 15))
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Claude Prompt")
+                                            .font(.subheadline).fontWeight(.semibold)
+                                        Text("View last prompt · set override instructions")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding()
+                                .background(Color(.systemGray6))
+                                .cornerRadius(16)
+                            }
+                            .foregroundColor(.primary)
                         }
                         .padding()
                     }

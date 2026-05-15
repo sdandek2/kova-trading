@@ -152,6 +152,16 @@ def _ensure_table(conn):
                 message     TEXT NOT NULL
             )
         """)
+        # ── NEW: app_settings ───────────────────────────────────────────────
+        # Persistent user preferences (trading_budget, prompt_override, etc.)
+        # Unlike ai_cache, these have no TTL and never expire.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -761,13 +771,61 @@ def cleanup_old_bot_activity(days: int = 30) -> None:
         logger.warning(f"cleanup_old_bot_activity failed ({e})")
 
 
+def get_setting(key: str) -> Optional[Any]:
+    """
+    Return a persistent app setting by key, or None if not set.
+    Reads from app_settings table — no TTL, never expires.
+    Falls back to in-memory dict if DB is unavailable.
+    """
+    conn = _get_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key = %s", (key,))
+                row = cur.fetchone()
+                if row:
+                    return row[0]  # psycopg2 returns JSONB as Python object
+        except Exception as e:
+            logger.warning(f"get_setting({key}) pg error: {e}")
+    # In-memory fallback
+    return _memory_cache.get(f"setting:{key}", (None, None))[0]
+
+
+def set_setting(key: str, value: Any) -> None:
+    """
+    Persist an app setting. Pass value=None to delete the setting.
+    Writes to app_settings table — no TTL, survives restarts indefinitely.
+    """
+    now = datetime.now(timezone.utc)
+    # Always keep in-memory copy
+    _memory_cache[f"setting:{key}"] = (value, datetime.max.replace(tzinfo=timezone.utc))
+
+    conn = _get_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                if value is None:
+                    cur.execute("DELETE FROM app_settings WHERE key = %s", (key,))
+                else:
+                    cur.execute("""
+                        INSERT INTO app_settings (key, value, updated_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (key) DO UPDATE
+                            SET value = EXCLUDED.value,
+                                updated_at = EXCLUDED.updated_at
+                    """, (key, json.dumps(value), now))
+            logger.debug(f"set_setting: {key} = {value}")
+        except Exception as e:
+            logger.warning(f"set_setting({key}) pg error: {e}")
+
+
 def get_trading_budget() -> Optional[float]:
     """
     Return the active trading budget cap, or None if not set (use full portfolio).
     A budget of e.g. 2000.0 means the bot sizes as if portfolio = $2,000,
     leaving the rest of the account untouched.
     """
-    val = cache_get("trading_budget")
+    val = get_setting("trading_budget")
     if val is None:
         return None
     try:
@@ -779,14 +837,13 @@ def get_trading_budget() -> Optional[float]:
 def set_trading_budget(amount: Optional[float]) -> None:
     """
     Set the trading budget cap. Pass None or 0 to clear (use full portfolio).
-    Persisted for 1 year — survives restarts.
+    Persisted in app_settings — survives restarts indefinitely.
     """
     if amount and amount > 0:
-        cache_set("trading_budget", amount, ttl_seconds=365 * 24 * 3600)
+        set_setting("trading_budget", amount)
         logger.info(f"Trading budget set to ${amount:,.2f}")
     else:
-        # Clear by setting a tiny TTL so it expires immediately
-        cache_set("trading_budget", None, ttl_seconds=1)
+        set_setting("trading_budget", None)
         logger.info("Trading budget cleared — using full portfolio value")
 
 
