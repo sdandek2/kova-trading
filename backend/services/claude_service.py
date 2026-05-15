@@ -108,8 +108,27 @@ def analyze_and_decide(
     rejected_symbols: list = None,     # symbols in rejection cooldown — Claude must not nominate these
     prebreakout_candidates: list = None,  # pre-breakout setups from breakout_scanner — prioritise these
 ) -> list:
+    # ── Trading budget cap ──────────────────────────────────────────────────
+    # If a budget is set (e.g. $2,000), the bot sizes as if the portfolio is
+    # only that amount — the rest of the account sits untouched.
+    # portfolio_value and account_cash are still passed in as real values;
+    # we only override the effective values used for sizing here.
+    try:
+        from services.db import get_trading_budget as _get_budget
+        _budget = _get_budget()
+        if _budget and _budget > 0:
+            effective_portfolio = min(portfolio_value, _budget)
+            effective_cash = min(account_cash, _budget)
+            logger.debug(f"Trading budget active: ${_budget:,.2f} — sizing off ${effective_portfolio:,.2f} (real portfolio: ${portfolio_value:,.2f})")
+        else:
+            effective_portfolio = portfolio_value
+            effective_cash = account_cash
+    except Exception:
+        effective_portfolio = portfolio_value
+        effective_cash = account_cash
+
     current_strategy = strategy_service.get_strategy()
-    max_position = portfolio_value * current_strategy["max_position_pct"]
+    max_position = effective_portfolio * current_strategy["max_position_pct"]
 
     positions_text = "\n".join([
         f"  - {p.symbol} [{getattr(p, 'side', 'long').upper()}]: {p.qty} shares @ avg ${p.avg_entry_price:.2f}, "
@@ -153,7 +172,8 @@ def analyze_and_decide(
 
     snapshot_text = "\n".join(snapshot_lines)
 
-    portfolio_context = f"""Portfolio: ${portfolio_value:,.2f} total, ${account_cash:,.2f} cash, max ${max_position:,.2f} per position ({int(current_strategy['max_position_pct']*100)}%)
+    budget_note = f" [BUDGET CAP: ${effective_portfolio:,.2f}]" if effective_portfolio < portfolio_value else ""
+    portfolio_context = f"""Portfolio: ${effective_portfolio:,.2f} total{budget_note}, ${effective_cash:,.2f} cash, max ${max_position:,.2f} per position ({int(current_strategy['max_position_pct']*100)}%)
 Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
 Open positions: {positions_text}"""
 
@@ -435,7 +455,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
     default_tp = current_strategy.get("default_take_profit_pct", 0.10)
     default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
     positions_count = len(positions)
-    cash_pct = (account_cash / portfolio_value * 100) if portfolio_value > 0 else 0
+    cash_pct = (effective_cash / effective_portfolio * 100) if effective_portfolio > 0 else 0
 
     pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
 
@@ -474,7 +494,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
 
     rotation_note = f"""
 ## Portfolio Rotation (capital efficiency)
-Available cash: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio)
+Available cash: ${effective_cash:,.2f} ({cash_pct:.0f}% of portfolio)
 Use your judgment — if a high-conviction opportunity exists but cash is insufficient, consider rotating out of a weak/flat position to fund it.
 
 Current positions with momentum assessment:
@@ -494,7 +514,7 @@ ROTATION RULES:
 {pressure_note}{regime_direction_note}
 {eod_step2_context}{performance_text}
 {portfolio_context}
-Cash available: ${account_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
+Cash available: ${effective_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
 {"⚠️ PORTFOLIO THIN — only " + str(positions_count) + " positions open. Prioritise building positions." if positions_count < 3 else ""}
 {rotation_note}
 {geo_text if geo_context else ""}{news_text}{bearish_etf_note}
@@ -554,7 +574,7 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
 
     # ── Step 3: Convert approved list into TradeDecision objects ──
     decisions = []
-    remaining_cash = account_cash
+    remaining_cash = effective_cash
     sectors_bought = []
 
     # Sort sells first so rotation proceeds are added to remaining_cash

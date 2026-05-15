@@ -761,6 +761,35 @@ def cleanup_old_bot_activity(days: int = 30) -> None:
         logger.warning(f"cleanup_old_bot_activity failed ({e})")
 
 
+def get_trading_budget() -> Optional[float]:
+    """
+    Return the active trading budget cap, or None if not set (use full portfolio).
+    A budget of e.g. 2000.0 means the bot sizes as if portfolio = $2,000,
+    leaving the rest of the account untouched.
+    """
+    val = cache_get("trading_budget")
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def set_trading_budget(amount: Optional[float]) -> None:
+    """
+    Set the trading budget cap. Pass None or 0 to clear (use full portfolio).
+    Persisted for 1 year — survives restarts.
+    """
+    if amount and amount > 0:
+        cache_set("trading_budget", amount, ttl_seconds=365 * 24 * 3600)
+        logger.info(f"Trading budget set to ${amount:,.2f}")
+    else:
+        # Clear by setting a tiny TTL so it expires immediately
+        cache_set("trading_budget", None, ttl_seconds=1)
+        logger.info("Trading budget cleared — using full portfolio value")
+
+
 def cleanup_expired_cache() -> None:
     """
     Delete expired rows from ai_cache to keep the table lean.

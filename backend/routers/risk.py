@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 from services import trading_engine
+from services.db import get_trading_budget, set_trading_budget
 
 router = APIRouter(prefix="/api/risk", tags=["risk"])
 
@@ -28,3 +29,51 @@ def update_risk_settings(settings: RiskSettings):
     trading_engine._risk_settings.update(settings.model_dump(exclude_none=True))
     trading_engine._save_risk_settings(trading_engine._risk_settings)
     return {"message": "Risk settings updated", "settings": trading_engine._risk_settings}
+
+
+class BudgetRequest(BaseModel):
+    amount: Optional[float] = None  # None or 0 = use full portfolio
+
+
+@router.get("/budget")
+def get_budget():
+    """
+    Return the active trading budget and real portfolio value.
+    trading_budget=null means the bot uses the full portfolio.
+    """
+    from services.alpaca_service import get_account
+    portfolio_value = None
+    try:
+        account = get_account()
+        portfolio_value = float(account.portfolio_value)
+    except Exception:
+        pass
+
+    budget = get_trading_budget()
+    return {
+        "trading_budget": budget,
+        "portfolio_value": portfolio_value,
+        "using_full_portfolio": budget is None or budget <= 0,
+    }
+
+
+@router.post("/budget")
+def set_budget(req: BudgetRequest):
+    """
+    Set the trading budget cap. The bot will size positions as if the portfolio
+    is this amount, leaving the rest of your account untouched.
+    Pass amount=null or amount=0 to remove the cap (use full portfolio).
+    """
+    if req.amount and req.amount > 0:
+        set_trading_budget(req.amount)
+        return {"message": f"Trading budget set to ${req.amount:,.2f}", "trading_budget": req.amount}
+    else:
+        set_trading_budget(None)
+        return {"message": "Trading budget cleared — using full portfolio", "trading_budget": None}
+
+
+@router.delete("/budget")
+def clear_budget():
+    """Remove the trading budget cap — bot uses full portfolio value."""
+    set_trading_budget(None)
+    return {"message": "Trading budget cleared — using full portfolio", "trading_budget": None}
