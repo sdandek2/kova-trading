@@ -1357,7 +1357,12 @@ async def run_trading_cycle():
             # Predicts direction — uncertain blocks outright, directional gets
             # a small (5% portfolio) position with forced EOD exit.
             if decision.action in ("buy", "short") and decision.symbol not in _earnings_play_pending:
-                _fda = check_fda_binary_event(decision.symbol, news_headlines)
+                try:
+                    from services.sector_momentum import get_sector_for_symbol as _get_sector
+                    _sym_sector = _get_sector(decision.symbol)
+                except Exception:
+                    _sym_sector = ""
+                _fda = check_fda_binary_event(decision.symbol, news_headlines, sector=_sym_sector)
                 if _fda.get("has_fda_event"):
                     try:
                         from services.claude_service import predict_earnings_direction as _pred_fda
