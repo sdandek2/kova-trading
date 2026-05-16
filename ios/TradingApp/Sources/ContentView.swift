@@ -84,7 +84,13 @@ struct ContentView: View {
                     .tabItem {
                         Label("Insights", systemImage: "lightbulb.fill")
                     }
+
+                SettingsView()
+                    .tabItem {
+                        Label("Settings", systemImage: "gearshape.fill")
+                    }
             }
+            .tint(KovaTheme.purple)
         }
     }
 }

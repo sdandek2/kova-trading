@@ -8,12 +8,11 @@ struct NewsRowView: View {
             HStack {
                 ForEach(article.symbols.prefix(3), id: \.self) { symbol in
                     Text(symbol)
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.blue)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(KovaTheme.blue)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(KovaTheme.blue.opacity(0.12))
                         .clipShape(Capsule())
                 }
                 Spacer()

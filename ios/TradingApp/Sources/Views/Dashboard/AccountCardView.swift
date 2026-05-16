@@ -2,48 +2,91 @@ import SwiftUI
 
 struct AccountCardView: View {
     let account: AccountInfo
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text("Portfolio Value")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            // ── Hero: portfolio value ─────────────────────────────────────
+            VStack(spacing: 8) {
+                Text("Portfolio Value")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
 
-            Text(String(format: "$%.2f", account.portfolioValue))
-                .font(.system(size: 36, weight: .bold, design: .rounded))
+                Text(formatCurrency(account.portfolioValue))
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .tracking(-1)
+                    .foregroundStyle(.primary)
 
-            HStack(spacing: 4) {
-                Image(systemName: account.dayPl >= 0 ? "arrow.up.right" : "arrow.down.right")
-                Text(String(format: "%@$%.2f (%.2f%%) today", account.dayPl >= 0 ? "+" : "", account.dayPl, account.dayPlPercent))
+                PLBadge(value: account.dayPl, percentValue: account.dayPlPercent)
             }
-            .font(.subheadline)
-            .foregroundStyle(account.dayPl >= 0 ? .green : .red)
-
-            Divider()
-                .padding(.vertical, 4)
-
-            HStack {
-                VStack(alignment: .leading) {
-                    Text("Cash")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(String(format: "$%.2f", account.cash))
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-                Spacer()
-                VStack(alignment: .trailing) {
-                    Text("Buying Power")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(String(format: "$%.2f", account.buyingPower))
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 22)
+            .padding(.bottom, 20)
+            .background {
+                // Subtle brand gradient tint at top
+                ZStack(alignment: .top) {
+                    KovaTheme.card
+                    LinearGradient(
+                        colors: [KovaTheme.purple.opacity(colorScheme == .dark ? 0.18 : 0.09),
+                                 KovaTheme.blue.opacity(colorScheme == .dark ? 0.10 : 0.05),
+                                 .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 }
             }
+
+            // ── Divider line with gradient ────────────────────────────────
+            Rectangle()
+                .fill(KovaTheme.purple.opacity(0.15))
+                .frame(height: 1)
+
+            // ── Cash + Buying Power ───────────────────────────────────────
+            HStack(spacing: 0) {
+                StatCell(label: "Cash", value: formatCurrency(account.cash), alignment: .leading)
+
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 1, height: 36)
+
+                StatCell(label: "Buying Power", value: formatCurrency(account.buyingPower), alignment: .trailing)
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, KovaTheme.cardPad)
+            .background(KovaTheme.card)
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
-        .padding(.horizontal)
+        .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: KovaTheme.radius)
+                .strokeBorder(KovaTheme.purple.opacity(colorScheme == .dark ? 0.25 : 0.10), lineWidth: 1)
+        )
+        .shadow(color: KovaTheme.purple.opacity(colorScheme == .dark ? 0.0 : 0.08),
+                radius: 12, x: 0, y: 4)
+        .padding(.horizontal, KovaTheme.pagePad)
+    }
+
+    private func formatCurrency(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: value)) ?? "$\(value)"
+    }
+}
+
+private struct StatCell: View {
+    let label: String
+    let value: String
+    let alignment: HorizontalAlignment
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: 3) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
     }
 }
