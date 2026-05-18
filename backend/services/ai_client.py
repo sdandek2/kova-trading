@@ -51,9 +51,12 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
         raise RuntimeError("GEMINI_API_KEY not set.")
     url = f"{_GEMINI_BASE}/{model}:generateContent"
 
-    # Disable thinking for all models — thinking tokens cost $3.50/1M and add no value
-    # for structured JSON responses where the model is filling a fixed template.
-    thinking_config = {"thinkingBudget": 0}
+    # Flash: disable thinking — thinking tokens ($3.50/1M) are 11× more expensive than
+    # Flash output ($0.30/1M) with no quality benefit for structured JSON.
+    # Pro: keep a modest thinking budget — thinking tokens ($3.50/1M) are cheaper than
+    # Pro output tokens ($10/1M), and complex trade decisions genuinely benefit from reasoning.
+    is_flash = "flash" in model
+    thinking_config = {"thinkingBudget": 0} if is_flash else {"thinkingBudget": 1024}
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
