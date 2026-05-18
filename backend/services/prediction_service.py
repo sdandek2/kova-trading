@@ -166,7 +166,7 @@ Respond ONLY in valid JSON — no markdown, no explanation. Use this exact struc
   "reasoning": "2-3 sentence overall investment thesis"
 }}"""
 
-        raw = ask_ai(prompt, max_tokens=2048)
+        raw = ask_ai(prompt, max_tokens=4096)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
