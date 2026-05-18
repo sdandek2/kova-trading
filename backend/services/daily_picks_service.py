@@ -10,7 +10,7 @@ from services.indicators import compute_all
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
 
-from services.ai_client import ask_ai_pro
+from services.ai_client import ask_ai_pro, parse_ai_json
 
 logger = logging.getLogger(__name__)
 
@@ -206,20 +206,7 @@ Respond ONLY in valid JSON — no markdown, no explanation:
 Total picks: 8-10 across all three categories. Allocate based on today's market conditions — maximize profit potential, not category balance. Be specific, actionable, and conviction-driven."""
 
         raw = ask_ai_pro(prompt, max_tokens=3500)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        try:
-            data = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            # Fallback: extract JSON object via regex in case of extra prose
-            import re as _re
-            match = _re.search(r'\{.*\}', raw, _re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not extract JSON from AI response: {raw[:200]}")
+        data = parse_ai_json(raw)
 
         result["short_term"] = data.get("short_term", [])
         result["long_term"] = data.get("long_term", [])

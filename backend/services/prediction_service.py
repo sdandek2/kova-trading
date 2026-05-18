@@ -6,7 +6,7 @@ from typing import Optional
 
 from config import settings
 from services import alpaca_service
-from services.ai_client import ask_ai
+from services.ai_client import ask_ai, parse_ai_json
 from services.db import cache_get, cache_set
 from services.indicators import compute_all, compute_atr
 from services.macro import get_macro_context, get_sector_rotation
@@ -167,19 +167,7 @@ Respond ONLY in valid JSON — no markdown, no explanation. Use this exact struc
 }}"""
 
         raw = ask_ai(prompt, max_tokens=4096)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        try:
-            data = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            # AI returned malformed JSON — try to extract the JSON object via regex
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not parse AI response as JSON: {raw[:200]}")
+        data = parse_ai_json(raw)
 
         result.update({k: v for k, v in data.items() if k in result})
         result["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -285,19 +273,7 @@ Respond ONLY in valid JSON — no markdown, no explanation:
 }}"""
 
         raw = ask_ai(prompt, max_tokens=3500)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        try:
-            data = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            import re as _re
-            match = _re.search(r'\{.*\}', raw, _re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not extract JSON from suggestions response: {raw[:200]}")
+        data = parse_ai_json(raw)
         raw_suggestions = data.get("suggestions", [])
 
         # Validate: reject placeholder/example symbols — real tickers are 1-5 uppercase letters only

@@ -88,6 +88,42 @@ def _call_model(model: str, prompt: str, max_tokens: int) -> str:
     return _call_claude(model, prompt, max_tokens)
 
 
+# ── Shared JSON parser ─────────────────────────────────────────────────────
+
+def parse_ai_json(raw: str) -> dict:
+    """
+    Robustly parse JSON from an AI response.
+    Handles: markdown wrappers, trailing commas, Python literals (None/True/False),
+    and extracts the JSON block if the model added surrounding prose.
+    """
+    import re, json
+
+    text = raw.strip()
+
+    # 1. Strip markdown code fences  (```json ... ``` or ``` ... ```)
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    # 2. Extract the outermost JSON object or array
+    match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+    if match:
+        text = match.group()
+
+    # 3. Fix trailing commas before } or ]  (invalid in JSON, common in Gemini output)
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 4. Fix Python literals that Gemini sometimes emits
+    text = re.sub(r'\bNone\b',  'null',  text)
+    text = re.sub(r'\bTrue\b',  'true',  text)
+    text = re.sub(r'\bFalse\b', 'false', text)
+
+    return json.loads(text)
+
+
 # ── Tier 1: Critical calls ─────────────────────────────────────────────────
 # Default: Gemini 2.5 Pro primary | Claude Sonnet 4.6 fallback
 # Configurable via /api/settings/models

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from models.trade import TradeDecision
 from services.indicators import compute_all
 from services import strategy as strategy_service
-from services.ai_client import ask_ai, ask_ai_pro
+from services.ai_client import ask_ai, ask_ai_pro, parse_ai_json
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +71,7 @@ Only return bullish/bearish if there is CLEAR directional evidence. Default to u
 
     try:
         raw = ask_ai_pro(prompt, max_tokens=300)
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        result = json.loads(raw.strip())
+        result = parse_ai_json(raw)
         direction = result.get("direction", "uncertain")
         confidence = result.get("confidence", "low")
         reasoning = result.get("reasoning", "")
@@ -373,19 +369,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
 
     try:
         step1_raw = ask_ai_pro(step1_prompt, max_tokens=1200)
-        if step1_raw.startswith("```"):
-            step1_raw = step1_raw.split("```")[1]
-            if step1_raw.startswith("json"):
-                step1_raw = step1_raw[4:]
-        try:
-            step1_data = json.loads(step1_raw.strip())
-        except json.JSONDecodeError:
-            import re as _re
-            match = _re.search(r'\{.*\}', step1_raw, _re.DOTALL)
-            if match:
-                step1_data = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not extract JSON from Step 1 response: {step1_raw[:200]}")
+        step1_data = parse_ai_json(step1_raw)
         opportunities = step1_data.get("opportunities", [])
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
@@ -565,19 +549,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
 
     try:
         step2_raw = ask_ai_pro(step2_prompt, max_tokens=2500)
-        if step2_raw.startswith("```"):
-            step2_raw = step2_raw.split("```")[1]
-            if step2_raw.startswith("json"):
-                step2_raw = step2_raw[4:]
-        try:
-            step2_data = json.loads(step2_raw.strip())
-        except json.JSONDecodeError:
-            import re as _re
-            match = _re.search(r'\{.*\}', step2_raw, _re.DOTALL)
-            if match:
-                step2_data = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not extract JSON from Step 2 response: {step2_raw[:200]}")
+        step2_data = parse_ai_json(step2_raw)
         approved = step2_data.get("trades", [])
         logger.info(f"Step 2 — Approved {len(approved)} trades: {[t.get('symbol') for t in approved]} | Skipped: {step2_data.get('skipped','')}")
         # ── Save both prompts for viewer — only on successful cycle ──────────

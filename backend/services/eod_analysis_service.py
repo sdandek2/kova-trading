@@ -248,17 +248,11 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
 
     try:
         raw = ask_ai_pro(prompt, max_tokens=2500)
-        # Strip markdown if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        from services.ai_client import parse_ai_json
         try:
-            analysis = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            analysis = json.loads(match.group()) if match else {}
+            analysis = parse_ai_json(raw)
+        except Exception:
+            analysis = {}
     except Exception as e:
         logger.error(f"EOD analysis Claude call failed: {e}")
         analysis = {
