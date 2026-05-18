@@ -14,6 +14,7 @@ Both functions return a plain string so callers don't care which model ran.
 import logging
 
 import anthropic
+import httpx
 
 from config import settings
 
@@ -23,17 +24,8 @@ logger = logging.getLogger(__name__)
 
 _anthropic = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-# Gemini is optional — only available if google-genai is installed
-_gemini = None
-_genai_types = None
-try:
-    from google import genai as _google_genai
-    from google.genai import types as _genai_types
-    if settings.gemini_api_key:
-        _gemini = _google_genai.Client(api_key=settings.gemini_api_key)
-        logger.info("Gemini client initialized.")
-except ImportError:
-    logger.info("google-genai not installed — using Claude only.")
+# Gemini via REST API — no google-genai package needed (avoids websockets conflict with alpaca-py)
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
 def _get_model_config() -> dict:
@@ -55,17 +47,25 @@ def _is_gemini(model: str) -> bool:
 
 
 def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
-    if not _gemini:
-        raise RuntimeError("Gemini client not initialised.")
-    response = _gemini.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=_genai_types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-            temperature=0.2,
-        ),
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY not set.")
+    url = f"{_GEMINI_BASE}/{model}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.2,
+        },
+    }
+    response = httpx.post(
+        url,
+        json=payload,
+        params={"key": settings.gemini_api_key},
+        timeout=120,
     )
-    return response.text.strip()
+    response.raise_for_status()
+    data = response.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def _call_claude(model: str, prompt: str, max_tokens: int) -> str:
