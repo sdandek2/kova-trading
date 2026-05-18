@@ -152,4 +152,20 @@ struct Suggestion: Codable, Identifiable {
     var isInverseETF: Bool { tradeDirection == "inverse_etf" }
     var isBearish: Bool { isShort || isInverseETF }
     var prefillSide: String { isShort ? "short" : "buy" }
+
+    /// Custom decoder so a suggestion missing any string field doesn't crash the response.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        symbol            = try c.decode(String.self, forKey: .symbol)
+        type              = (try c.decodeIfPresent(String.self, forKey: .type)) ?? "momentum"
+        direction         = try c.decodeIfPresent(String.self, forKey: .direction)
+        horizon           = (try c.decodeIfPresent(String.self, forKey: .horizon)) ?? "short_term"
+        short_term_thesis = (try c.decodeIfPresent(String.self, forKey: .short_term_thesis)) ?? ""
+        long_term_thesis  = (try c.decodeIfPresent(String.self, forKey: .long_term_thesis)) ?? ""
+        risk_level        = (try c.decodeIfPresent(String.self, forKey: .risk_level)) ?? "medium"
+        entry_note        = (try c.decodeIfPresent(String.self, forKey: .entry_note)) ?? ""
+        upside_pct        = try c.decodeIfPresent(Double.self, forKey: .upside_pct)
+        current_price     = try c.decodeIfPresent(Double.self, forKey: .current_price)
+        five_day_change_pct = try c.decodeIfPresent(Double.self, forKey: .five_day_change_pct)
+    }
 }
