@@ -370,7 +370,9 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
     try:
         step1_raw = ask_ai_pro(step1_prompt, max_tokens=1200)
         step1_data = parse_ai_json(step1_raw)
-        opportunities = step1_data.get("opportunities", [])
+        raw_opps = step1_data.get("opportunities", [])
+        # Validate: only keep entries that have a string symbol — drop malformed entries
+        opportunities = [o for o in raw_opps if isinstance(o, dict) and isinstance(o.get("symbol"), str) and o["symbol"]]
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
         logger.error(f"Step 1 failed: {e}. Raw response: {step1_raw[:300] if 'step1_raw' in locals() else 'none'}")
@@ -607,7 +609,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         partial_exit = bool(trade.get("partial_exit", False))
         analysis = trade.get("analysis", "")
 
-        if not sym or action == "hold":
+        if not sym or action not in ("buy", "short", "sell"):
             continue
 
         # Confidence gate
