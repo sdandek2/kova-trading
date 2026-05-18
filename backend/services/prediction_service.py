@@ -284,7 +284,7 @@ Respond ONLY in valid JSON — no markdown, no explanation:
   ]
 }}"""
 
-        raw = ask_ai(prompt, max_tokens=2000)
+        raw = ask_ai(prompt, max_tokens=3500)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
