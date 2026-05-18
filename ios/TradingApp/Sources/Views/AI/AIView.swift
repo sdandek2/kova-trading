@@ -115,6 +115,9 @@ struct AIView: View {
 
                             RiskSettingsCard()
 
+                            // ── AI Model Picker ──
+                            ModelPickerCard()
+
                             // ── Prompt Viewer / Override ──
                             NavigationLink {
                                 PromptViewerView()
@@ -126,7 +129,7 @@ struct AIView: View {
                                             .foregroundStyle(.purple).font(.system(size: 15))
                                     }
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("Claude Prompt")
+                                        Text("AI Prompt")
                                             .font(.subheadline).fontWeight(.semibold)
                                         Text("View last prompt · set override instructions")
                                             .font(.caption).foregroundStyle(.secondary)

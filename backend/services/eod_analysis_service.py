@@ -143,7 +143,7 @@ def run_eod_analysis() -> dict:
     Main entry point. Queries today's activity, sends to Claude for analysis,
     saves the structured report to cache, and returns it.
     """
-    from services.ai_client import ask_ai
+    from services.ai_client import ask_ai_pro
     from services.db import cache_set, cache_get
     from services.strategy import get_strategy
 
@@ -247,7 +247,7 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
 }}"""
 
     try:
-        raw = ask_ai(prompt, max_tokens=1200)
+        raw = ask_ai_pro(prompt, max_tokens=1200)
         # Strip markdown if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]

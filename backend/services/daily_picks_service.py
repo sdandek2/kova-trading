@@ -3,8 +3,6 @@ import logging
 from datetime import datetime, timezone, date, timedelta
 
 
-import anthropic
-
 from config import settings
 from services import alpaca_service
 from services.db import cache_get, cache_set
@@ -12,9 +10,9 @@ from services.indicators import compute_all
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
 
-logger = logging.getLogger(__name__)
+from services.ai_client import ask_ai_pro
 
-client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+logger = logging.getLogger(__name__)
 
 # Cache key is date-scoped so it refreshes automatically each new trading day
 def _picks_cache_key() -> str:
@@ -207,13 +205,7 @@ Respond ONLY in JSON:
 
 Total picks: 8-10 across all three categories. Allocate based on today's market conditions — maximize profit potential, not category balance. Be specific, actionable, and conviction-driven."""
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=3500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        raw = response.content[0].text.strip()
+        raw = ask_ai_pro(prompt, max_tokens=3500)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from models.trade import TradeDecision
 from services.indicators import compute_all
 from services import strategy as strategy_service
-from services.ai_client import ask_ai
+from services.ai_client import ask_ai, ask_ai_pro
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ Return ONLY valid JSON, no markdown. direction must be one of: bullish, bearish,
 Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
 
     try:
-        raw = ask_ai(prompt, max_tokens=150)
+        raw = ask_ai_pro(prompt, max_tokens=150)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -372,7 +372,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
         step1_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=1200)
+        step1_raw = ask_ai_pro(step1_prompt, max_tokens=1200)
         if step1_raw.startswith("```"):
             step1_raw = step1_raw.split("```")[1]
             if step1_raw.startswith("json"):
@@ -564,7 +564,7 @@ Respond in JSON — only include approved trades (put any sell/rotation BEFORE t
         step2_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step2_raw = ask_ai(step2_prompt, max_tokens=1800)
+        step2_raw = ask_ai_pro(step2_prompt, max_tokens=1800)
         if step2_raw.startswith("```"):
             step2_raw = step2_raw.split("```")[1]
             if step2_raw.startswith("json"):

@@ -328,4 +328,25 @@ class APIService {
         }
         return try decoder.decode(ReserveResetResponse.self, from: data)
     }
+
+    // ── AI Model Settings ──
+    func getModelSettings() async throws -> ModelSettings {
+        try await fetch("/api/settings/models")
+    }
+
+    func updateModelSettings(_ update: ModelSettingsUpdate) async throws {
+        guard let url = URL(string: baseURL + "/api/settings/models") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        request.httpBody = try? JSONEncoder().encode(update)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            // Surface the backend's "detail" message if available
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            throw APIError.networkError(NSError(domain: "", code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: detail ?? "HTTP error \(http.statusCode)"]))
+        }
+    }
 }

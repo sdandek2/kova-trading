@@ -43,7 +43,7 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("App") { Text("Kova").foregroundStyle(.secondary) }
                     LabeledContent("Version") { Text("1.0.0").foregroundStyle(.secondary) }
-                    LabeledContent("AI Model") { Text("Claude Sonnet").foregroundStyle(.secondary) }
+                    LabeledContent("AI Model") { Text("Gemini 2.5 Pro").foregroundStyle(.secondary) }
                 } header: {
                     Label("About", systemImage: "info.circle")
                         .font(.caption.weight(.semibold))

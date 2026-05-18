@@ -238,10 +238,10 @@ struct TradeDetailSheet: View {
                     }
                     .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
 
-                    // Claude's reasoning
+                    // AI's reasoning
                     if let reasoning = trade.claude_reasoning, !reasoning.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("Claude's Reasoning", systemImage: "brain")
+                            Label("AI Reasoning", systemImage: "brain")
                                 .font(.headline)
                             Text(reasoning)
                                 .font(.subheadline)

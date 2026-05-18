@@ -40,7 +40,7 @@ struct PromptViewerView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Prompt Override")
                                 .font(.headline)
-                            Text(overrideStatus?.active == true ? "Active — injected each cycle" : "Inactive — Claude uses default behaviour")
+                            Text(overrideStatus?.active == true ? "Active — injected each cycle" : "Inactive — AI uses default behaviour")
                                 .font(.caption)
                                 .foregroundStyle(overrideStatus?.active == true ? .purple : .secondary)
                         }
@@ -58,7 +58,7 @@ struct PromptViewerView: View {
                     Divider().padding(.horizontal)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Extra instructions appended to every Claude prompt. Examples:")
+                        Text("Extra instructions appended to every AI prompt. Examples:")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("\"Avoid tech stocks today\" · \"Focus on energy sector\" · \"Be conservative, only high-confidence trades\"")
                             .font(.caption2).foregroundStyle(.tertiary)
@@ -116,7 +116,7 @@ struct PromptViewerView: View {
                                 .foregroundStyle(.blue).font(.system(size: 16))
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Last Prompt Sent to Claude")
+                            Text("Last Prompt Sent to AI")
                                 .font(.headline)
                             if promptData?.available == true {
                                 Text("Last cycle: \(savedAt)")
@@ -178,7 +178,7 @@ struct PromptViewerView: View {
             }
             .padding()
         }
-        .navigationTitle("Claude Prompt")
+        .navigationTitle("AI Prompt")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }

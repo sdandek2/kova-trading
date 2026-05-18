@@ -1,9 +1,9 @@
 """
 prompt.py — Read-only prompt viewer + append-only override for Kova.
 
-GET  /api/prompt/last     — returns the last Step 1 + Step 2 prompts sent to Claude
+GET  /api/prompt/last     — returns the last Step 1 + Step 2 prompts sent to AI
 GET  /api/prompt/override — returns current override text (or null)
-POST /api/prompt/override — appends extra instructions to every Claude prompt
+POST /api/prompt/override — appends extra instructions to every AI prompt
 DELETE /api/prompt/override — clears the override
 """
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/prompt", tags=["prompt"])
 @router.get("/last")
 def get_last_prompts():
     """
-    Return the most recent Step 1 and Step 2 prompts sent to Claude.
+    Return the most recent Step 1 and Step 2 prompts sent to AI.
     Includes timestamp so the app can show when the last cycle ran.
     """
     from services.db import get_setting
@@ -56,7 +56,7 @@ def get_override():
 @router.post("/override")
 def set_override(req: OverrideRequest):
     """
-    Set append-only override instructions injected into every Claude prompt.
+    Set append-only override instructions injected into every AI prompt.
     Examples: "avoid tech stocks today", "focus on energy sector", "be conservative".
     The core prompt rules stay intact — this only appends extra context.
     Pass text=null or text="" to clear.
