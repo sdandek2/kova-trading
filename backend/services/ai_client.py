@@ -92,15 +92,12 @@ def _call_model(model: str, prompt: str, max_tokens: int) -> str:
 
 def parse_ai_json(raw: str) -> dict:
     """
-    Robustly parse JSON from an AI response.
-    Handles:
-      - Markdown code fences (```json ... ```)
-      - Trailing commas  { "a": 1, }
-      - Missing commas between sibling objects  } "next_key"
-      - Python literals  None / True / False
-      - Surrounding prose before/after the JSON block
+    Robustly parse JSON from an AI response using json-repair.
+    Handles all common LLM JSON issues: markdown fences, trailing commas,
+    missing commas, single quotes, Python literals, unquoted keys, etc.
     """
     import re, json
+    from json_repair import repair_json
 
     text = raw.strip()
 
@@ -115,36 +112,23 @@ def parse_ai_json(raw: str) -> dict:
                 text = candidate
                 break
 
-    # 2. Extract the outermost JSON object or array
+    # 2. Extract the outermost JSON block if model added prose around it
     match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
     if match:
         text = match.group()
 
-    # 3. Fix Python literals
-    text = re.sub(r'\bNone\b',  'null',  text)
-    text = re.sub(r'\bTrue\b',  'true',  text)
-    text = re.sub(r'\bFalse\b', 'false', text)
-
-    # 4. Fix trailing commas before } or ]
-    text = re.sub(r',\s*([}\]])', r'\1', text)
-
-    # 5. First attempt
+    # 3. Fast path — valid JSON, no repair needed
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 6. Fix missing commas between a closing } or ] and the next key or value
-    #    e.g.  }\n  "month_1"  →  },\n  "month_1"
-    text = re.sub(r'([}\]])\s*\n(\s*["{[\d\-])', r'\1,\n\2', text)
-    # Re-apply trailing comma cleanup in case step 6 added one at end of object
-    text = re.sub(r',\s*([}\]])', r'\1', text)
-
-    # 7. Second attempt
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Could not parse AI JSON after cleanup: {e} | raw[:300]: {raw[:300]}")
+    # 4. Repair and parse — handles trailing commas, missing commas,
+    #    single quotes, Python literals, unquoted keys, truncated JSON, etc.
+    repaired = repair_json(text, return_objects=True)
+    if isinstance(repaired, (dict, list)):
+        return repaired
+    raise ValueError(f"Could not parse AI JSON even after repair. raw[:200]: {raw[:200]}")
 
 
 # ── Tier 1: Critical calls ─────────────────────────────────────────────────
