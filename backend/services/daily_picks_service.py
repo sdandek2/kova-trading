@@ -144,7 +144,7 @@ Your task: Pick the BEST 8-10 trades for maximum profit today — whatever mix o
 
 For every pick: be SPECIFIC and BOLD. State exactly why this stock, why now, what drives it, what could go wrong.
 
-Respond ONLY in JSON:
+Respond ONLY in valid JSON — no markdown, no explanation:
 {{
   "summary": "2-3 sentence overall market assessment, what kind of day it is for traders, and what the optimal strategy mix is today",
   "short_term": [

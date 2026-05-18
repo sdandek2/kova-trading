@@ -554,7 +554,7 @@ For SHORT trades:
 - stop_loss_pct: how much RISE to tolerate before covering (0.04-0.07)
 - partial_exit: cover 50% at first target, let rest ride
 
-Respond in JSON — only include approved trades (put any sell/rotation BEFORE the buy):
+Respond in valid JSON only, no markdown — only include approved trades (put any sell/rotation BEFORE the buy):
 {{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
     # ── Inject override into step2 ───────────────────────────────────────────

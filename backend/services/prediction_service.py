@@ -144,7 +144,7 @@ Provide a comprehensive prediction covering:
 6. 3-5 key risks that could hurt the stock
 7. Overall recommendation and confidence
 
-Respond ONLY in JSON with this exact structure:
+Respond ONLY in valid JSON — no markdown, no explanation. Use this exact structure:
 {{
   "recommendation": "strong_buy|buy|hold|sell|strong_sell",
   "confidence": "high|medium|low",
@@ -267,7 +267,7 @@ Direction rules:
 
 For short and inverse_etf picks: upside_pct = expected downside profit %, short_term_thesis = why it falls.
 
-Respond ONLY in JSON:
+Respond ONLY in valid JSON — no markdown, no explanation:
 {{
   "suggestions": [
     {{
