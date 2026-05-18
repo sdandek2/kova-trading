@@ -58,14 +58,21 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
         raise RuntimeError("GEMINI_API_KEY not set.")
     url = f"{_GEMINI_BASE}/{model}:generateContent"
 
+    generation_config: dict = {
+        "maxOutputTokens": max_tokens,
+        "temperature": 0.2,
+        "responseMimeType": "application/json",  # cleaner output, fewer tokens billed
+    }
+
+    # Flash: disable thinking entirely (thinkingBudget=0, valid range 0–24576).
+    # Pro: no thinkingConfig → dynamic thinking (Pro cannot disable it; range 128–32768).
+    # Letting Pro think freely is worth the cost for critical trade decisions.
+    if "flash" in model:
+        generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.2,
-            "thinkingConfig": {"thinkingBudget": 0},  # off — no benefit for structured JSON
-            "responseMimeType": "application/json",    # cleaner output, fewer tokens billed
-        },
+        "generationConfig": generation_config,
     }
 
     response = httpx.post(
