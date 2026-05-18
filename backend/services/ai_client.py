@@ -51,12 +51,10 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
         raise RuntimeError("GEMINI_API_KEY not set.")
     url = f"{_GEMINI_BASE}/{model}:generateContent"
 
-    # Flash: disable thinking — thinking tokens ($3.50/1M) are 11× more expensive than
-    # Flash output ($0.30/1M) with no quality benefit for structured JSON.
-    # Pro: keep a modest thinking budget — thinking tokens ($3.50/1M) are cheaper than
-    # Pro output tokens ($10/1M), and complex trade decisions genuinely benefit from reasoning.
-    is_flash = "flash" in model
-    thinking_config = {"thinkingBudget": 0} if is_flash else {"thinkingBudget": 1024}
+    # Disable thinking for all models — all calls return structured JSON from a fixed
+    # template. The model does pattern recognition on market signals, not open-ended
+    # reasoning. Output fields (reasoning, thesis, etc.) already capture the rationale.
+    thinking_config = {"thinkingBudget": 0}
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
