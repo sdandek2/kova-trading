@@ -367,7 +367,7 @@ def get_market_snapshot(symbols: list[str]) -> dict:
         bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
         for symbol in symbols:
             quote = quotes.get(symbol)
-            current_price = float(quote.ask_price) if quote else None
+            current_price = float(quote.ask_price) if quote and quote.ask_price else None
 
             symbol_bars = bars_dict.get(symbol, [])
             closing_prices = [float(b.close) for b in symbol_bars]
