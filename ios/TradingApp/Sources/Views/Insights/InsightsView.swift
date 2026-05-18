@@ -35,7 +35,7 @@ struct InsightsView: View {
                                 ProgressView().scaleEffect(0.7)
                             } else {
                                 Button {
-                                    Task { await vm.loadSuggestions() }
+                                    Task { await vm.loadSuggestions(refresh: true) }
                                 } label: {
                                     Image(systemName: "arrow.clockwise")
                                         .font(.caption)

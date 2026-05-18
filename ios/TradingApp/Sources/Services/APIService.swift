@@ -120,8 +120,8 @@ class APIService {
         try await fetch("/api/strategy/all")
     }
 
-    func getSuggestions() async throws -> [Suggestion] {
-        let response: SuggestionsResponse = try await fetch("/api/predictions/suggestions", timeout: 90)
+    func getSuggestions(refresh: Bool = false) async throws -> [Suggestion] {
+        let response: SuggestionsResponse = try await fetch("/api/predictions/suggestions\(refresh ? "?refresh=true" : "")", timeout: 90)
         return response.suggestions
     }
 

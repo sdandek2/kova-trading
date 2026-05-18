@@ -29,11 +29,11 @@ class InsightsViewModel: ObservableObject {
         isLoadingDailyPicks = false
     }
 
-    func loadSuggestions() async {
+    func loadSuggestions(refresh: Bool = false) async {
         isLoadingSuggestions = true
         suggestionsError = nil
         do {
-            suggestions = try await APIService.shared.getSuggestions()
+            suggestions = try await APIService.shared.getSuggestions(refresh: refresh)
             // Refresh live prices for all suggestions
             await refreshLivePricesForVisibleSymbols()
         } catch {
