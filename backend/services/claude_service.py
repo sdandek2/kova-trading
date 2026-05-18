@@ -70,7 +70,7 @@ Return ONLY valid JSON, no markdown. direction must be one of: bullish, bearish,
 Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=150)
+        raw = ask_ai_pro(prompt, max_tokens=300)
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -564,7 +564,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         step2_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step2_raw = ask_ai_pro(step2_prompt, max_tokens=1800)
+        step2_raw = ask_ai_pro(step2_prompt, max_tokens=2500)
         if step2_raw.startswith("```"):
             step2_raw = step2_raw.split("```")[1]
             if step2_raw.startswith("json"):
