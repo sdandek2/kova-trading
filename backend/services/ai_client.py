@@ -93,35 +93,58 @@ def _call_model(model: str, prompt: str, max_tokens: int) -> str:
 def parse_ai_json(raw: str) -> dict:
     """
     Robustly parse JSON from an AI response.
-    Handles: markdown wrappers, trailing commas, Python literals (None/True/False),
-    and extracts the JSON block if the model added surrounding prose.
+    Handles:
+      - Markdown code fences (```json ... ```)
+      - Trailing commas  { "a": 1, }
+      - Missing commas between sibling objects  } "next_key"
+      - Python literals  None / True / False
+      - Surrounding prose before/after the JSON block
     """
     import re, json
 
     text = raw.strip()
 
-    # 1. Strip markdown code fences  (```json ... ``` or ``` ... ```)
-    if text.startswith("```"):
+    # 1. Strip markdown code fences
+    if "```" in text:
         parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+        for part in parts:
+            candidate = part.strip()
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+            if candidate.startswith("{") or candidate.startswith("["):
+                text = candidate
+                break
 
     # 2. Extract the outermost JSON object or array
     match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
     if match:
         text = match.group()
 
-    # 3. Fix trailing commas before } or ]  (invalid in JSON, common in Gemini output)
-    text = re.sub(r',\s*([}\]])', r'\1', text)
-
-    # 4. Fix Python literals that Gemini sometimes emits
+    # 3. Fix Python literals
     text = re.sub(r'\bNone\b',  'null',  text)
     text = re.sub(r'\bTrue\b',  'true',  text)
     text = re.sub(r'\bFalse\b', 'false', text)
 
-    return json.loads(text)
+    # 4. Fix trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 5. First attempt
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Fix missing commas between a closing } or ] and the next key or value
+    #    e.g.  }\n  "month_1"  →  },\n  "month_1"
+    text = re.sub(r'([}\]])\s*\n(\s*["{[\d\-])', r'\1,\n\2', text)
+    # Re-apply trailing comma cleanup in case step 6 added one at end of object
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 7. Second attempt
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Could not parse AI JSON after cleanup: {e} | raw[:300]: {raw[:300]}")
 
 
 # ── Tier 1: Critical calls ─────────────────────────────────────────────────
