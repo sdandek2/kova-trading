@@ -65,7 +65,12 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
     )
     response.raise_for_status()
     data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        # Safety block or empty response — treat as failure so fallback kicks in
+        block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+        raise RuntimeError(f"Gemini returned no candidates (blockReason: {block_reason})")
+    return candidates[0]["content"]["parts"][0]["text"].strip()
 
 
 def _call_claude(model: str, prompt: str, max_tokens: int) -> str:
