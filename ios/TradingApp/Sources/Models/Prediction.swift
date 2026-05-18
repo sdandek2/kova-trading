@@ -120,6 +120,12 @@ struct StockPrediction: Codable, Identifiable {
 
 struct SuggestionsResponse: Codable {
     let suggestions: [Suggestion]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // If the backend returns an error envelope (missing "suggestions" key), default to empty.
+        suggestions = (try c.decodeIfPresent([Suggestion].self, forKey: .suggestions)) ?? []
+    }
 }
 
 struct TickerResult: Codable, Identifiable {

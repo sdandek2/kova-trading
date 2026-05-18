@@ -233,6 +233,19 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
             logger.warning(f"cache_set pg error ({e}), stored in memory only.")
 
 
+def cache_delete(key: str) -> None:
+    """Remove a cache entry from both memory and Postgres."""
+    _memory_cache.pop(key, None)
+    conn = _get_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_cache WHERE key = %s", (key,))
+            logger.debug(f"cache_delete: {key}")
+        except Exception as e:
+            logger.warning(f"cache_delete pg error ({e})")
+
+
 def get_recent_trade_outcomes(limit: int = 10) -> list[dict]:
     """
     Read the most recent AI trade decisions from trade_log.

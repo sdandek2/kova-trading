@@ -7,8 +7,11 @@ router = APIRouter(prefix="/api/predictions", tags=["predictions"])
 
 
 @router.get("/suggestions")
-def suggestions():
+def suggestions(refresh: bool = Query(False, description="Force regenerate, bypassing cache")):
     """Top stock/ETF suggestions right now — short and long-term thesis."""
+    if refresh:
+        from services.db import cache_delete
+        cache_delete("suggestions:top")
     return {"suggestions": get_top_suggestions()}
 
 
