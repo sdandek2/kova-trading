@@ -84,8 +84,8 @@ struct TaxSummaryView: View {
                                    valueColor: .primary)
                         Divider().padding(.leading, 16)
                         FinanceRow(label: "Estimated Tax",
-                                   value: "-$\(String(format: "%.2f", s.tax.estimatedTax))",
-                                   valueColor: .red,
+                                   value: s.tax.estimatedTax > 0 ? "-$\(String(format: "%.2f", s.tax.estimatedTax))" : "$0.00",
+                                   valueColor: s.tax.estimatedTax > 0 ? .red : .primary,
                                    bold: true)
                         Divider().padding(.leading, 16)
                         FinanceRow(label: "After-Tax Gain",
