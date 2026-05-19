@@ -101,6 +101,7 @@ _ai_sold_symbols: set = set()          # symbols sold by AI this cycle — guard
 # Prevents the cascade bug where remaining position sits at same P&L% and
 # fires the scale-out rule every cycle until position is nearly zero.
 _scale_out_counts: dict = {}           # symbol → int (how many scale-outs taken so far)
+_cover_short_counts: dict = {}         # symbol → int (how many partial covers taken so far)
 _pyramid_counts: dict = {}             # symbol → int (how many pyramid adds taken; max 2)
 # Re-entry tracking: when we scale out partially, record the qty BEFORE the trim so we
 # can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
@@ -935,6 +936,21 @@ async def run_trading_cycle():
                     trail_pct=trail_pct,
                     strategy_key=strategy_key,
                 )
+                # ── Staircase gate for shorts: prevent cascading covers ────────────
+                # After covering 50% at 10%, the remaining position still shows the
+                # same P&L% (same entry price), so should_cover_short fires again
+                # every cycle. Gate requires each successive cover to reach 15pp higher:
+                # 10% → 25% → 40% → 55% ... Trailing stop / RSI / stop-loss bypass.
+                if cover and fraction < 1.0 and "trailing stop" not in reason.lower() and "stop loss" not in reason.lower() and "rsi" not in reason.lower():
+                    count = _cover_short_counts.get(position.symbol, 0)
+                    next_threshold = 10.0 + count * 15.0  # 10, 25, 40, 55 ...
+                    pnl = position.unrealized_pl_percent
+                    if pnl < next_threshold:
+                        logger.debug(
+                            f"Cover gate: {position.symbol} at {pnl:.1f}% — "
+                            f"next partial cover requires {next_threshold:.0f}% (count={count})"
+                        )
+                        cover = False
                 should_exit = cover
             else:
                 scale_out, fraction, reason = should_scale_out(
@@ -965,7 +981,7 @@ async def run_trading_cycle():
                 should_exit = scale_out
 
             if should_exit:
-                exit_qty = max(1, int(float(position.qty) * fraction))
+                exit_qty = max(1, int(abs(float(position.qty)) * fraction))
                 action_label = "cover_short" if is_short else "scale_out"
                 order_side = "buy" if is_short else "sell"
                 logger.info(f"{action_label.upper()} triggered: {reason} — {'covering' if is_short else 'selling'} {exit_qty} shares")
@@ -989,6 +1005,12 @@ async def run_trading_cycle():
                     logger.info(
                         f"Scale-out #{_scale_out_counts[position.symbol]} for {position.symbol} — "
                         f"next trim at {20.0 + _scale_out_counts[position.symbol] * 15.0:.0f}%"
+                    )
+                elif action_label == "cover_short" and fraction < 1.0:
+                    _cover_short_counts[position.symbol] = _cover_short_counts.get(position.symbol, 0) + 1
+                    logger.info(
+                        f"Cover #{_cover_short_counts[position.symbol]} for {position.symbol} — "
+                        f"next partial cover at {10.0 + _cover_short_counts[position.symbol] * 15.0:.0f}%"
                     )
                 # Cancel any open GTC bracket orders before submitting a market exit
                 # Shorts: cancel GTC limit buy (cover order placed at entry via submit_short_order)
