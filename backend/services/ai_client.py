@@ -61,14 +61,15 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
     generation_config: dict = {
         "maxOutputTokens": max_tokens,
         "temperature": 0.2,
-        "responseMimeType": "application/json",  # cleaner output, fewer tokens billed
     }
 
-    # Flash: disable thinking entirely (thinkingBudget=0, valid range 0–24576).
-    # Pro: no thinkingConfig → dynamic thinking (Pro cannot disable it; range 128–32768).
-    # Letting Pro think freely is worth the cost for critical trade decisions.
     if "flash" in model:
+        # Flash: disable thinking + force JSON output (fully supported)
         generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+        generation_config["responseMimeType"] = "application/json"
+    # Pro: no thinkingConfig (cannot disable), no responseMimeType
+    # responseMimeType conflicts with Pro's thinking output — causes empty parts.
+    # json-repair in parse_ai_json handles any formatting issues instead.
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -87,7 +88,23 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
     if not candidates:
         block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
         raise RuntimeError(f"Gemini returned no candidates (blockReason: {block_reason})")
-    return candidates[0]["content"]["parts"][0]["text"].strip()
+
+    candidate = candidates[0]
+    finish_reason = candidate.get("finishReason", "")
+    content = candidate.get("content", {})
+    parts = content.get("parts", [])
+
+    if not parts:
+        # Log full response to diagnose why parts is empty
+        logger.warning(f"Gemini {model} returned empty parts. finishReason={finish_reason}, content={content}, data={str(data)[:300]}")
+        raise RuntimeError(f"Gemini returned empty parts (finishReason={finish_reason})")
+
+    text = parts[0].get("text", "").strip()
+    if not text:
+        logger.warning(f"Gemini {model} returned empty text. parts={parts}")
+        raise RuntimeError(f"Gemini returned empty text in parts")
+
+    return text
 
 
 def _call_claude(model: str, prompt: str, max_tokens: int) -> str:
