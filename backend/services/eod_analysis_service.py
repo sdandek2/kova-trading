@@ -247,7 +247,7 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
 }}"""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=2500)
+        raw = ask_ai_pro(prompt, max_tokens=6000)
         from services.ai_client import parse_ai_json
         try:
             parsed = parse_ai_json(raw)
