@@ -250,7 +250,9 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
         raw = ask_ai_pro(prompt, max_tokens=2500)
         from services.ai_client import parse_ai_json
         try:
-            analysis = parse_ai_json(raw)
+            parsed = parse_ai_json(raw)
+            # Guard: AI occasionally wraps response in a list — unwrap it
+            analysis = parsed[0] if isinstance(parsed, list) and parsed else parsed if isinstance(parsed, dict) else {}
         except Exception:
             analysis = {}
     except Exception as e:
