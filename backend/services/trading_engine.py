@@ -1320,7 +1320,7 @@ async def run_trading_cycle():
                     # Uncertain earnings — aggressive mode gets a tiny 2% position
                     # with forced EOD exit to capture intraday momentum while avoiding
                     # overnight gap risk. Balanced mode still blocks outright.
-                    if is_aggressive:
+                    if strategy_key == "aggressive":
                         _ep_price_u = _sym_data.get("current_price")
                         if not _ep_price_u or _ep_price_u <= 0:
                             logger.warning(f"Earnings uncertain {decision.symbol}: no price, blocking")

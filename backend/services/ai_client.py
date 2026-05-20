@@ -169,7 +169,7 @@ def parse_ai_json(raw: str) -> dict:
 # Gemini 2.5 Pro (no thinking, no grounding) | Fallback: Claude Sonnet 4.6
 # Used for: Step 1, Step 2, daily picks, EOD analysis, earnings direction.
 
-def ask_ai_pro(prompt: str, max_tokens: int = 600) -> str:
+def ask_ai_pro(prompt: str, max_tokens: int = 4000) -> str:
     """
     Critical calls — trade decisions, EOD analysis, daily picks, earnings direction.
     Grounding disabled (saves $0.035/call). Thinking already off (thinkingBudget=0).
