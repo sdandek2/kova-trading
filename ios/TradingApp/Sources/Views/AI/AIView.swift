@@ -33,6 +33,7 @@ struct AIView: View {
                             RecentAIDecisionsCard(
                                 decisions: recentDecisions,
                                 cycleIntervalSeconds: cycleIntervalSeconds,
+                                nextCycleCountdown: vm.countdown,
                                 isExpanded: $decisionsExpanded
                             )
 
@@ -190,6 +191,7 @@ extension Notification.Name {
 struct RecentAIDecisionsCard: View {
     let decisions: [BotActivity]
     let cycleIntervalSeconds: Int
+    let nextCycleCountdown: Int
     @Binding var isExpanded: Bool
 
     private static let isoFormatter: ISO8601DateFormatter = {
@@ -201,6 +203,13 @@ struct RecentAIDecisionsCard: View {
     private func parseDate(_ raw: String?) -> Date? {
         guard let raw else { return nil }
         return Self.isoFormatter.date(from: raw)
+    }
+
+    private var countdownText: String {
+        let mins = nextCycleCountdown / 60
+        let secs = nextCycleCountdown % 60
+        if mins > 0 { return "\(mins)m \(secs)s" }
+        return "\(secs)s"
     }
 
     var body: some View {
@@ -219,16 +228,13 @@ struct RecentAIDecisionsCard: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                // Next cycle countdown from the most recent decision
-                if let latest = decisions.first, let ts = parseDate(latest.timestamp) {
-                    let nextRun = ts.addingTimeInterval(TimeInterval(cycleIntervalSeconds))
-                    if nextRun > Date() {
-                        HStack(spacing: 3) {
-                            Image(systemName: "clock.arrow.circlepath").font(.caption2)
-                            Text("Next in ") + Text(nextRun, style: .relative)
-                        }
-                        .font(.caption2).foregroundStyle(.blue)
+                // Next cycle countdown from backend's next_run_in_seconds
+                if nextCycleCountdown > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock.arrow.circlepath").font(.caption2)
+                        Text("Next in \(countdownText)")
                     }
+                    .font(.caption2).foregroundStyle(.blue)
                 }
                 Button(action: { withAnimation { isExpanded.toggle() } }) {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
