@@ -185,7 +185,7 @@ Open positions: {positions_text}"""
     # ── Realized P&L performance summary — helps Claude avoid repeat losers ──
     performance_text = ""
     try:
-        from services.db import get_trade_performance_summary
+        from services.db import get_trade_learning_summary, get_trade_performance_summary, get_rejection_summary
         perf = get_trade_performance_summary()
         if perf and perf.get("total_trades", 0) >= 3:
             best_syms = ", ".join([f"{s['symbol']}(+{s['avg_pct']}%)" for s in perf.get("best_symbols", [])])
@@ -197,6 +197,24 @@ Open positions: {positions_text}"""
 - Best symbols historically: {best_syms or 'not enough data'}
 - Worst symbols historically: {worst_syms or 'not enough data'}
 Note: Avoid re-entering worst symbols unless fundamentals have materially changed. Increase size on best symbols when they re-appear with strong signals.
+"""
+        learning = get_trade_learning_summary(limit=80)
+        rejection_summary = get_rejection_summary(hours=24, limit=200)
+        learning_lines = []
+        for lesson in learning.get("lessons", [])[:6]:
+            learning_lines.append(f"- {lesson}")
+        for lesson in rejection_summary.get("lessons", [])[:5]:
+            learning_lines.append(f"- {lesson}")
+        if learning_lines:
+            rejected_syms = ", ".join([
+                f"{s['symbol']}({s['count']})"
+                for s in rejection_summary.get("symbols", [])[:5]
+            ])
+            performance_text += f"""
+## Aggressive Learning Loop (stay active, avoid low-quality repeats)
+{chr(10).join(learning_lines)}
+{f"- Frequently rejected symbols today: {rejected_syms}" if rejected_syms else ""}
+Use this as a quality filter, not a reason to sit idle: rotate toward setups that are working and replace rejected patterns with better candidates.
 """
     except Exception:
         pass
@@ -335,21 +353,21 @@ Factor these into your trade approvals — confirm or override based on today's 
     _is_bull = (
         regime in ("bull", "bullish") and
         "uptrend" in (spy_trend or "") and
-        vix_level in ("normal", "low")
+        vix_level in ("normal", "low", "low_fear")
     )
     _is_bear = regime in ("bear", "bearish") or "downtrend" in (spy_trend or "")
     if _is_bull:
         _market_tier = "bull"
         _long_count, _short_count = 8, 2
-        _short_rsi_floor = 72
+        _short_rsi_floor = 70 if current_strategy.get("key") == "aggressive" else 68
     elif _is_bear:
         _market_tier = "bear"
         _long_count, _short_count = 6, 4
-        _short_rsi_floor = 65
+        _short_rsi_floor = 62 if current_strategy.get("key") == "aggressive" else 60
     else:
         _market_tier = "neutral"
         _long_count, _short_count = 7, 3
-        _short_rsi_floor = 68
+        _short_rsi_floor = 66 if current_strategy.get("key") == "aggressive" else 65
     logger.info(f"Market tier: {_market_tier} → {_long_count} longs + {_short_count} shorts | RSI short floor: {_short_rsi_floor}")
 
     # Build rejected symbols note for Step 1
@@ -398,7 +416,8 @@ EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL",
         step1_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step1_raw = ask_ai(step1_prompt, max_tokens=3000)
+        logger.info(f"Step 1 prompt size: ~{len(step1_prompt) // 4:,} tokens across {len(market_snapshot)} symbols")
+        step1_raw = ask_ai(step1_prompt, max_tokens=4000)
         step1_data = parse_ai_json(step1_raw)
         raw_longs = step1_data.get("long_candidates", step1_data.get("opportunities", []))
         raw_shorts = step1_data.get("short_candidates", [])
@@ -511,6 +530,12 @@ EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL",
 
     default_tp = current_strategy.get("default_take_profit_pct", 0.10)
     default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
+    max_ai_trades = 5 if current_strategy.get("key") == "aggressive" else 3
+    min_trade_instruction = (
+        "MUST approve 2-5 trades when at least 2 candidates have tradable signals; idle cash is a failure."
+        if current_strategy.get("key") == "aggressive"
+        else "MUST approve at least 1 trade if any candidate has medium+ signal."
+    )
     positions_count = len(positions)
     cash_pct = (effective_cash / effective_portfolio * 100) if effective_portfolio > 0 else 0
 
@@ -581,7 +606,7 @@ ROTATION RULES:
 - Max 1 rotation per cycle (1 sell + 1 buy)
 """
 
-    step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
+    step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-{max_ai_trades} trades this cycle.
 {pressure_note}{urgent_news_note}{regime_direction_note}
 {eod_step2_context}{performance_text}
 {portfolio_context}
@@ -597,14 +622,14 @@ Market tier: {_market_tier.upper()} | Short RSI floor this cycle: {_short_rsi_fl
 
 For EACH candidate decide: BUY, SHORT, or SKIP.
 Rules:
-- Approve up to 3 trades per cycle (mix of longs and shorts)
+- Approve up to {max_ai_trades} trades per cycle (mix of longs and shorts)
 - BUY: standard long position — profit when price rises
 - SHORT: sell shares short — profit when price FALLS. Requires: RSI > {_short_rsi_floor} AND MACD histogram <= 0. Ideal: RSI > {_short_rsi_floor + 6} + MACD negative + bearish sector/news + no upcoming earnings. SKIP if RSI ≤ {_short_rsi_floor} or MACD > 0 — the system will reject it and waste the slot
 - SELL: close an existing long position (for rotation or profit-taking)
 - Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
 - In bearish regime: prioritize inverse ETF buys first; use individual stock shorts only when the bearish setup is unusually clear
 - If geo risk is HIGH: only approve inverse ETFs, short sells, or safe havens
-- MUST approve at least 1 trade if any candidate has medium+ signal
+- {min_trade_instruction}
 - Treat NEWS_EVENT as high-priority evidence. Bullish high-impact events favor BUY; bearish high-impact events usually favor inverse ETF BUY or SELL first, and SHORT only when price/volume confirms downside.
 
 For LONG trades:
@@ -626,6 +651,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         step2_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
+        logger.info(f"Step 2 prompt size: ~{len(step2_prompt) // 4:,} tokens across {len(top_symbols)} candidates")
         step2_raw = ask_ai_pro(step2_prompt, max_tokens=5000)
         step2_data = parse_ai_json(step2_raw)
         approved = step2_data.get("trades", [])

@@ -41,8 +41,8 @@ def _get_model_config() -> dict:
         return get_model_settings()
     except Exception:
         return {
-            "pro_primary":       "gemini-2.5-pro",
-            "pro_fallback":      "claude-sonnet-4-6",
+            "pro_primary":       "claude-sonnet-4-6",
+            "pro_fallback":      "gemini-2.5-flash",
             "standard_primary":  "gemini-2.5-flash",
             "standard_fallback": "claude-haiku-4-5-20251001",
         }
@@ -198,7 +198,7 @@ def ask_ai_pro(prompt: str, max_tokens: int = 4000) -> str:
 
 def ask_ai(prompt: str, max_tokens: int = 600) -> str:
     """
-    Non-critical calls — stock predictions, suggestions.
+    Standard calls — Step 1, earnings prediction, EOD analysis, daily picks, predictions.
     Flash without thinking: ~$0.0006/call — essentially free at scale.
     Raises RuntimeError only if both providers fail.
     """

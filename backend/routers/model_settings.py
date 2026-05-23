@@ -5,8 +5,8 @@ GET  /api/settings/models  — returns current primary + fallback model for each
 POST /api/settings/models  — updates model selection, persisted to DB
 
 Tiers:
-  pro   — critical calls: trade decisions, EOD, daily picks, earnings direction
-  standard — non-critical calls: stock predictions, suggestions
+  pro   — Step 2 trade decisions only
+  standard — Step 1, earnings prediction, EOD analysis, daily picks, predictions
 """
 
 from fastapi import APIRouter

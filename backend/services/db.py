@@ -696,6 +696,94 @@ def get_trade_performance_summary() -> dict:
         }
 
 
+def get_trade_learning_summary(limit: int = 80) -> dict:
+    """
+    Summarize recent closed-trade outcomes by setup tag and market regime.
+    Setup tags are parsed from reasoning strings like [STRATEGY:long_breakout].
+    """
+    empty = {
+        "total_closed": 0,
+        "best_setups": [],
+        "worst_setups": [],
+        "best_regimes": [],
+        "worst_regimes": [],
+        "lessons": [],
+    }
+    try:
+        import re
+        conn = _get_conn()
+        if not conn:
+            return empty
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, side, realized_pl_pct, strategy,
+                       claude_reasoning, market_regime
+                FROM position_log
+                WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
+                ORDER BY exit_time DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+        if not rows:
+            return empty
+
+        by_setup: dict[str, list[float]] = {}
+        by_regime: dict[str, list[float]] = {}
+        for symbol, side, pl_pct, strategy, reasoning, regime in rows:
+            text = reasoning or ""
+            match = re.search(r"\[STRATEGY:([A-Za-z0-9_\-]+)\]", text)
+            setup = match.group(1) if match else (strategy or f"{side or 'trade'}_unknown")
+            by_setup.setdefault(setup, []).append(float(pl_pct or 0))
+            by_regime.setdefault(regime or "unknown", []).append(float(pl_pct or 0))
+
+        def summarize(grouped: dict[str, list[float]]) -> list[dict]:
+            items = []
+            for key, vals in grouped.items():
+                if len(vals) < 2:
+                    continue
+                wins = sum(1 for v in vals if v > 0)
+                items.append({
+                    "name": key,
+                    "trades": len(vals),
+                    "win_rate_pct": round(wins / len(vals) * 100, 1),
+                    "avg_pl_pct": round(sum(vals) / len(vals), 2),
+                })
+            return items
+
+        setup_stats = summarize(by_setup)
+        regime_stats = summarize(by_regime)
+        best_setups = sorted(setup_stats, key=lambda x: (x["avg_pl_pct"], x["win_rate_pct"]), reverse=True)[:3]
+        worst_setups = sorted(setup_stats, key=lambda x: (x["avg_pl_pct"], x["win_rate_pct"]))[:3]
+        best_regimes = sorted(regime_stats, key=lambda x: x["avg_pl_pct"], reverse=True)[:2]
+        worst_regimes = sorted(regime_stats, key=lambda x: x["avg_pl_pct"])[:2]
+
+        lessons = []
+        for setup in worst_setups:
+            if setup["avg_pl_pct"] < 0:
+                lessons.append(
+                    f"Be more selective with {setup['name']} "
+                    f"({setup['trades']} trades, {setup['win_rate_pct']}% win, avg {setup['avg_pl_pct']}%)."
+                )
+        for setup in best_setups:
+            if setup["avg_pl_pct"] > 0:
+                lessons.append(
+                    f"Favor {setup['name']} when current signals confirm "
+                    f"({setup['trades']} trades, {setup['win_rate_pct']}% win, avg +{setup['avg_pl_pct']})."
+                )
+
+        return {
+            "total_closed": len(rows),
+            "best_setups": best_setups,
+            "worst_setups": worst_setups,
+            "best_regimes": best_regimes,
+            "worst_regimes": worst_regimes,
+            "lessons": lessons[:6],
+        }
+    except Exception as e:
+        logger.warning(f"get_trade_learning_summary failed ({e})")
+        return empty
+
+
 # ── circuit_breaker_log helpers ────────────────────────────────────────────
 
 
@@ -768,6 +856,93 @@ def get_bot_activity_log(limit: int = 50) -> list[dict]:
     except Exception as e:
         logger.warning(f"get_bot_activity_log failed ({e})")
         return []
+
+
+def get_rejection_summary(hours: int = 24, limit: int = 200) -> dict:
+    """Summarize recent rejection patterns so prompts can avoid wasted candidates."""
+    empty = {"total": 0, "categories": [], "symbols": [], "lessons": []}
+    try:
+        conn = _get_conn()
+        if not conn:
+            return empty
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, message
+                FROM bot_activity_log
+                WHERE timestamp >= %s
+                  AND event_type IN ('entry_rejected', 'earnings_block', 'trade_cap', 'circuit_breaker')
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (cutoff, limit))
+            rows = cur.fetchall()
+        if not rows:
+            return empty
+
+        def category(message: str) -> str:
+            msg = (message or "").lower()
+            if "rsi" in msg:
+                return "rsi"
+            if "macd" in msg or "momentum" in msg:
+                return "momentum"
+            if "volume" in msg:
+                return "volume"
+            if "earnings" in msg or "fda" in msg:
+                return "binary_event"
+            if "cash" in msg or "buying power" in msg or "afford" in msg:
+                return "cash"
+            if "cap" in msg or "concentration" in msg or "correlated" in msg:
+                return "risk_cap"
+            if "fomc" in msg or "opening window" in msg:
+                return "timing"
+            if "circuit" in msg:
+                return "circuit_breaker"
+            return "other"
+
+        cat_counts: dict[str, int] = {}
+        sym_counts: dict[str, int] = {}
+        for sym, msg in rows:
+            cat = category(msg)
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            if sym:
+                sym_counts[sym] = sym_counts.get(sym, 0) + 1
+
+        categories = [
+            {"category": key, "count": count}
+            for key, count in sorted(cat_counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+        symbols = [
+            {"symbol": key, "count": count}
+            for key, count in sorted(sym_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+        ]
+        lessons = []
+        for item in categories[:4]:
+            cat = item["category"]
+            count = item["count"]
+            if cat == "rsi":
+                lessons.append(f"{count} recent RSI rejections: avoid overextended entries unless catalyst is exceptional.")
+            elif cat == "momentum":
+                lessons.append(f"{count} recent momentum/MACD rejections: require clearer trend confirmation.")
+            elif cat == "volume":
+                lessons.append(f"{count} recent volume rejections: prioritize higher relative volume names.")
+            elif cat == "binary_event":
+                lessons.append(f"{count} recent earnings/FDA blocks: only take binary-event plays with clear directional evidence.")
+            elif cat == "cash":
+                lessons.append(f"{count} recent cash/buying-power blocks: prefer affordable share counts and rotations.")
+            elif cat == "risk_cap":
+                lessons.append(f"{count} recent cap/correlation blocks: diversify before adding similar exposure.")
+            elif cat == "timing":
+                lessons.append(f"{count} recent timing blocks: avoid new-entry candidates during blocked windows.")
+
+        return {
+            "total": len(rows),
+            "categories": categories,
+            "symbols": symbols,
+            "lessons": lessons,
+        }
+    except Exception as e:
+        logger.warning(f"get_rejection_summary failed ({e})")
+        return empty
 
 
 def cleanup_old_bot_activity(days: int = 30) -> None:

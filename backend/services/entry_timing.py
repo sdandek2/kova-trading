@@ -84,6 +84,7 @@ def should_confirm_entry(
     closing_prices: list[float],
     current_price: float,
     strategy_key: str = "balanced",
+    market_tier: str = "bull",
     positions_count: int = 0,
     relative_volume: float = 1.0,
     macd_histogram: float = None,
@@ -91,12 +92,12 @@ def should_confirm_entry(
     """
     Strategy-aware entry confirmation.
 
-    AGGRESSIVE mode (designed for 5-10 trades/day):
-    - Only blocks on confirmed panic selling (>5% down + volume collapse)
-    - RSI ceiling: 92 for leveraged ETFs (momentum instruments), 85 for all others
+    AGGRESSIVE mode (designed for active trading):
+    - Only blocks on severe confirmed weakness, not ordinary dips
+    - RSI ceiling: 94 for leveraged ETFs (momentum instruments), 90 for all others
     - MA20 extension: ticker-aware (penny=40%, leveraged=18%, broad=12%, stocks=10%)
     - Thin portfolio (<3 positions) lowers bar further, capped at 1.5× normal limit
-    - Volume threshold lowered to 0.4x (was 0.7x) — don't miss momentum on quiet days
+    - Volume threshold lowered to 0.25x — don't miss momentum on quiet days
 
     BALANCED / CONSERVATIVE mode:
     - Down >2% from yesterday → skip
@@ -124,17 +125,22 @@ def should_confirm_entry(
 
     if action == "buy":
         if is_aggressive:
-            if current_price < yesterday_close * 0.95 and not needs_positions:
+            if (
+                current_price < yesterday_close * 0.93
+                and (macd_histogram is not None and macd_histogram < -0.35)
+                and relative_volume < 0.8
+                and not needs_positions
+            ):
                 reason = (
-                    f"{symbol} down >5% from yesterday (${yesterday_close:.2f}→${current_price:.2f}) "
-                    f"— confirmed weakness, skipping"
+                    f"{symbol} down >7% from yesterday with weak MACD and volume "
+                    f"(${yesterday_close:.2f}→${current_price:.2f}) — severe weakness, skipping"
                 )
                 _record_rejection(symbol)
                 return False, reason
 
             # Leveraged ETFs are momentum instruments — high RSI IS the signal.
-            # Only block at extreme levels. Regular stocks capped at 85.
-            rsi_ceiling = 92 if symbol in _LEVERAGED_ETFS else 85
+            # Only block at extreme levels.
+            rsi_ceiling = 94 if symbol in _LEVERAGED_ETFS else 90
             if rsi > rsi_ceiling:
                 reason = f"{symbol} RSI {rsi:.1f} — above {rsi_ceiling} ceiling, too extended even for aggressive"
                 _record_rejection(symbol)
@@ -167,7 +173,7 @@ def should_confirm_entry(
                         _record_rejection(symbol)
                         return False, reason
 
-            if relative_volume < 0.4 and not needs_positions:
+            if relative_volume < 0.25 and not needs_positions:
                 reason = (
                     f"{symbol} relative volume {relative_volume:.1f}x — too thin even for aggressive"
                 )
@@ -178,8 +184,8 @@ def should_confirm_entry(
             # Also skip this check for leveraged ETFs (momentum instruments often diverge).
             # Exception: if MACD is improving (turning less negative), that IS the buy signal
             # — don't block a recovery play just because histogram is still slightly negative.
-            if (macd_histogram is not None and macd_histogram < -0.25
-                    and rsi >= 45 and not needs_positions
+            if (macd_histogram is not None and macd_histogram < -0.45
+                    and rsi >= 50 and not needs_positions
                     and symbol not in _LEVERAGED_ETFS):
                 reason = (
                     f"{symbol} MACD histogram {macd_histogram:.3f} — momentum strongly negative, waiting for recovery"
@@ -226,28 +232,31 @@ def should_confirm_entry(
 
     elif action == "short":
         # Short requires genuine overbought conditions — not just any RSI.
-        # RSI floor is tiered by market regime (passed via strategy_key suffix):
+        # RSI floor is tiered by market regime:
         #   bull  → 72/68 (aggressive/balanced) — high bar, shorting into uptrend is risky
         #   neutral → 68/65
         #   bear  → 65/60 — more short setups available, lower bar acceptable
-        rsi_floor = 72 if is_aggressive else 68  # bull default
-        if "neutral" in (strategy_key or ""):
-            rsi_floor = 68 if is_aggressive else 65
-        elif "bear" in (strategy_key or ""):
-            rsi_floor = 65 if is_aggressive else 60
+        tier = (market_tier or "bull").lower()
+        rsi_floor = 70 if is_aggressive else 68  # bull default
+        if tier == "neutral":
+            rsi_floor = 66 if is_aggressive else 65
+        elif tier == "bear":
+            rsi_floor = 62 if is_aggressive else 60
         if rsi < rsi_floor:
             return False, (
                 f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), not overbought enough to short"
             )
-        if current_price < yesterday_close * 0.95:
-            return False, f"{symbol} already down >5% today — late short entry, skipping"
+        late_short_floor = 0.90 if is_aggressive and tier == "bear" else 0.93 if is_aggressive else 0.95
+        if current_price < yesterday_close * late_short_floor:
+            return False, f"{symbol} already down >{(1-late_short_floor)*100:.0f}% today — late short entry, skipping"
         # MACD must be turning negative — don't short into still-positive momentum.
         from services.indicators import compute_macd as _cm
         _macd_s = _cm(closing_prices)
         _hist_s = _macd_s.get("histogram", 0) or 0
-        if _hist_s > 0.0:
+        hist_ceiling = 0.08 if is_aggressive and tier == "bear" else 0.03 if is_aggressive else 0.0
+        if _hist_s > hist_ceiling:
             return False, (
-                f"{symbol} MACD histogram {_hist_s:.3f} — momentum still positive, too early to short"
+                f"{symbol} MACD histogram {_hist_s:.3f} — momentum still too positive for short"
             )
         return True, f"{symbol} short confirmed: RSI={rsi:.1f}, MACD hist={_hist_s:.3f}"
 

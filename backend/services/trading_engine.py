@@ -29,9 +29,9 @@ _RISK_DEFAULTS = {
     "daily_loss_limit_pct": 6.0,   # aggressive: tolerate up to 6% daily loss before halting buys
     "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
-    "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
-    "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM ET
-    "max_trades_per_cycle": 5,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
+    "min_daily_trades": 5,          # aggressive floor: push for active trading days
+    "afternoon_pressure_hour": 12,  # pressure kicks in at noon ET
+    "max_trades_per_cycle": 6,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
     "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
     "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
@@ -58,10 +58,24 @@ def add_to_reserve(amount: float) -> float:
 def _load_risk_settings() -> dict:
     """Load risk settings from persistent cache, falling back to defaults."""
     from services.db import cache_get
+
+    def _as_int(value, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     cached = cache_get(_RISK_CACHE_KEY)
     if isinstance(cached, dict):
         # Merge with defaults so new keys are always present
-        return {**_RISK_DEFAULTS, **cached}
+        settings = {**_RISK_DEFAULTS, **cached}
+        # Defaults are aggressive, but explicit UI/API settings should remain
+        # user-controlled when you intentionally dial the bot up or down.
+        settings["min_daily_trades"] = max(_as_int(settings.get("min_daily_trades"), 5), 1)
+        settings["max_trades_per_cycle"] = max(_as_int(settings.get("max_trades_per_cycle"), 6), 1)
+        settings["afternoon_pressure_hour"] = min(max(_as_int(settings.get("afternoon_pressure_hour"), 12), 9), 15)
+        settings["cycle_interval_seconds"] = max(_as_int(settings.get("cycle_interval_seconds"), 600), 60)
+        return settings
     return _RISK_DEFAULTS.copy()
 
 
@@ -81,6 +95,126 @@ _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
 _wake_event: Optional[asyncio.Event] = None
 _urgent_news_context: list[dict] = []
+
+
+def _derive_market_tier(macro: dict) -> str:
+    """Return the same bull/neutral/bear tier used in the AI prompts."""
+    regime = (macro or {}).get("market_regime", "")
+    spy_trend = (macro or {}).get("spy_trend", "")
+    vix_level = (macro or {}).get("vix_level", "normal")
+    is_bull = (
+        regime in ("bull", "bullish") and
+        "uptrend" in (spy_trend or "") and
+        vix_level in ("normal", "low", "low_fear")
+    )
+    is_bear = regime in ("bear", "bearish") or "downtrend" in (spy_trend or "")
+    if is_bull:
+        return "bull"
+    if is_bear:
+        return "bear"
+    return "neutral"
+
+
+def _rank_step1_universe(
+    snapshot: dict,
+    positions: list,
+    sentiment: dict,
+    prebreakout_candidates: list,
+    eod_watchlist_symbols: list,
+    urgent_news_context: Optional[list],
+    earnings_plays: list,
+    market_tier: str = "neutral",
+    max_symbols: int = 150,
+) -> list[str]:
+    """
+    Reduce prompt noise without becoming a narrow whitelist.
+    Mandatory catalyst/position symbols are always included, then the highest
+    momentum, volume, news, and reversal names fill the remaining slots.
+    """
+    if len(snapshot) <= max_symbols:
+        return list(snapshot.keys())
+
+    available = set(snapshot.keys())
+    must_include: set[str] = set()
+    must_include.update(p.symbol for p in positions if getattr(p, "symbol", None))
+    must_include.update(s for s in (eod_watchlist_symbols or []) if isinstance(s, str))
+    must_include.update(p.get("symbol") for p in (prebreakout_candidates or []) if isinstance(p, dict) and p.get("symbol"))
+    must_include.update(p.get("symbol") for p in (earnings_plays or []) if isinstance(p, dict) and p.get("symbol"))
+    must_include.update(sym for sym, count in (sentiment or {}).items() if count > 0)
+    for item in urgent_news_context or []:
+        must_include.update(sym for sym in item.get("symbols", []) if isinstance(sym, str))
+
+    must_include = {sym.upper() for sym in must_include if sym and sym.upper() in available}
+    prebreakout_syms = {p.get("symbol") for p in (prebreakout_candidates or []) if isinstance(p, dict)}
+    earnings_syms = {p.get("symbol") for p in (earnings_plays or []) if isinstance(p, dict)}
+
+    def score_symbol(sym: str) -> float:
+        data = snapshot.get(sym, {})
+        five_day = data.get("five_day_change_pct")
+        rel_vol = data.get("relative_volume", 1.0) or 1.0
+        price = data.get("current_price") or 0
+        score = 0.0
+        if isinstance(five_day, (int, float)):
+            score += min(abs(five_day), 35) * 2.0
+            if five_day > 0:
+                score += min(five_day, 20) * 0.5
+        score += min(max(rel_vol - 1.0, 0), 5) * 12.0
+        score += min((sentiment or {}).get(sym, 0), 5) * 15.0
+        if sym in must_include:
+            score += 1000.0
+        if sym in prebreakout_syms:
+            score += 80.0
+        if sym in earnings_syms:
+            score += 40.0
+        if 0 < price < 5:
+            score += 6.0
+        return score
+
+    selected: list[str] = []
+
+    def add_many(symbols: list[str], limit: int) -> None:
+        for sym in symbols:
+            if len(selected) >= max_symbols or limit <= 0:
+                return
+            if sym in snapshot and sym not in selected:
+                selected.append(sym)
+                limit -= 1
+
+    ranked = sorted(snapshot.keys(), key=score_symbol, reverse=True)
+    add_many([sym for sym in ranked if sym in must_include], len(must_include))
+
+    def five_day(sym: str) -> float:
+        value = snapshot.get(sym, {}).get("five_day_change_pct")
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    def rel_vol(sym: str) -> float:
+        value = snapshot.get(sym, {}).get("relative_volume", 1.0)
+        return float(value) if isinstance(value, (int, float)) else 1.0
+
+    gainers = sorted(snapshot.keys(), key=five_day, reverse=True)
+    losers = sorted(snapshot.keys(), key=five_day)
+    volume = sorted(snapshot.keys(), key=rel_vol, reverse=True)
+    news = sorted((sentiment or {}).keys(), key=lambda sym: (sentiment or {}).get(sym, 0), reverse=True)
+    prebreakouts = [sym for sym in prebreakout_syms if sym in snapshot]
+    earnings = [sym for sym in earnings_syms if sym in snapshot]
+
+    add_many(news, 30)
+    add_many(prebreakouts, 20)
+    add_many(earnings, 15)
+    add_many(volume, 35)
+    if market_tier == "bear":
+        add_many(losers, 45)
+        add_many(gainers, 25)
+    elif market_tier == "bull":
+        add_many(gainers, 45)
+        add_many(losers, 25)
+    else:
+        add_many(gainers, 35)
+        add_many(losers, 35)
+    add_many(ranked, max_symbols)
+    return selected[:max_symbols]
+
+
 def _load_watermarks() -> dict:
     """Restore long-position high watermarks from persistent cache after a server restart."""
     cached = cache_get("position_watermarks")
@@ -261,17 +395,18 @@ async def run_trading_cycle():
 
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
     # Snapshot urgent news BEFORE clearing the global — the copy is passed to
-    # analyze_and_decide() later in this cycle. Clearing first (old bug) meant
-    # the context was always empty by the time Claude saw it.
+    # analyze_and_decide() later in this cycle. Keep the global intact if the
+    # market is closed so the next open cycle still receives the urgent context.
     _cycle_urgent_news = _urgent_news_context[:] if _urgent_news_context else None
     if _cycle_urgent_news:
         logger.info(f"Urgent news context for cycle: {_cycle_urgent_news[-3:]}")
-        _urgent_news_context = []
 
     try:
         if not alpaca_service.is_market_open():
             logger.info("Market is closed. Skipping cycle.")
             return
+        if _cycle_urgent_news:
+            _urgent_news_context = []
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
@@ -331,10 +466,10 @@ async def run_trading_cycle():
         # how many universe candidates score higher.
         sentiment = {}  # initialized here so pre-breakout scan can use it; recomputed after news fetch
         _prebreakout_candidates = []
+        _eod_watchlist_syms = []
         try:
             from services.breakout_scanner import scan_prebreakout_candidates
             from services.eod_analysis_service import get_latest_eod_report as _get_eod
-            _eod_watchlist_syms = []
             try:
                 _eod = _get_eod()
                 if _eod and isinstance(_eod, dict):
@@ -398,6 +533,8 @@ async def run_trading_cycle():
             logger.warning(f"get_macro_context failed (using neutral defaults): {_gather_results[0]}")
         if isinstance(_gather_results[1], Exception):
             logger.warning(f"get_sector_rotation failed (using empty): {_gather_results[1]}")
+        market_tier = _derive_market_tier(macro)
+        logger.info(f"Execution market tier: {market_tier}")
 
         # Sector momentum scores — used to boost/reduce conviction per symbol
         from services.sector_momentum import get_sector_momentum_scores, get_sector_context_for_symbols
@@ -442,6 +579,46 @@ async def run_trading_cycle():
                 logger.info(f"Earnings play candidates: {[p['symbol'] for p in earnings_plays]}")
         except Exception as e:
             logger.warning(f"Earnings plays failed (non-fatal): {e}")
+
+        step1_cap = 150
+        if _cycle_urgent_news or len(news_articles) >= 20:
+            step1_cap = 180
+        elif macro.get("market_regime") == "volatile":
+            step1_cap = 130
+        elif len(news_articles) < 5:
+            step1_cap = 120
+        if market_tier == "bear":
+            step1_cap = max(step1_cap, 160)
+
+        step1_symbols = _rank_step1_universe(
+            snapshot=snapshot_light,
+            positions=positions,
+            sentiment=sentiment,
+            prebreakout_candidates=_prebreakout_candidates,
+            eod_watchlist_symbols=_eod_watchlist_syms,
+            urgent_news_context=_cycle_urgent_news,
+            earnings_plays=earnings_plays,
+            market_tier=market_tier,
+            max_symbols=step1_cap,
+        )
+        snapshot_step1 = {sym: snapshot_light[sym] for sym in step1_symbols if sym in snapshot_light}
+        filtered_symbol_set = set(snapshot_step1.keys())
+        sentiment_step1 = {sym: count for sym, count in sentiment.items() if sym in filtered_symbol_set}
+        earnings_map_step1 = {sym: timing for sym, timing in earnings_map.items() if sym in filtered_symbol_set}
+        news_headlines_step1 = [
+            f"[{art.get('source', '')}] [{', '.join(art.get('symbols', [])[:3])}] {art['headline']}"
+            for art in news_articles
+            if art.get("headline") and (filtered_symbol_set & set(art.get("symbols") or []))
+        ][:15] or news_headlines[:10]
+        logger.info(
+            f"Step 1 universe filtered: {len(snapshot_light)} → {len(snapshot_step1)} symbols "
+            f"(cap={step1_cap}, tier={market_tier}, must-have/news/prebreakout preserved)"
+        )
+
+        try:
+            sector_context = get_sector_context_for_symbols(step1_symbols[:150], sector_scores)
+        except Exception as e:
+            logger.warning(f"get_sector_context_for_symbols failed for filtered universe (non-fatal): {e}")
 
         geo = await loop.run_in_executor(None, get_geopolitical_context)
         trend_forecast = get_trend_forecast(macro, geo)
@@ -1166,7 +1343,8 @@ async def run_trading_cycle():
 
         # Per-cycle counter for new opens (buy/short). Sells, covers, and trailing stops never count.
         _cycle_open_count = 0
-        _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 3))
+        _max_trades_this_cycle = int(_risk_settings.get("max_trades_per_cycle", 6))
+        logger.info(f"Trade cap this cycle: {_max_trades_this_cycle}")
         # Symbols approved as earnings plays this cycle — added to _earnings_day_positions
         # only AFTER the order is submitted (avoids polluting the set with blocked trades)
         _earnings_play_pending: set = set()
@@ -1182,17 +1360,17 @@ async def run_trading_cycle():
             None,
             functools.partial(
                 claude_service.analyze_and_decide,
-                market_snapshot=snapshot_light,
+                market_snapshot=snapshot_step1,
                 positions=positions,
                 account_cash=_tradeable_cash,
                 portfolio_value=account.portfolio_value,
-                sentiment=sentiment,
+                sentiment=sentiment_step1,
                 macro=macro,
                 sector_info=sector_info,
-                earnings_map=earnings_map,
+                earnings_map=earnings_map_step1,
                 geo_context=geo,
                 trend_forecast=trend_forecast,
-                news_headlines=news_headlines,
+                news_headlines=news_headlines_step1,
                 full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
                 sector_context=sector_context,
                 recent_trades=recent_trades,
@@ -1480,25 +1658,6 @@ async def run_trading_cycle():
                                          symbol=decision.symbol, cycle_id=_current_cycle_id)
                         # Fall through to normal order execution below
 
-            # ── Cycle trade cap: limit new opens per cycle (sells/covers never blocked) ──
-            # Slot is consumed HERE (before submission) so failed orders still use a slot
-            # and don't allow infinite retries within the same cycle.
-            if decision.action in ("buy", "short"):
-                if _cycle_open_count >= _max_trades_this_cycle:
-                    logger.info(
-                        f"Cycle cap ({_max_trades_this_cycle}) reached — skipping "
-                        f"{decision.action.upper()} {decision.symbol}"
-                    )
-                    log_bot_activity(
-                        "trade_cap",
-                        f"Max {_max_trades_this_cycle} new opens/cycle reached — skipping "
-                        f"{decision.action.upper()} {decision.symbol}",
-                        symbol=decision.symbol, cycle_id=_current_cycle_id,
-                    )
-                    continue
-                # Reserve the slot now — even if the order later fails, the slot is spent
-                _cycle_open_count += 1
-
             # ── Entry confirmation (strategy-aware) ──
             deep = await loop.run_in_executor(
                 None, functools.partial(alpaca_service.get_market_snapshot, [decision.symbol])
@@ -1522,6 +1681,7 @@ async def run_trading_cycle():
                 closing_prices=closing_prices,
                 current_price=current_price,
                 strategy_key=strategy_key,
+                market_tier=market_tier,
                 positions_count=len(positions),
                 relative_volume=_rel_vol,
                 macd_histogram=_macd_hist,
@@ -1537,6 +1697,24 @@ async def run_trading_cycle():
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }})
                 continue  # Try next decision, don't abort the whole cycle
+
+            # ── Cycle trade cap: limit confirmed new opens per cycle ─────────
+            # Entry rejections should not burn a slot; confirmed attempts still
+            # consume one even if Alpaca later rejects the order.
+            if decision.action in ("buy", "short"):
+                if _cycle_open_count >= _max_trades_this_cycle:
+                    logger.info(
+                        f"Cycle cap ({_max_trades_this_cycle}) reached — skipping "
+                        f"{decision.action.upper()} {decision.symbol}"
+                    )
+                    log_bot_activity(
+                        "trade_cap",
+                        f"Max {_max_trades_this_cycle} confirmed new opens/cycle reached — skipping "
+                        f"{decision.action.upper()} {decision.symbol}",
+                        symbol=decision.symbol, cycle_id=_current_cycle_id,
+                    )
+                    continue
+                _cycle_open_count += 1
 
             if decision.action in ("buy", "short") and decision.symbol not in _earnings_play_pending:
                 # Volatility-adjusted sizing
@@ -2081,7 +2259,11 @@ async def _trading_loop():
         if _wake_event is None:
             await asyncio.sleep(sleep_seconds)
         else:
-            _wake_event.clear()
+            # Clear stale wake flags before sleeping. Urgent context is stored
+            # separately, so this avoids closed-market spin while preserving the
+            # news for the next open cycle.
+            if _wake_event.is_set():
+                _wake_event.clear()
             try:
                 await asyncio.wait_for(_wake_event.wait(), timeout=sleep_seconds)
                 logger.info("Trading loop woke early for high-impact news.")
