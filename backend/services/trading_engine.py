@@ -260,8 +260,12 @@ async def run_trading_cycle():
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
-    if _urgent_news_context:
-        logger.info(f"Urgent news context for cycle: {_urgent_news_context[-3:]}")
+    # Snapshot urgent news BEFORE clearing the global — the copy is passed to
+    # analyze_and_decide() later in this cycle. Clearing first (old bug) meant
+    # the context was always empty by the time Claude saw it.
+    _cycle_urgent_news = _urgent_news_context[:] if _urgent_news_context else None
+    if _cycle_urgent_news:
+        logger.info(f"Urgent news context for cycle: {_cycle_urgent_news[-3:]}")
         _urgent_news_context = []
 
     try:
@@ -1196,7 +1200,7 @@ async def run_trading_cycle():
                 afternoon_pressure=afternoon_pressure,
                 rejected_symbols=_cooldown_syms,
                 prebreakout_candidates=_prebreakout_candidates,
-                urgent_news_context=_urgent_news_context[:] if _urgent_news_context else None,
+                urgent_news_context=_cycle_urgent_news,
             )
         )
 

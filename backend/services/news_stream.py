@@ -152,11 +152,20 @@ def _should_trigger(article: dict[str, Any]) -> bool:
     if _last_global_trigger_at and (now - _last_global_trigger_at).total_seconds() < 120:
         return False
 
+    # Check all symbols first — only write timestamps if ALL pass.
+    # Writing per-symbol timestamps before completing the loop caused phantom
+    # cooldowns: if symbol N was in cooldown and suppressed the trigger, earlier
+    # symbols had already been marked as "triggered" even though no cycle fired.
+    event_key_suffix = ','.join(article.get('event_types') or [])
+    keys_to_stamp = []
     for symbol in symbols[:5]:
-        key = f"{symbol}:{','.join(article.get('event_types') or [])}"
+        key = f"{symbol}:{event_key_suffix}"
         last = _last_trigger_at.get(key)
         if last and (now - last).total_seconds() < 15 * 60:
             return False
+        keys_to_stamp.append(key)
+
+    for key in keys_to_stamp:
         _last_trigger_at[key] = now
     _last_global_trigger_at = now
     return True
