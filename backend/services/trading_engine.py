@@ -79,6 +79,8 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
+_wake_event: Optional[asyncio.Event] = None
+_urgent_news_context: list[dict] = []
 def _load_watermarks() -> dict:
     """Restore long-position high watermarks from persistent cache after a server restart."""
     cached = cache_get("position_watermarks")
@@ -173,6 +175,24 @@ def get_latest_analysis() -> Optional[AIAnalysis]:
     return None
 
 
+def request_urgent_cycle(symbols: list[str], reason: str) -> None:
+    """
+    Wake the normal trading loop early after high-impact news.
+    The next cycle still uses the standard risk checks and order guards.
+    """
+    global _wake_event, _urgent_news_context
+    clean_symbols = [s for s in symbols if isinstance(s, str)][:10]
+    _urgent_news_context.append({
+        "symbols": clean_symbols,
+        "reason": reason[:500],
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _urgent_news_context = _urgent_news_context[-10:]
+    if _wake_event is not None:
+        _wake_event.set()
+    logger.info(f"Urgent trading cycle requested: {reason}")
+
+
 async def run_premarket_scan():
     """
     Runs at 9:00-9:30 AM EST before market open.
@@ -235,11 +255,14 @@ async def run_premarket_scan():
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
-           _ai_sold_symbols, _earnings_day_positions
+           _ai_sold_symbols, _earnings_day_positions, _urgent_news_context
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
+    if _urgent_news_context:
+        logger.info(f"Urgent news context for cycle: {_urgent_news_context[-3:]}")
+        _urgent_news_context = []
 
     try:
         if not alpaca_service.is_market_open():
@@ -563,7 +586,7 @@ async def run_trading_cycle():
         ]
         _corr_cap = 3 if strategy_key == "aggressive" else 1
 
-        def _corr_group(sym: str) -> set | None:
+        def _corr_group(sym: str) -> Optional[set]:
             for g in _CORR_GROUPS:
                 if sym in g:
                     return g
@@ -1173,6 +1196,7 @@ async def run_trading_cycle():
                 afternoon_pressure=afternoon_pressure,
                 rejected_symbols=_cooldown_syms,
                 prebreakout_candidates=_prebreakout_candidates,
+                urgent_news_context=_urgent_news_context[:] if _urgent_news_context else None,
             )
         )
 
@@ -1510,7 +1534,7 @@ async def run_trading_cycle():
                 }})
                 continue  # Try next decision, don't abort the whole cycle
 
-            if decision.action == "buy" and decision.symbol not in _earnings_play_pending:
+            if decision.action in ("buy", "short") and decision.symbol not in _earnings_play_pending:
                 # Volatility-adjusted sizing
                 # Skip for earnings plays — their quantity was already capped at 2-5%
                 # of portfolio; running vol-adjust here would silently override that cap.
@@ -1539,13 +1563,19 @@ async def run_trading_cycle():
                         )
                     else:
                         effective_max_pct = strat["max_position_pct"]
+                    if decision.action == "short":
+                        # Shorts can squeeze hard; keep the aggressive cap, but risk less per trade
+                        # than longs unless the strategy explicitly sets a lower value.
+                        effective_max_pct = min(effective_max_pct, strat["max_position_pct"] * 0.50)
 
                     vol_qty = volatility_adjusted_quantity(
                         portfolio_value=account.portfolio_value,
                         max_position_pct=effective_max_pct,
                         current_price=price,
                         atr=atr,
-                        risk_per_trade_pct=strat.get("risk_per_trade_pct", 0.01),
+                        risk_per_trade_pct=(
+                            strat.get("risk_per_trade_pct", 0.01) * (0.50 if decision.action == "short" else 1.0)
+                        ),
                     )
                     if vol_qty != decision.quantity:
                         logger.info(f"Vol-adjust: {decision.symbol} {decision.quantity}→{vol_qty} shares (ATR={atr:.2f})")
@@ -1578,38 +1608,53 @@ async def run_trading_cycle():
                     try:
                         _sym_sector = (sector_context or {}).get(decision.symbol, {}).get("sector")
                         _sec_score = (sector_scores or {}).get(_sym_sector, 0.0) if _sym_sector else 0.0
-                        if _sec_score > 2.0:
+                        if decision.action == "buy" and _sec_score > 2.0:
                             _pre_sec = vol_qty
                             vol_qty = max(1, int(vol_qty * 1.20))
                             logger.info(
                                 f"Sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
                                 f"{decision.symbol} {_pre_sec}→{vol_qty} shares (+20%)"
                             )
-                        elif _sec_score < -1.0:
+                        elif decision.action == "buy" and _sec_score < -1.0:
                             _pre_sec = vol_qty
                             vol_qty = max(1, int(vol_qty * 0.80))
                             logger.info(
                                 f"Sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
                                 f"{decision.symbol} {_pre_sec}→{vol_qty} shares (-20%)"
                             )
+                        elif decision.action == "short" and _sec_score < -1.0:
+                            _pre_sec = vol_qty
+                            vol_qty = max(1, int(vol_qty * 1.15))
+                            logger.info(
+                                f"Short sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
+                                f"{decision.symbol} {_pre_sec}→{vol_qty} shares (+15%)"
+                            )
+                        elif decision.action == "short" and _sec_score > 2.0:
+                            _pre_sec = vol_qty
+                            vol_qty = max(1, int(vol_qty * 0.70))
+                            logger.info(
+                                f"Short sector tilt ({_sym_sector} score={_sec_score:+.1f}%): "
+                                f"{decision.symbol} {_pre_sec}→{vol_qty} shares (-30%)"
+                            )
                     except Exception:
                         pass
 
                     decision.quantity = vol_qty
 
-                # Scale-in (strategy-aware — aggressive takes full position)
-                existing_pos = next((p for p in positions if p.symbol == decision.symbol), None)
-                existing_qty = float(existing_pos.qty) if existing_pos else 0
-                scaled_qty = get_scale_in_quantity(
-                    base_quantity=decision.quantity,
-                    confidence="high",
-                    existing_position_qty=existing_qty,
-                    max_total_qty=decision.quantity,
-                    strategy_key=strategy_key,
-                )
-                if scaled_qty != decision.quantity:
-                    logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
-                decision.quantity = scaled_qty
+                if decision.action == "buy":
+                    # Scale-in (strategy-aware — aggressive takes full position)
+                    existing_pos = next((p for p in positions if p.symbol == decision.symbol), None)
+                    existing_qty = float(existing_pos.qty) if existing_pos else 0
+                    scaled_qty = get_scale_in_quantity(
+                        base_quantity=decision.quantity,
+                        confidence="high",
+                        existing_position_qty=existing_qty,
+                        max_total_qty=decision.quantity,
+                        strategy_key=strategy_key,
+                    )
+                    if scaled_qty != decision.quantity:
+                        logger.info(f"Scale-in: {decision.symbol} buying {scaled_qty}/{decision.quantity} planned")
+                    decision.quantity = scaled_qty
 
             # ── Macro event position size reduction ───────────────────────────
             # FOMC day (0.5×) or CPI/Jobs day (0.7×) — shrink all new opens.
@@ -2029,15 +2074,29 @@ async def _trading_loop():
             logger.info("Market closed — checking again in 15 minutes")
 
         _next_run_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_seconds)
-        await asyncio.sleep(sleep_seconds)
+        if _wake_event is None:
+            await asyncio.sleep(sleep_seconds)
+        else:
+            _wake_event.clear()
+            try:
+                await asyncio.wait_for(_wake_event.wait(), timeout=sleep_seconds)
+                logger.info("Trading loop woke early for high-impact news.")
+            except asyncio.TimeoutError:
+                pass
 
 
 def start():
-    global _is_running, _task
+    global _is_running, _task, _wake_event
     if _is_running:
         return
     _is_running = True
+    _wake_event = asyncio.Event()
     _task = asyncio.create_task(_trading_loop())
+    try:
+        from services import news_stream
+        news_stream.start()
+    except Exception as e:
+        logger.warning(f"Could not start news stream: {e}")
     logger.info("Trading engine started.")
 
 
@@ -2047,4 +2106,9 @@ def stop():
     if _task:
         _task.cancel()
         _task = None
+    try:
+        from services import news_stream
+        news_stream.stop()
+    except Exception as e:
+        logger.warning(f"Could not stop news stream: {e}")
     logger.info("Trading engine stopped.")

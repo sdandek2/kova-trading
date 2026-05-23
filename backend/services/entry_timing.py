@@ -226,20 +226,26 @@ def should_confirm_entry(
 
     elif action == "short":
         # Short requires genuine overbought conditions — not just any RSI.
-        # RSI 65 minimum for aggressive (stock must be overbought before we short).
-        # RSI 45 was too low — shorting a stock already pulling back risks a bounce.
-        rsi_floor = 65 if is_aggressive else 55
+        # RSI floor is tiered by market regime (passed via strategy_key suffix):
+        #   bull  → 72/68 (aggressive/balanced) — high bar, shorting into uptrend is risky
+        #   neutral → 68/65
+        #   bear  → 65/60 — more short setups available, lower bar acceptable
+        rsi_floor = 72 if is_aggressive else 68  # bull default
+        if "neutral" in (strategy_key or ""):
+            rsi_floor = 68 if is_aggressive else 65
+        elif "bear" in (strategy_key or ""):
+            rsi_floor = 65 if is_aggressive else 60
         if rsi < rsi_floor:
             return False, (
                 f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), not overbought enough to short"
             )
         if current_price < yesterday_close * 0.95:
             return False, f"{symbol} already down >5% today — late short entry, skipping"
-        # MACD must be turning negative — don't short into still-positive momentum
+        # MACD must be turning negative — don't short into still-positive momentum.
         from services.indicators import compute_macd as _cm
         _macd_s = _cm(closing_prices)
         _hist_s = _macd_s.get("histogram", 0) or 0
-        if _hist_s > 0.05:
+        if _hist_s > 0.0:
             return False, (
                 f"{symbol} MACD histogram {_hist_s:.3f} — momentum still positive, too early to short"
             )

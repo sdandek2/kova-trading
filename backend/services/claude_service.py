@@ -70,7 +70,7 @@ Return ONLY valid JSON, no markdown. direction must be one of: bullish, bearish,
 Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=300)
+        raw = ask_ai(prompt, max_tokens=300)
         result = parse_ai_json(raw)
         direction = result.get("direction", "uncertain")
         confidence = result.get("confidence", "low")
@@ -103,6 +103,7 @@ def analyze_and_decide(
     afternoon_pressure: bool = False,  # True if < 2 trades by 2 PM — lower bar
     rejected_symbols: list = None,     # symbols in rejection cooldown — Claude must not nominate these
     prebreakout_candidates: list = None,  # pre-breakout setups from breakout_scanner — prioritise these
+    urgent_news_context: list = None,  # high-impact news that woke this cycle early
 ) -> list:
     # ── Load prompt override (injected into both steps below) ───────────────
     _prompt_override = ""
@@ -321,9 +322,35 @@ Factor these into your trade approvals — confirm or override based on today's 
     # Claude decides individually per stock based on its own signals (RSI, MACD, sector momentum).
     # SPY trend is provided as context but does NOT force a long/short direction.
     regime = (macro or {}).get("market_regime", "")
+    spy_trend = (macro or {}).get("spy_trend", "")
+    vix_level = (macro or {}).get("vix_level", "normal")
     is_bearish_day = False  # no longer used to block longs
     regime_direction_note = ""
     bearish_etf_note = ""
+
+    # ── 3-tier regime: determines long/short pool sizes and RSI short floor ──
+    # Bull:    SPY strong_uptrend + VIX normal + macro bull  → 8 longs + 2 shorts, RSI 72+
+    # Neutral: SPY sideways or VIX elevated or macro neutral → 7 longs + 3 shorts, RSI 68+
+    # Bear:    SPY downtrend or macro bear                   → 6 longs + 4 shorts, RSI 65+
+    _is_bull = (
+        regime in ("bull", "bullish") and
+        "uptrend" in (spy_trend or "") and
+        vix_level in ("normal", "low")
+    )
+    _is_bear = regime in ("bear", "bearish") or "downtrend" in (spy_trend or "")
+    if _is_bull:
+        _market_tier = "bull"
+        _long_count, _short_count = 8, 2
+        _short_rsi_floor = 72
+    elif _is_bear:
+        _market_tier = "bear"
+        _long_count, _short_count = 6, 4
+        _short_rsi_floor = 65
+    else:
+        _market_tier = "neutral"
+        _long_count, _short_count = 7, 3
+        _short_rsi_floor = 68
+    logger.info(f"Market tier: {_market_tier} → {_long_count} longs + {_short_count} shorts | RSI short floor: {_short_rsi_floor}")
 
     # Build rejected symbols note for Step 1
     rejected_note = ""
@@ -354,25 +381,39 @@ Factor these into your trade approvals — confirm or override based on today's 
 - [SECTOR:signal:pct%]: sector momentum — BULLISH sector supports longs, BEARISH sector supports shorts
 - [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
-Scan the stocks above. Identify the TOP 7 best opportunities based on technicals and macro context.
-- BULLISH regime: favor longs and leveraged ETFs
-- BEARISH regime: favor inverse ETFs and short candidates (RSI > 72 + bearish sector)
-- NEUTRAL: balanced mix
-- short_candidate: ONLY nominate when RSI > 65 AND MACD histogram < 0.5. RSI below 65 = not overbought, skip it. MACD above 0.5 = momentum too strong, skip it.
+Scan the stocks above. Identify separate candidate pools based on technicals and macro context.
+Current market tier: {_market_tier.upper()} → nominate TOP {_long_count} long candidates + TOP {_short_count} short candidates (total 10).
+- BULL tier: favor longs and leveraged ETFs — short slots are scarce, only the most obvious overextensions qualify
+- NEUTRAL tier: balanced mix — shorts need clear overbought signals
+- BEAR tier: favor inverse ETFs and short candidates — more short setups available
+- long_candidates: TOP {_long_count} long/inverse ETF opportunities
+- short_candidates: TOP {_short_count} individual short-sale opportunities only
+- short_candidate: ONLY nominate when RSI > {_short_rsi_floor} AND MACD histogram <= 0 or clearly falling. RSI below {_short_rsi_floor} = not overbought enough for this market tier, skip it. Positive/rising MACD = momentum too strong, skip it.
 Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
 
-Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown.
-EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "signal": "momentum"}}, {{"symbol": "SQQQ", "signal": "inverse_etf"}}]}}"""
+Return ONLY a JSON object with TWO keys: "long_candidates" and "short_candidates". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown. Long candidates should be the primary pool; only include shorts when the setup is clearly asymmetric.
+EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL", "signal": "momentum"}}, {{"symbol": "SQQQ", "signal": "inverse_etf"}}], "short_candidates": [{{"symbol": "XYZ", "signal": "short_candidate"}}]}}"""
 
     if _prompt_override:
         step1_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step1_raw = ask_ai_pro(step1_prompt, max_tokens=3000)
+        step1_raw = ask_ai(step1_prompt, max_tokens=3000)
         step1_data = parse_ai_json(step1_raw)
-        raw_opps = step1_data.get("opportunities", [])
+        raw_longs = step1_data.get("long_candidates", step1_data.get("opportunities", []))
+        raw_shorts = step1_data.get("short_candidates", [])
         # Validate: only keep entries that have a string symbol — drop malformed entries
-        opportunities = [o for o in raw_opps if isinstance(o, dict) and isinstance(o.get("symbol"), str) and o["symbol"]]
+        raw_opps = list(raw_longs or []) + list(raw_shorts or [])
+        opportunities = []
+        seen_symbols = set()
+        for o in raw_opps:
+            if not isinstance(o, dict) or not isinstance(o.get("symbol"), str) or not o["symbol"]:
+                continue
+            sym = o["symbol"].upper()
+            if sym in seen_symbols:
+                continue
+            seen_symbols.add(sym)
+            opportunities.append({**o, "symbol": sym})
         logger.info(f"Step 1 — Top opportunities: {[o['symbol'] for o in opportunities]}")
     except Exception as e:
         logger.error(f"Step 1 failed: {e}. Raw response: {step1_raw[:300] if 'step1_raw' in locals() else 'none'}")
@@ -384,7 +425,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
                               reasoning="Market scan complete — no clear entry signals this cycle. All candidates in neutral territory or insufficient catalyst. Holding.")]
 
     # ── Step 2: Deep dive — evaluate ALL candidates, approve up to 3 trades ──
-    top_symbols = [o["symbol"] for o in opportunities[:7]]
+    top_symbols = [o["symbol"] for o in opportunities[:12]]
 
     # Fetch full historical data for all candidates
     deep_data = {}
@@ -411,7 +452,16 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
         logger.warning(f"Intraday bars failed (non-fatal): {e}")
 
     candidate_detail = []
-    for opp in opportunities[:7]:
+    realtime_news_by_symbol = {}
+    try:
+        from services.news_stream import get_cached_news
+        for article in get_cached_news(limit=100, max_age_minutes=180):
+            for news_sym in article.get("symbols") or []:
+                realtime_news_by_symbol.setdefault(news_sym, []).append(article)
+    except Exception:
+        pass
+
+    for opp in opportunities[:12]:
         sym = opp["symbol"]
         data = deep_data.get(sym) or market_snapshot.get(sym, {})
         closing_prices = data.get("closing_prices", [])
@@ -445,6 +495,16 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
             f"{rsi_tag}, MACD={macd_hist}, MA20=${ma20}, "
             f"{vol_tag}, news={news_count}"
         )
+        symbol_events = realtime_news_by_symbol.get(sym, [])[:2]
+        if symbol_events:
+            event_bits = []
+            for article in symbol_events:
+                types = ",".join(article.get("event_types") or ["news"])
+                sentiment_label = article.get("event_sentiment", "neutral")
+                impact = article.get("event_impact", "normal")
+                headline = (article.get("headline") or "")[:110]
+                event_bits.append(f"{sentiment_label}/{impact}/{types}: {headline}")
+            line += f", NEWS_EVENT={' | '.join(event_bits)}"
         if intraday_summary.get(sym):
             line += f", {intraday_summary[sym]}"
         candidate_detail.append(line)
@@ -455,6 +515,20 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
     cash_pct = (effective_cash / effective_portfolio * 100) if effective_portfolio > 0 else 0
 
     pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
+
+    # ── Urgent news context — injected when a high-impact headline woke this cycle early ──
+    urgent_news_note = ""
+    if urgent_news_context:
+        news_lines = []
+        for n in urgent_news_context[-3:]:
+            symbols_str = ", ".join(n.get("symbols", [])[:5]) or "general market"
+            reason = n.get("reason", "")[:200]
+            news_lines.append(f"  • [{symbols_str}] {reason}")
+        urgent_news_note = f"""
+⚡ URGENT NEWS TRIGGER — This cycle was woken early by high-impact news. Prioritize the affected symbols.
+{chr(10).join(news_lines)}
+Treat these events as high-priority evidence. Evaluate the affected symbols first — if the setup confirms the news direction, approve the trade with higher confidence.
+"""
 
     # ── Rotation context: assess each held position for momentum strength ──
     # SHORT positions are excluded — they cannot be closed via SELL action,
@@ -508,7 +582,7 @@ ROTATION RULES:
 """
 
     step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-3 trades this cycle.
-{pressure_note}{regime_direction_note}
+{pressure_note}{urgent_news_note}{regime_direction_note}
 {eod_step2_context}{performance_text}
 {portfolio_context}
 Cash available: ${effective_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
@@ -519,17 +593,19 @@ Cash available: ${effective_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open pos
 {chr(10).join(candidate_detail)}
 
 Strategy: {current_strategy['name']} — {current_strategy['prompt_modifier']}
+Market tier: {_market_tier.upper()} | Short RSI floor this cycle: {_short_rsi_floor}
 
 For EACH candidate decide: BUY, SHORT, or SKIP.
 Rules:
 - Approve up to 3 trades per cycle (mix of longs and shorts)
 - BUY: standard long position — profit when price rises
-- SHORT: sell shares short — profit when price FALLS. Requires: RSI > 65 AND MACD histogram < 0.5. Ideal: RSI > 72 + MACD negative + bearish sector + no upcoming earnings. SKIP if RSI ≤ 65 or MACD ≥ 0.5 — the system will reject it and waste the slot
+- SHORT: sell shares short — profit when price FALLS. Requires: RSI > {_short_rsi_floor} AND MACD histogram <= 0. Ideal: RSI > {_short_rsi_floor + 6} + MACD negative + bearish sector/news + no upcoming earnings. SKIP if RSI ≤ {_short_rsi_floor} or MACD > 0 — the system will reject it and waste the slot
 - SELL: close an existing long position (for rotation or profit-taking)
 - Inverse ETFs (SQQQ/SPXU/SOXS/SDOW/TZA/UVXY): always use BUY action — they already profit from market falls
-- In bearish regime: prioritize inverse ETF buys + individual stock shorts
+- In bearish regime: prioritize inverse ETF buys first; use individual stock shorts only when the bearish setup is unusually clear
 - If geo risk is HIGH: only approve inverse ETFs, short sells, or safe havens
 - MUST approve at least 1 trade if any candidate has medium+ signal
+- Treat NEWS_EVENT as high-priority evidence. Bullish high-impact events favor BUY; bearish high-impact events usually favor inverse ETF BUY or SELL first, and SHORT only when price/volume confirms downside.
 
 For LONG trades:
 - take_profit_pct: realistic upside. Leveraged ETF (TQQQ/SOXL/SPXL)=0.30-0.80 on bull days, strong catalyst=0.20-0.40, normal stock=0.10-0.30. Let winners run — don't cap early.
@@ -588,6 +664,33 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         action = trade.get("action", "hold")
         confidence = trade.get("confidence", "medium")
         qty_suggestion = trade.get("quantity_suggestion")
+
+        def _strategy_tag(symbol: str, action_value: str, raw_signal: str) -> str:
+            signal = (raw_signal or "").lower()
+            data = deep_data.get(symbol) or market_snapshot.get(symbol, {})
+            symbol_detail = next((line for line in candidate_detail if line.startswith(f"{symbol} ")), "")
+            rsi_val = "N/A"
+            try:
+                ind = compute_all(data.get("closing_prices", [])) if data.get("closing_prices") else {}
+                rsi_val = ind.get("rsi", "N/A")
+            except Exception:
+                pass
+
+            if action_value == "short":
+                return "short_news" if "NEWS_EVENT=bearish" in symbol_detail else "short_overbought"
+            if action_value == "sell":
+                return "rotation_sell"
+            if signal == "inverse_etf" or symbol in {"SQQQ", "SPXU", "SOXS", "SDOW", "TZA", "UVXY"}:
+                return "inverse_etf"
+            if "NEWS_EVENT=bullish" in symbol_detail:
+                return "long_news"
+            if signal == "breakout":
+                return "long_breakout"
+            if signal == "reversal" or (isinstance(rsi_val, (int, float)) and rsi_val < 35):
+                return "long_reversal"
+            return "long_momentum"
+
+        signal_for_trade = next((o.get("signal", "") for o in opportunities if o.get("symbol") == sym), "")
 
         # Sanitize pct fields — Claude occasionally returns "15%" (string with %) or null.
         # A raw float("15%") raises ValueError which would crash the entire loop and
@@ -705,7 +808,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             continue
 
         reasoning = (
-            f"[{confidence.upper()}] {analysis} "
+            f"[{confidence.upper()}][STRATEGY:{_strategy_tag(sym, action, signal_for_trade)}] {analysis} "
             f"TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}%"
             f"{' | partial exit' if partial_exit else ''}."
         )

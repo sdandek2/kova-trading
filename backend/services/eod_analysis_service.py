@@ -9,6 +9,7 @@ The report is served by the /api/eod router and displayed in the iOS app.
 import json
 import logging
 from datetime import datetime, timezone, date
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ def run_eod_analysis() -> dict:
     Main entry point. Queries today's activity, sends to Claude for analysis,
     saves the structured report to cache, and returns it.
     """
-    from services.ai_client import ask_ai_pro
+    from services.ai_client import ask_ai
     from services.db import cache_set, cache_get
     from services.strategy import get_strategy
 
@@ -247,7 +248,7 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
 }}"""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=6000)
+        raw = ask_ai(prompt, max_tokens=6000)
         from services.ai_client import parse_ai_json
         try:
             parsed = parse_ai_json(raw)
@@ -292,7 +293,7 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
     return report
 
 
-def get_latest_eod_report() -> dict | None:
+def get_latest_eod_report() -> Optional[dict]:
     """Return the most recent saved EOD report, or None if not yet generated."""
     from services.db import cache_get
     return cache_get(EOD_CACHE_KEY)

@@ -743,6 +743,23 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
 
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KovaBot/1.0; +https://kova.app)"}
     target_symbols = symbols or ["AAPL", "MSFT", "GOOGL", "TSLA", "SPY", "NVDA"]
+    target_symbol_set = set(target_symbols)
+
+    all_articles: list[dict] = []
+
+    # Start with cached real-time WebSocket news so breaking headlines survive
+    # until the next trading cycle and don't depend on a fresh REST poll.
+    try:
+        from services.news_stream import get_cached_news
+        cached_news = get_cached_news(limit=80, max_age_minutes=240)
+        if symbols:
+            cached_news = [
+                article for article in cached_news
+                if target_symbol_set & set(article.get("symbols") or [])
+            ]
+        all_articles.extend(cached_news)
+    except Exception as e:
+        logger.debug(f"Cached news unavailable (non-fatal): {e}")
 
     # Financial keyword filter — whole-word matching only to avoid substring false positives
     # e.g. "market" must not match "marketing", "trade" must not match "STARTRADER"
@@ -783,7 +800,7 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def _parse_date(raw: str) -> str | None:
+    def _parse_date(raw: str) -> Optional[str]:
         """Parse any date string → clean ISO 8601 UTC string iOS can decode, or None."""
         if not raw:
             return None
@@ -927,7 +944,6 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
 
     # ── Fetch all in parallel ─────────────────────────────────────────────────
 
-    all_articles: list[dict] = []
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {
             pool.submit(fetch, url, source, fmt, hints): source

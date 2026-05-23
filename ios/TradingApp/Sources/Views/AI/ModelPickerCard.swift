@@ -16,8 +16,8 @@ struct ModelPickerCard: View {
     @State private var errorMessage: String? = nil
 
     // Selections — shown immediately with defaults, updated from API on load
-    @State private var criticalPrimary:   String = "gemini-2.5-pro"
-    @State private var criticalSecondary: String = "claude-sonnet-4-6"
+    @State private var criticalPrimary:   String = "claude-sonnet-4-6"
+    @State private var criticalSecondary: String = "gemini-2.5-flash"
     @State private var standardPrimary:   String = "gemini-2.5-flash"
     @State private var standardSecondary: String = "claude-haiku-4-5-20251001"
 
@@ -53,13 +53,13 @@ struct ModelPickerCard: View {
             // ── Critical tier ────────────────────────────────────────────
             tierSection(
                 label: "Critical",
-                subtitle: "Trade decisions · EOD · Daily picks · Earnings",
+                subtitle: "Step 2 trade decisions only",
                 primaryOptions: allModels,
                 secondaryOptions: allModels,
                 primary: $criticalPrimary,
                 secondary: $criticalSecondary,
-                recommendedPrimary: "gemini-2.5-pro",
-                recommendedSecondary: "claude-sonnet-4-6",
+                recommendedPrimary: "claude-sonnet-4-6",
+                recommendedSecondary: "gemini-2.5-flash",
                 color: .red
             )
 
@@ -68,7 +68,7 @@ struct ModelPickerCard: View {
             // ── Non-Critical tier ────────────────────────────────────────
             tierSection(
                 label: "Non-Critical",
-                subtitle: "Stock predictions · Suggestions",
+                subtitle: "Step 1 scan · Earnings · EOD · Daily picks · Predictions",
                 primaryOptions: allModels,
                 secondaryOptions: allModels,
                 primary: $standardPrimary,

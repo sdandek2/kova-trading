@@ -2,18 +2,17 @@
 ai_client.py — unified AI wrapper for Kova.
 
 Two tiers:
-  ask_ai_pro()  — critical calls (trade decisions, EOD, daily picks, earnings direction)
-                  Primary: Gemini 2.5 Pro (no thinking)  |  Fallback: Claude Sonnet 4.6
-                  ~$0.019/call vs Sonnet's $0.032 — 40% cheaper, same quality.
+  ask_ai_pro()  — Step 2 trade decisions ONLY
+                  Primary: Claude Sonnet 4.6  |  Fallback: Gemini 2.5 Flash
+                  Highest quality reserved exclusively for final buy/short/sell decisions.
 
-  ask_ai()      — non-critical calls (stock predictions, suggestions)
+  ask_ai()      — Everything else: Step 1, earnings, EOD, daily picks, predictions
                   Primary: Gemini 2.5 Flash (no thinking)  |  Fallback: Claude Haiku 4.5
-                  ~$0.0006/call — essentially free.
+                  ~$0.0006/call — fast and essentially free.
 
-Thinking is disabled for all models:
+Thinking is disabled for Gemini Flash:
   - Flash: thinking tokens ($3.50/1M) are 11× more expensive than output ($0.30/1M)
-  - Pro: thinking adds cost but no meaningful benefit for structured JSON responses
-  JSON mime type forces clean output, json-repair handles any remaining issues.
+  Claude models handle JSON natively; json-repair handles any remaining issues.
 
 Both functions return a plain string so callers don't care which model ran.
 """
@@ -165,15 +164,13 @@ def parse_ai_json(raw: str) -> dict:
     raise ValueError(f"Could not parse AI JSON even after repair. raw[:200]: {raw[:200]}")
 
 
-# ── Tier 1: Critical calls ─────────────────────────────────────────────────
-# Gemini 2.5 Pro (no thinking, no grounding) | Fallback: Claude Sonnet 4.6
-# Used for: Step 1, Step 2, daily picks, EOD analysis, earnings direction.
+# ── Tier 1: Step 2 trade decisions ONLY ───────────────────────────────────
+# Primary: Claude Sonnet 4.6 | Fallback: Gemini 2.5 Flash
 
 def ask_ai_pro(prompt: str, max_tokens: int = 4000) -> str:
     """
-    Critical calls — trade decisions, EOD analysis, daily picks, earnings direction.
-    Grounding disabled (saves $0.035/call). Thinking already off (thinkingBudget=0).
-    Raises RuntimeError only if both providers fail.
+    Step 2 trade decisions only — Sonnet for highest quality buy/short/sell calls.
+    Flash fallback if Sonnet unavailable. Raises RuntimeError only if both fail.
     """
     config = _get_model_config()
     primary  = config["pro_primary"]

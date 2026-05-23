@@ -10,7 +10,7 @@ from services.indicators import compute_all
 from services.macro import get_macro_context, get_sector_rotation
 from services.geopolitical import get_geopolitical_context, get_trend_forecast
 
-from services.ai_client import ask_ai_pro, parse_ai_json
+from services.ai_client import ask_ai, parse_ai_json
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,7 @@ Respond ONLY in valid JSON — no markdown, no explanation:
 
 Total picks: 8-10 across all three categories. Allocate based on today's market conditions — maximize profit potential, not category balance. Be specific, actionable, and conviction-driven."""
 
-        raw = ask_ai_pro(prompt, max_tokens=3500)
+        raw = ask_ai(prompt, max_tokens=3500)
         data = parse_ai_json(raw)
 
         result["short_term"] = data.get("short_term", [])

@@ -35,8 +35,10 @@ STANDARD_FALLBACK_OPTIONS = ALL_MODELS
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "pro_primary":        "gemini-2.5-pro",
-    "pro_fallback":       "claude-sonnet-4-6",
+    # Pro tier: Step 2 trade decisions only — highest quality model
+    "pro_primary":        "claude-sonnet-4-6",
+    "pro_fallback":       "gemini-2.5-flash",
+    # Standard tier: Step 1 nomination, earnings prediction, suggestions — fast + cheap
     "standard_primary":   "gemini-2.5-flash",
     "standard_fallback":  "claude-haiku-4-5-20251001",
 }
