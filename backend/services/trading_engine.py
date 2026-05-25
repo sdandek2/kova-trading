@@ -312,10 +312,19 @@ def get_latest_analysis() -> Optional[AIAnalysis]:
 def request_urgent_cycle(symbols: list[str], reason: str) -> None:
     """
     Wake the normal trading loop early after high-impact news.
+    Only queues urgent context during market hours — if the market is closed,
+    the article is already saved to the news cache and Claude will see it in
+    Step 2 via realtime_news_by_symbol when the market reopens. No need to
+    flag it as urgent since we can't trade on it right now anyway.
     The next cycle still uses the standard risk checks and order guards.
     """
     global _wake_event, _urgent_news_context
     clean_symbols = [s for s in symbols if isinstance(s, str)][:10]
+
+    if not alpaca_service.is_market_open():
+        logger.info(f"Urgent news received outside market hours — saved to cache only (not queued as urgent): {reason[:120]}")
+        return
+
     _urgent_news_context.append({
         "symbols": clean_symbols,
         "reason": reason[:500],
@@ -394,9 +403,7 @@ async def run_trading_cycle():
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
-    # Snapshot urgent news BEFORE clearing the global — the copy is passed to
-    # analyze_and_decide() later in this cycle. Keep the global intact if the
-    # market is closed so the next open cycle still receives the urgent context.
+
     _cycle_urgent_news = _urgent_news_context[:] if _urgent_news_context else None
     if _cycle_urgent_news:
         logger.info(f"Urgent news context for cycle: {_cycle_urgent_news[-3:]}")
