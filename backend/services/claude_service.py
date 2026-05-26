@@ -679,6 +679,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
     decisions = []
     remaining_cash = effective_cash
     sectors_bought = []
+    sold_this_cycle: set = set()  # guard: prevent re-buying a symbol sold in the same cycle
 
     # Sort sells first so rotation proceeds are added to remaining_cash
     # before any subsequent buy checks affordability — regardless of Claude's output order
@@ -739,6 +740,11 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         analysis = trade.get("analysis", "")
 
         if not sym or action not in ("buy", "short", "sell"):
+            continue
+
+        # Guard: skip re-buy of a symbol sold in the same cycle (prevents TQQQ sell→rebuy waste)
+        if action == "buy" and sym in sold_this_cycle:
+            logger.info(f"Skipping BUY {sym} — already sold this cycle (rotation guard)")
             continue
 
         # Confidence gate
@@ -829,6 +835,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             # when the bot rotates (sell + buy) within the same cycle.
             buffered_proceeds = proceeds * 0.80
             remaining_cash += buffered_proceeds
+            sold_this_cycle.add(sym)  # prevent re-buying this symbol later in the same cycle
             logger.info(f"Rotation sell: {sym} x{final_qty} @ ${price:.2f} → +${proceeds:,.0f} gross / +${buffered_proceeds:,.0f} usable (80% buffer) → remaining cash ${remaining_cash:,.0f}")
         else:
             continue

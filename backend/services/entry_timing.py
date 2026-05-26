@@ -243,11 +243,13 @@ def should_confirm_entry(
         elif tier == "bear":
             rsi_floor = 62 if is_aggressive else 60
         if rsi < rsi_floor:
+            _record_rejection(symbol)
             return False, (
                 f"{symbol} RSI {rsi:.1f} — below short floor ({rsi_floor}), not overbought enough to short"
             )
         late_short_floor = 0.90 if is_aggressive and tier == "bear" else 0.93 if is_aggressive else 0.95
         if current_price < yesterday_close * late_short_floor:
+            _record_rejection(symbol)
             return False, f"{symbol} already down >{(1-late_short_floor)*100:.0f}% today — late short entry, skipping"
         # MACD must be turning negative — don't short into still-positive momentum.
         from services.indicators import compute_macd as _cm
@@ -255,6 +257,9 @@ def should_confirm_entry(
         _hist_s = _macd_s.get("histogram", 0) or 0
         hist_ceiling = 0.08 if is_aggressive and tier == "bear" else 0.03 if is_aggressive else 0.0
         if _hist_s > hist_ceiling:
+            # Note: intentionally NOT recording rejection here — MACD can flip between
+            # cycles so we don't want to cool down a symbol that may become a valid
+            # short within the next 1-2 cycles.
             return False, (
                 f"{symbol} MACD histogram {_hist_s:.3f} — momentum still too positive for short"
             )

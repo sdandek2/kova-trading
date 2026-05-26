@@ -1360,6 +1360,27 @@ async def run_trading_cycle():
 
         # Pass cooldown symbols so Claude stops nominating already-rejected stocks
         _cooldown_syms = get_cooldown_symbols()
+
+        # Also exclude symbols already at concentration cap — no point nominating
+        # SOXL/ACHR etc. in Step 1 if the position can't grow anyway.
+        # Handles both regular stocks (max_position_pct) and penny stocks (<$5, max_penny_position_pct).
+        try:
+            _port_val = float(account.portfolio_value)
+            _std_cap_dollars  = _port_val * strat["max_position_pct"]
+            _penny_cap_dollars = _port_val * (_risk_settings.get("max_penny_position_pct", 3.0) / 100.0)
+            _capped_syms = []
+            for _cp in positions:
+                _cp_price = float(_cp.current_price)
+                _cp_val   = abs(float(_cp.market_value))
+                _cap_limit = _penny_cap_dollars if _cp_price < 5.0 else _std_cap_dollars
+                if _cp_val >= _cap_limit * 0.95:
+                    _capped_syms.append(_cp.symbol)
+            if _capped_syms:
+                logger.info(f"Concentration-capped symbols (excluded from Step 1): {_capped_syms}")
+            _cooldown_syms = list(set(_cooldown_syms + _capped_syms))
+        except Exception as _cap_exc:
+            logger.debug(f"Cap-symbol exclusion skipped (non-fatal): {_cap_exc}")
+
         if _cooldown_syms:
             logger.info(f"Rejection cooldown symbols (excluded from Step 1): {_cooldown_syms}")
 
