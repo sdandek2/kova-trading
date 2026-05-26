@@ -370,6 +370,46 @@ Factor these into your trade approvals — confirm or override based on today's 
         _short_rsi_floor = 66 if current_strategy.get("key") == "aggressive" else 65
     logger.info(f"Market tier: {_market_tier} → {_long_count} longs + {_short_count} shorts | RSI short floor: {_short_rsi_floor}")
 
+    # ── Top News Catalysts block ────────────────────────────────────────────
+    # Pull top symbols by mention count from the sentiment dict and enrich
+    # with event types from the real-time news stream cache so the AI sees
+    # explicit catalyst labels (analyst_upgrade, mna, etc.) rather than just
+    # a buried [NEWS:N] tag in the market universe table.
+    top_news_block = ""
+    try:
+        _top_news_syms = sorted(
+            [(sym, cnt) for sym, cnt in (sentiment or {}).items() if cnt > 0],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:8]
+        if _top_news_syms:
+            # Enrich with event types from cached real-time news stream
+            _cached_events: dict[str, list[str]] = {}
+            try:
+                from services.news_stream import get_cached_news as _gcn
+                for _art in _gcn(limit=150, max_age_minutes=240):
+                    for _s in (_art.get("symbols") or []):
+                        if _s not in _cached_events:
+                            _cached_events[_s] = []
+                        _cached_events[_s].extend(_art.get("event_types") or [])
+            except Exception:
+                pass
+
+            _catalyst_lines = []
+            for _sym, _cnt in _top_news_syms:
+                _evts = list(dict.fromkeys(_cached_events.get(_sym, [])))  # deduplicate, preserve order
+                _evt_str = f" [{', '.join(_evts[:3])}]" if _evts else ""
+                _catalyst_lines.append(f"  • {_sym}: {_cnt} mentions{_evt_str}")
+
+            top_news_block = f"""
+## 🔥 Top News Catalysts RIGHT NOW (MUST evaluate these first)
+These symbols have the highest news activity this cycle — they may have analyst upgrades, partnerships, earnings, or major announcements driving them. Check each one's technicals and include the strongest setups in your candidate pool:
+{chr(10).join(_catalyst_lines)}
+Do NOT skip these without explicitly considering their signals. A stock with high news volume + confirming technicals (RSI not overbought, MACD positive) is a high-priority candidate.
+"""
+    except Exception:
+        pass
+
     # Build rejected symbols note for Step 1
     rejected_note = ""
     if rejected_symbols:
@@ -384,7 +424,7 @@ Factor these into your trade approvals — confirm or override based on today's 
     step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
-{regime_direction_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
+{regime_direction_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}{top_news_block}
 ## Market Universe ({len(snapshot_lines)} stocks)
 {snapshot_text}
 
@@ -808,8 +848,104 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
 
             cost = price * final_qty
             if action == "buy" and final_qty < 1:
-                logger.info(f"Skipping {sym} — insufficient cash (have ${remaining_cash:.0f}, price ${price:.2f})")
-                continue
+                # ── Auto-rotation: sell weakest long to fund this trade ────────
+                # Don't rely on Claude to explicitly output a rotation sell —
+                # if cash is insufficient for an approved trade, find the lowest
+                # P&L long position and sell it automatically.
+                _rotation_done = False
+                _long_positions = [
+                    p for p in positions
+                    if getattr(p, "side", "long") == "long"
+                    and p.symbol not in sold_this_cycle
+                    and p.symbol != sym
+                ]
+                if _long_positions:
+                    # ── Score each position's momentum to find the best rotation candidate ──
+                    # Uses the same signals as the rotation context sent to Claude in Step 2:
+                    # P&L %, RSI, and MACD histogram. Lower score = better to sell.
+                    #
+                    # Tier 0 — WEAK:     losing money OR overbought+falling → sell first
+                    # Tier 1 — FLAT:     barely moving, MACD near zero → sell if new trade is high/medium confidence
+                    # Tier 2 — MODERATE: small gain, mixed signals → only sell for high confidence new trades
+                    # Tier 3 — STRONG:   profitable + positive MACD → never auto-rotate
+                    #
+                    # Confidence gate: don't disrupt a MODERATE position for a medium/low
+                    # confidence new trade. Only rotate STRONG positions for nothing.
+                    def _momentum_score(p) -> tuple:
+                        _d = deep_data.get(p.symbol) or market_snapshot.get(p.symbol, {})
+                        _ind = compute_all(_d.get("closing_prices", [])) if _d.get("closing_prices") else {}
+                        _rsi = _ind.get("rsi", 50) or 50
+                        _macd = (_ind.get("macd") or {}).get("histogram", 0) or 0
+                        _pl = p.unrealized_pl_percent
+                        if _pl > 5 and _macd > 0:
+                            tier = 3  # STRONG — do not rotate
+                        elif _pl < -2 or (_rsi > 70 and _macd < 0):
+                            tier = 0  # WEAK — rotate first
+                        elif _pl < 1 and abs(_macd) < 0.05:
+                            tier = 1  # FLAT — rotate if confidence allows
+                        else:
+                            tier = 2  # MODERATE — only for high confidence
+                        # Secondary sort: within same tier, lowest P&L exits first
+                        return (tier, _pl)
+
+                    # Filter by what the incoming confidence level allows us to touch
+                    _max_tier = {"high": 2, "medium": 1, "low": -1}.get(confidence, 1)
+                    _candidates = [p for p in _long_positions if _momentum_score(p)[0] <= _max_tier]
+
+                    _weakest = min(_candidates, key=_momentum_score) if _candidates else None
+
+                    if _weakest:
+                        _w_tier, _w_pl = _momentum_score(_weakest)
+                        _tier_labels = {0: "WEAK", 1: "FLAT", 2: "MODERATE", 3: "STRONG"}
+                        _sell_price = (
+                            (deep_data.get(_weakest.symbol) or market_snapshot.get(_weakest.symbol, {})).get("current_price")
+                            or _weakest.current_price
+                        )
+                        _sell_qty = max(1, round(float(_weakest.qty)))
+                        _proceeds = _sell_price * _sell_qty * 0.80  # 80% buffer (same as Claude-initiated rotations)
+                        _new_cash = remaining_cash + _proceeds
+
+                        if int(_new_cash / price) >= 1:
+                            # Rotation makes the trade affordable — execute the sell
+                            remaining_cash = _new_cash
+                            sold_this_cycle.add(_weakest.symbol)
+                            _sell_reasoning = (
+                                f"[AUTO-ROTATION] {_tier_labels[_w_tier]} position sold to fund {confidence.upper()} "
+                                f"confidence {sym}. {_weakest.symbol} momentum: {_tier_labels[_w_tier]} "
+                                f"(P&L {_w_pl:+.1f}%) | Freed: ${_proceeds:,.0f}"
+                            )
+                            decisions.append(TradeDecision(
+                                action="sell",
+                                symbol=_weakest.symbol,
+                                quantity=_sell_qty,
+                                reasoning=_sell_reasoning,
+                            ))
+                            logger.info(
+                                f"Auto-rotation: {_weakest.symbol} [{_tier_labels[_w_tier]}, "
+                                f"P&L {_w_pl:+.1f}%] → selling x{_sell_qty} "
+                                f"→ +${_proceeds:,.0f} usable → funding {confidence} {sym} @ ${price:.2f}"
+                            )
+                            # Recalculate qty with new cash
+                            max_shares_by_cash = int(remaining_cash / price)
+                            max_shares = min(max_shares_by_strategy, max_shares_by_cash)
+                            if qty_suggestion:
+                                final_qty = min(int(qty_suggestion), max_shares)
+                            else:
+                                is_aggressive = current_strategy.get("key") == "aggressive"
+                                size_pct = 1.0 if confidence == "high" else (0.75 if is_aggressive else 0.5)
+                                final_qty = max(1, int(max_shares * size_pct))
+                            remaining_cash -= price * final_qty
+                            _rotation_done = True
+                    else:
+                        logger.info(
+                            f"Auto-rotation skipped for {sym} — no position weak enough "
+                            f"to sell for {confidence} confidence trade "
+                            f"(all held positions are STRONG or MODERATE)"
+                        )
+
+                if not _rotation_done:
+                    logger.info(f"Skipping {sym} — insufficient cash (have ${remaining_cash:.0f}, price ${price:.2f}) and no rotation candidate available")
+                    continue
             if action == "buy":
                 remaining_cash -= cost
             # Shorts don't consume cash directly (margin), but we still need buying power
