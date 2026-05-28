@@ -844,7 +844,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
                 final_qty = min(int(qty_suggestion), max_shares)
             else:
                 size_pct = 1.0 if confidence == "high" else (0.75 if is_aggressive else 0.5)
-                final_qty = max(1, int(max_shares * size_pct))
+                final_qty = max(1, int(max_shares * size_pct)) if max_shares > 0 else 0
 
             cost = price * final_qty
             if action == "buy" and final_qty < 1:
@@ -933,7 +933,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
                             else:
                                 is_aggressive = current_strategy.get("key") == "aggressive"
                                 size_pct = 1.0 if confidence == "high" else (0.75 if is_aggressive else 0.5)
-                                final_qty = max(1, int(max_shares * size_pct))
+                                final_qty = max(1, int(max_shares * size_pct)) if max_shares > 0 else 0
                             remaining_cash -= price * final_qty
                             _rotation_done = True
                     else:

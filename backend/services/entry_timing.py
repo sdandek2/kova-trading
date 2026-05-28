@@ -127,7 +127,7 @@ def should_confirm_entry(
         if is_aggressive:
             if (
                 current_price < yesterday_close * 0.93
-                and (macd_histogram is not None and macd_histogram < -0.35)
+                and (macd_histogram is not None and current_price > 0 and (macd_histogram / current_price) * 100 < -0.35)
                 and relative_volume < 0.8
                 and not needs_positions
             ):
@@ -184,11 +184,11 @@ def should_confirm_entry(
             # Also skip this check for leveraged ETFs (momentum instruments often diverge).
             # Exception: if MACD is improving (turning less negative), that IS the buy signal
             # — don't block a recovery play just because histogram is still slightly negative.
-            if (macd_histogram is not None and macd_histogram < -0.45
+            if (macd_histogram is not None and current_price > 0 and (macd_histogram / current_price) * 100 < -0.45
                     and rsi >= 50 and not needs_positions
                     and symbol not in _LEVERAGED_ETFS):
                 reason = (
-                    f"{symbol} MACD histogram {macd_histogram:.3f} — momentum strongly negative, waiting for recovery"
+                    f"{symbol} MACD histogram {macd_histogram:.3f} ({(macd_histogram/current_price)*100:.2f}%) — momentum strongly negative, waiting for recovery"
                 )
                 _record_rejection(symbol)
                 return False, reason
@@ -255,15 +255,16 @@ def should_confirm_entry(
         from services.indicators import compute_macd as _cm
         _macd_s = _cm(closing_prices)
         _hist_s = _macd_s.get("histogram", 0) or 0
+        _hist_pct_s = (_hist_s / current_price * 100) if current_price and current_price > 0 else 0
         hist_ceiling = 0.08 if is_aggressive and tier == "bear" else 0.03 if is_aggressive else 0.0
-        if _hist_s > hist_ceiling:
+        if _hist_pct_s > hist_ceiling:
             # Note: intentionally NOT recording rejection here — MACD can flip between
             # cycles so we don't want to cool down a symbol that may become a valid
             # short within the next 1-2 cycles.
             return False, (
-                f"{symbol} MACD histogram {_hist_s:.3f} — momentum still too positive for short"
+                f"{symbol} MACD histogram {_hist_s:.3f} ({_hist_pct_s:.2f}%) — momentum still too positive for short ({(hist_ceiling):.2f}% cap)"
             )
-        return True, f"{symbol} short confirmed: RSI={rsi:.1f}, MACD hist={_hist_s:.3f}"
+        return True, f"{symbol} short confirmed: RSI={rsi:.1f}, MACD hist={_hist_s:.3f} ({_hist_pct_s:.2f}%)"
 
     return True, "No confirmation needed for hold"
 

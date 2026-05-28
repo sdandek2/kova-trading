@@ -1095,10 +1095,11 @@ async def run_trading_cycle():
                 pnl = position.unrealized_pl_percent
                 # Threshold -0.3: requires a clear, sustained negative histogram —
                 # not just intraday noise. A brief dip to -0.05 or -0.1 is normal
-                # consolidation; -0.3+ is genuine momentum reversal.
-                if macd_hist < -0.3 and 1.0 <= pnl <= 15.0:
+                # consolidation; -0.3% is genuine momentum reversal.
+                _hist_pct = (macd_hist / position.current_price * 100) if position.current_price and position.current_price > 0 else 0
+                if _hist_pct < -0.3 and 1.0 <= pnl <= 15.0:
                     decay_reason = (
-                        f"{position.symbol} momentum decaying: MACD hist {macd_hist:.3f} "
+                        f"{position.symbol} momentum decaying: MACD hist {macd_hist:.3f} ({_hist_pct:.2f}%) "
                         f"while up {pnl:.1f}% — exiting before reversal"
                     )
                     logger.info(f"MOMENTUM_DECAY: {decay_reason}")
