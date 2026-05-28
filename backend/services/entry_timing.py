@@ -256,7 +256,7 @@ def should_confirm_entry(
         _macd_s = _cm(closing_prices)
         _hist_s = _macd_s.get("histogram", 0) or 0
         _hist_pct_s = (_hist_s / current_price * 100) if current_price and current_price > 0 else 0
-        hist_ceiling = 0.08 if is_aggressive and tier == "bear" else 0.03 if is_aggressive else 0.0
+        hist_ceiling = 0.50 if is_aggressive and tier == "bear" else 0.25 if is_aggressive else 0.0
         if _hist_pct_s > hist_ceiling:
             # Note: intentionally NOT recording rejection here — MACD can flip between
             # cycles so we don't want to cool down a symbol that may become a valid
