@@ -385,6 +385,13 @@ def _recent_exit_block(symbol: str, action: str) -> Optional[str]:
         return None
     reason = str(info.get("reason") or "")
     pnl_pct = info.get("pnl_pct")
+    if not reason or reason == "unknown":
+        if pnl_pct is not None and pnl_pct <= -0.35:
+            reason = "stop_loss"
+        elif pnl_pct is not None and pnl_pct >= 0.35:
+            reason = "take_profit"
+        else:
+            reason = "position_closed"
     if mins < 45:
         return f"{symbol} exited {mins:.0f} min ago ({reason}) — churn cooldown active"
     if reason in {"stop_loss", "trailing_stop", "momentum_decay", "gap_down_exit"} and mins < 180:

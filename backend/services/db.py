@@ -8,6 +8,7 @@ so local development without Postgres still works fine.
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -1517,22 +1518,26 @@ def log_bot_activity(event_type: str, message: str,
             return
         with conn.cursor() as cur:
             if event_type == "entry_rejected" and symbol and message:
+                normalized_message = re.sub(r"-?\d+(?:\.\d+)?%?", "#", message)
                 cur.execute("""
-                    SELECT 1
+                    SELECT message
                     FROM bot_activity_log
                     WHERE event_type = %s
                       AND symbol = %s
-                      AND message = %s
                       AND timestamp >= %s
-                    LIMIT 1
+                    ORDER BY timestamp DESC
+                    LIMIT 8
                 """, (
                     event_type,
                     symbol,
-                    message,
-                    datetime.now(timezone.utc) - timedelta(minutes=12),
+                    datetime.now(timezone.utc) - timedelta(minutes=20),
                 ))
-                if cur.fetchone():
-                    return
+                for row in cur.fetchall():
+                    prev_message = row[0] or ""
+                    if prev_message == message:
+                        return
+                    if re.sub(r"-?\d+(?:\.\d+)?%?", "#", prev_message) == normalized_message:
+                        return
             cur.execute("""
                 INSERT INTO bot_activity_log (timestamp, cycle_id, event_type, symbol, message)
                 VALUES (%s, %s, %s, %s, %s)
