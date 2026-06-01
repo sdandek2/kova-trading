@@ -155,7 +155,7 @@ struct TradeHistoryRow: View {
                             .background(Color.red)
                             .clipShape(Capsule())
                     }
-                    Text(trade.exitReasonLabel)
+                    Text(trade.exitReasonDisplay)
                         .font(.caption2).fontWeight(.medium)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Color(.systemGray5))
@@ -202,7 +202,7 @@ struct TradeDetailSheet: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(trade.symbol).font(.largeTitle).fontWeight(.bold)
                             if trade.exit_reason != nil {
-                                Text(trade.exitReasonLabel)
+                                Text(trade.exitReasonDisplay)
                                     .font(.subheadline).foregroundStyle(.secondary)
                             }
                         }

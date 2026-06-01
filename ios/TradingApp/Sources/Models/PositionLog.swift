@@ -13,6 +13,7 @@ struct PositionLog: Decodable, Identifiable {
     let realized_pl_pct: Double?
     let hold_duration_mins: Int?
     let exit_reason: String?
+    let exit_reason_inferred: Bool?
     let strategy: String?
     let claude_reasoning: String?
     let market_regime: String?
@@ -36,8 +37,16 @@ struct PositionLog: Decodable, Identifiable {
         case "ai_sell":        return "AI Sell"
         case "scale_out":      return "Scale Out"
         case "short_cover":    return "Short Cover"
+        case "position_closed": return "Position Closed"
         default:               return exit_reason?.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unknown"
         }
+    }
+
+    var exitReasonDisplay: String {
+        if exit_reason_inferred == true {
+            return "\(exitReasonLabel) (Inferred)"
+        }
+        return exitReasonLabel
     }
 }
 

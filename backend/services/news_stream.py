@@ -23,7 +23,8 @@ _last_trigger_at: dict[str, datetime] = {}
 _last_global_trigger_at: Optional[datetime] = None
 
 _BULLISH_PATTERNS = {
-    "analyst_upgrade": r"\b(upgrade|upgraded|raises? price target|initiated .*buy|outperform)\b",
+    "analyst_upgrade": r"\b(upgrade|upgraded|initiated .*buy|outperform)\b",
+    "analyst_target_raise": r"\b(raises? price target|price target raised|maintains? overweight|maintains? buy|maintains? outperform)\b",
     "earnings_beat": r"\b(earnings beat|beats estimates|beats expectations|better-than-expected|record revenue)\b",
     "guidance_raise": r"\b(raises? guidance|boosts? outlook|raises? forecast|increases? outlook)\b",
     "mna": r"\b(acquire|acquires|acquisition|merger|buyout|takeover|strategic alternatives)\b",
@@ -31,7 +32,8 @@ _BULLISH_PATTERNS = {
 }
 
 _BEARISH_PATTERNS = {
-    "analyst_downgrade": r"\b(downgrade|downgraded|cuts? price target|underperform|sell rating)\b",
+    "analyst_downgrade": r"\b(downgrade|downgraded|underperform|sell rating)\b",
+    "analyst_target_cut": r"\b(cuts? price target|price target lowered|maintains? equal-weight|maintains? neutral|maintains? hold)\b",
     "earnings_miss": r"\b(earnings miss|misses estimates|misses expectations|weaker-than-expected)\b",
     "guidance_cut": r"\b(cuts? guidance|lowers? outlook|reduces? forecast|withdraws? guidance)\b",
     "dilution": r"\b(share offering|stock offering|secondary offering|registered direct|atm offering|dilution)\b",
@@ -71,12 +73,12 @@ def _score_event(headline: str, summary: str = "") -> dict[str, Any]:
     for event_type, pattern in _BULLISH_PATTERNS.items():
         if re.search(pattern, text, flags=re.IGNORECASE):
             event_types.append(event_type)
-            score += 3
+            score += 1 if event_type.startswith("analyst_target_") else 3
 
     for event_type, pattern in _BEARISH_PATTERNS.items():
         if re.search(pattern, text, flags=re.IGNORECASE):
             event_types.append(event_type)
-            score -= 3
+            score -= 1 if event_type.startswith("analyst_target_") else 3
 
     if "halt" in text or "trading halted" in text:
         event_types.append("halt")
@@ -85,10 +87,10 @@ def _score_event(headline: str, summary: str = "") -> dict[str, Any]:
     impact = "high" if any(t in _HIGH_IMPACT_TYPES or t == "halt" for t in event_types) else "normal"
     sentiment = "bullish" if score > 0 else "bearish" if score < 0 else "neutral"
     return {
-        "event_types": event_types,
-        "event_score": score,
-        "event_impact": impact,
-        "event_sentiment": sentiment,
+    "event_types": event_types,
+    "event_score": score,
+    "event_impact": impact,
+    "event_sentiment": sentiment,
     }
 
 

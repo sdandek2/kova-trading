@@ -486,6 +486,26 @@ def _predictive_block(
     return None
 
 
+def _fallback_exit_reason(prev: dict, exit_price: float) -> str:
+    existing = str(prev.get("exit_reason") or "").strip().lower()
+    if existing and existing != "unknown":
+        return existing
+    entry_price = float(prev.get("avg_entry_price") or 0.0)
+    side = prev.get("side", "long")
+    if entry_price <= 0 or exit_price <= 0:
+        return "position_closed"
+    pl_pct = (
+        ((entry_price - exit_price) / entry_price) * 100.0
+        if side == "short"
+        else ((exit_price - entry_price) / entry_price) * 100.0
+    )
+    if pl_pct >= 0.35:
+        return "take_profit"
+    if pl_pct <= -0.35:
+        return "stop_loss"
+    return "position_closed"
+
+
 def get_status() -> TradingStatus:
     next_run_in = None
     if _next_run_at:
@@ -910,10 +930,12 @@ async def run_trading_cycle():
                             break
                 except Exception:
                     pass
+                resolved_exit_reason = _fallback_exit_reason(prev, exit_price)
+                reason_inferred = str(prev.get("exit_reason") or "").strip().lower() in {"", "unknown"}
                 log_position_close(
                     symbol=sym,
                     exit_price=exit_price,
-                    exit_reason=prev.get("exit_reason", "unknown"),
+                    exit_reason=resolved_exit_reason,
                     entry_price=prev.get("avg_entry_price"),
                     quantity=prev.get("qty"),
                     entry_time=prev.get("entry_time"),
@@ -924,8 +946,9 @@ async def run_trading_cycle():
                     entry_rsi=prev.get("entry_rsi"),
                     entry_macd_hist_pct=prev.get("entry_macd_hist_pct"),
                     entry_score=prev.get("entry_score"),
+                    exit_reason_inferred=reason_inferred,
                 )
-                _record_recent_exit(sym, prev.get("exit_reason", "unknown"), prev.get("last_pl_pct"))
+                _record_recent_exit(sym, resolved_exit_reason, prev.get("last_pl_pct"))
                 # ── Profit reserve: take % of realized gain before it re-enters trading pool ──
                 try:
                     reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
@@ -938,7 +961,7 @@ async def run_trading_cycle():
                 except Exception as _re:
                     logger.warning(f"Profit reserve calc failed (non-fatal): {_re}")
                 log_bot_activity("position_closed",
-                                 f"Position closed: {sym} exit=${exit_price:.2f} reason={prev.get('exit_reason','unknown')}",
+                                 f"Position closed: {sym} exit=${exit_price:.2f} reason={resolved_exit_reason}",
                                  symbol=sym, cycle_id=_current_cycle_id)
                 # Clean up earnings-play tracking — position is gone, no EOD exit needed
                 _earnings_day_positions.discard(sym)

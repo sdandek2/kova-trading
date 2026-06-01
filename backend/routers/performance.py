@@ -168,3 +168,17 @@ def get_performance_replay(
         negative_cutoff=negative_cutoff,
         positive_boost_cutoff=positive_boost_cutoff,
     )
+
+
+@router.get("/post-change")
+def get_post_change_performance(
+    change_date: str | None = None,
+    post_days: int = 7,
+    baseline_days: int | None = None,
+):
+    from services.db import get_post_change_comparison
+    return get_post_change_comparison(
+        change_date=change_date,
+        post_days=post_days,
+        baseline_days=baseline_days,
+    )

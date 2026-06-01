@@ -32,6 +32,12 @@ struct DashboardView: View {
                                     .padding(.horizontal, KovaTheme.pagePad)
                             }
 
+                            if let comparison = vm.postChangeComparison {
+                                PostChangeCard(comparison: comparison)
+                                    .padding(.top, 14)
+                                    .padding(.horizontal, KovaTheme.pagePad)
+                            }
+
                             // ── Positions ─────────────────────────────────
                             PositionsSection(positions: vm.positions)
                                 .padding(.top, 20)
@@ -62,6 +68,127 @@ struct DashboardView: View {
         }
         .tint(KovaTheme.purple)
         .task { await vm.load() }
+    }
+}
+
+private struct PostChangeCard: View {
+    let comparison: PostChangeComparison
+
+    private var statusColor: Color {
+        switch comparison.assessment.status {
+        case "improving": return KovaTheme.positive
+        case "worse": return KovaTheme.negative
+        default: return KovaTheme.purple
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Post-Change Check")
+                        .font(.subheadline.weight(.bold))
+                    Text("Since \(comparison.changeDate)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(labelForStatus(comparison.assessment.status))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(statusColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(statusColor.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+
+            Text(comparison.assessment.summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
+                ComparisonMetric(
+                    label: "Expectancy",
+                    baseline: comparison.baseline.expectancyPct,
+                    post: comparison.post.expectancyPct,
+                    format: "%.2f%%"
+                )
+                ComparisonMetric(
+                    label: "Win Rate",
+                    baseline: comparison.baseline.winRatePct,
+                    post: comparison.post.winRatePct,
+                    format: "%.1f%%"
+                )
+            }
+
+            HStack(spacing: 10) {
+                ComparisonMetric(
+                    label: "Avg P&L",
+                    baseline: comparison.baseline.avgPlPct,
+                    post: comparison.post.avgPlPct,
+                    format: "%.2f%%"
+                )
+                ComparisonMetricOptional(
+                    label: "Portfolio",
+                    baseline: comparison.baseline.portfolioReturnPct,
+                    post: comparison.post.portfolioReturnPct,
+                    format: "%.2f%%"
+                )
+            }
+        }
+        .padding(14)
+        .kovaCard(padded: false)
+    }
+
+    private func labelForStatus(_ status: String) -> String {
+        switch status {
+        case "improving": return "Improving"
+        case "worse": return "Worse"
+        case "mixed": return "Mixed"
+        default: return "Watching"
+        }
+    }
+}
+
+private struct ComparisonMetric: View {
+    let label: String
+    let baseline: Double
+    let post: Double
+    let format: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(String(format: format, post))
+                .font(.subheadline.weight(.semibold))
+            Text("was \(String(format: format, baseline))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ComparisonMetricOptional: View {
+    let label: String
+    let baseline: Double?
+    let post: Double?
+    let format: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(post.map { String(format: format, $0) } ?? "n/a")
+                .font(.subheadline.weight(.semibold))
+            Text("was \(baseline.map { String(format: format, $0) } ?? "n/a")")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

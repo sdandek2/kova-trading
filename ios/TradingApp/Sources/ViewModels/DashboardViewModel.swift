@@ -6,6 +6,7 @@ class DashboardViewModel: ObservableObject {
     @Published var account: AccountInfo?
     @Published var positions: [Position] = []
     @Published var portfolioHistory: [PortfolioPoint] = []
+    @Published var postChangeComparison: PostChangeComparison?
     @Published var isLoading = false
     @Published var errorMessage: String?
 
@@ -29,10 +30,12 @@ class DashboardViewModel: ObservableObject {
             async let accountTask = APIService.shared.getAccount()
             async let positionsTask = APIService.shared.getPositions()
             async let historyTask = APIService.shared.getPortfolioHistory(period: "1W")
-            let (acc, pos, history) = try await (accountTask, positionsTask, historyTask)
+            async let comparisonTask = APIService.shared.getPostChangeComparison()
+            let (acc, pos, history, comparison) = try await (accountTask, positionsTask, historyTask, comparisonTask)
             account = acc
             positions = pos
             portfolioHistory = history
+            postChangeComparison = comparison
         } catch {
             errorMessage = error.localizedDescription
         }

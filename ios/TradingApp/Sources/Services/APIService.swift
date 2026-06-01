@@ -107,6 +107,21 @@ class APIService {
         try await fetch("/api/performance")
     }
 
+    func getPostChangeComparison(
+        changeDate: String? = nil,
+        postDays: Int = 7,
+        baselineDays: Int? = nil
+    ) async throws -> PostChangeComparison {
+        var path = "/api/performance/post-change?post_days=\(postDays)"
+        if let changeDate, !changeDate.isEmpty {
+            path += "&change_date=\(changeDate)"
+        }
+        if let baselineDays {
+            path += "&baseline_days=\(baselineDays)"
+        }
+        return try await fetch(path)
+    }
+
     func getStrategy() async throws -> String {
         let response: [String: String] = try await fetch("/api/strategy/")
         return response["key"] ?? "aggressive"
