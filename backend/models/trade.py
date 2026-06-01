@@ -32,6 +32,9 @@ class TradeDecision(BaseModel):
     take_profit_pct: Optional[float] = None   # e.g. 0.15 = 15% — Claude sets dynamically
     stop_loss_pct: Optional[float] = None     # e.g. 0.05 = 5% trailing stop
     partial_exit: bool = False                # sell 50% at TP, let other 50% ride
+    high_conviction: bool = False             # A+ breakout/catalyst fast lane
+    predictive_expectancy_pct: Optional[float] = None
+    predictive_trades: int = 0
 
 
 class TradingStatus(BaseModel):

@@ -26,12 +26,12 @@ TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
 _RISK_CACHE_KEY = "user_pref:risk_settings"
 _RISK_DEFAULTS = {
-    "daily_loss_limit_pct": 6.0,   # aggressive: tolerate up to 6% daily loss before halting buys
-    "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
-    "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
-    "min_daily_trades": 5,          # aggressive floor: push for active trading days
+    "daily_loss_limit_pct": 3.0,   # halt fresh entries sooner when the day is going wrong
+    "stop_loss_pct": 0.04,          # 4% trailing stop fallback (Claude overrides per trade)
+    "take_profit_pct": 0.12,        # 12% TP fallback (Claude overrides per trade)
+    "min_daily_trades": 0,          # never force churn just to hit an activity target
     "afternoon_pressure_hour": 12,  # pressure kicks in at noon ET
-    "max_trades_per_cycle": 6,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
+    "max_trades_per_cycle": 3,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
     "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
     "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
@@ -71,8 +71,8 @@ def _load_risk_settings() -> dict:
         settings = {**_RISK_DEFAULTS, **cached}
         # Defaults are aggressive, but explicit UI/API settings should remain
         # user-controlled when you intentionally dial the bot up or down.
-        settings["min_daily_trades"] = max(_as_int(settings.get("min_daily_trades"), 5), 1)
-        settings["max_trades_per_cycle"] = max(_as_int(settings.get("max_trades_per_cycle"), 6), 1)
+        settings["min_daily_trades"] = max(_as_int(settings.get("min_daily_trades"), 0), 0)
+        settings["max_trades_per_cycle"] = max(_as_int(settings.get("max_trades_per_cycle"), 3), 1)
         settings["afternoon_pressure_hour"] = min(max(_as_int(settings.get("afternoon_pressure_hour"), 12), 9), 15)
         settings["cycle_interval_seconds"] = max(_as_int(settings.get("cycle_interval_seconds"), 600), 60)
         return settings
@@ -82,6 +82,66 @@ def _load_risk_settings() -> dict:
 def _save_risk_settings(settings: dict) -> None:
     from services.db import cache_set
     cache_set(_RISK_CACHE_KEY, settings, 365 * 24 * 3600)  # 1 year TTL
+
+
+def _compute_entry_score(
+    action: str,
+    confidence: str,
+    relative_volume: float,
+    rsi: Optional[float],
+    macd_hist_pct: Optional[float],
+    market_tier: str,
+) -> float:
+    score = {"low": 45.0, "medium": 65.0, "high": 82.0}.get((confidence or "").lower(), 55.0)
+    score += min(max((relative_volume or 1.0) - 1.0, 0.0), 3.0) * 5.0
+    if rsi is not None:
+        if action == "buy":
+            if 48 <= rsi <= 72:
+                score += 6.0
+            elif rsi > 85:
+                score -= 8.0
+        elif action == "short":
+            if rsi >= 68:
+                score += 8.0
+            elif rsi < 60:
+                score -= 10.0
+    if macd_hist_pct is not None:
+        if action == "buy":
+            score += min(max(macd_hist_pct, -0.2), 0.5) * 30.0
+        elif action == "short":
+            score += min(max(-macd_hist_pct, -0.2), 0.5) * 30.0
+    if market_tier == "bull" and action == "buy":
+        score += 4.0
+    if market_tier == "bear" and action == "short":
+        score += 4.0
+    if market_tier == "bull" and action == "short":
+        score -= 6.0
+    return round(max(0.0, min(score, 100.0)), 2)
+
+
+def _regime_risk_multiplier(macro: dict, geo: Optional[dict] = None) -> float:
+    """
+    Convert macro / geopolitical backdrop into a sizing multiplier.
+    Prompts already mention regime awareness, but the engine should also enforce it.
+    """
+    regime = (macro or {}).get("market_regime", "neutral")
+    vix_level = (macro or {}).get("vix_level", "normal")
+    geo_risk = (geo or {}).get("risk_level", "low")
+
+    multiplier = 1.0
+    if regime == "bear":
+        multiplier = min(multiplier, 0.35)
+    elif regime == "volatile":
+        multiplier = min(multiplier, 0.50)
+    elif vix_level in ("elevated", "extreme_fear"):
+        multiplier = min(multiplier, 0.60)
+
+    if geo_risk in ("high", "extreme"):
+        multiplier = min(multiplier, 0.50)
+    elif geo_risk == "elevated":
+        multiplier = min(multiplier, 0.70)
+
+    return multiplier
 
 
 _risk_settings = _load_risk_settings()
@@ -243,6 +303,7 @@ _pyramid_counts: dict = {}             # symbol → int (how many pyramid adds t
 # can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
 _pre_scaleout_qty: dict = {}           # symbol → int (qty held before first scale-out)
 _earnings_day_positions: set = set()   # symbols entered as earnings plays — forced EOD exit
+_recent_exit_cache: dict = {}          # symbol -> {timestamp, reason, pnl_pct}
 
 
 def _save_watermarks() -> None:
@@ -279,6 +340,150 @@ def _load_daily_trade_count() -> dict:
 # Restore state that must survive server restarts
 _position_high_watermarks = _load_watermarks()
 _daily_trade_count: dict = _load_daily_trade_count()
+
+
+def _classify_exit_reason(raw_reason: str, is_short: bool = False, fraction: float = 1.0) -> str:
+    text = (raw_reason or "").lower()
+    if "trailing stop" in text:
+        return "trailing_stop"
+    if "momentum decaying" in text or "momentum decay" in text:
+        return "momentum_decay"
+    if "stale" in text or "redeploying capital" in text:
+        return "stale_exit"
+    if "earnings play" in text and "forced exit" in text:
+        return "earnings_eod_exit"
+    if "gap down" in text:
+        return "gap_down_exit"
+    if "stop loss" in text or "loss" in text:
+        return "stop_loss"
+    if "rsi" in text:
+        return "rsi_cover" if is_short else "rsi_exit"
+    if "profit" in text or "take profit" in text:
+        return "partial_take_profit" if fraction < 1.0 else "take_profit"
+    if is_short:
+        return "short_cover_partial" if fraction < 1.0 else "short_cover"
+    return "ai_sell"
+
+
+def _record_recent_exit(symbol: str, reason: str, pnl_pct: Optional[float] = None) -> None:
+    _recent_exit_cache[symbol] = {
+        "timestamp": datetime.now(timezone.utc),
+        "reason": reason,
+        "pnl_pct": pnl_pct,
+    }
+
+
+def _recent_exit_block(symbol: str, action: str) -> Optional[str]:
+    if action not in ("buy", "short"):
+        return None
+    info = _recent_exit_cache.get(symbol)
+    if not info:
+        return None
+    mins = (datetime.now(timezone.utc) - info["timestamp"]).total_seconds() / 60
+    if mins > 180:
+        _recent_exit_cache.pop(symbol, None)
+        return None
+    reason = str(info.get("reason") or "")
+    pnl_pct = info.get("pnl_pct")
+    if mins < 45:
+        return f"{symbol} exited {mins:.0f} min ago ({reason}) — churn cooldown active"
+    if reason in {"stop_loss", "trailing_stop", "momentum_decay", "gap_down_exit"} and mins < 180:
+        return f"{symbol} recently exited via {reason} {mins:.0f} min ago — re-entry blocked until setup resets"
+    if pnl_pct is not None and pnl_pct < 0 and mins < 180:
+        return f"{symbol} was closed at {pnl_pct:.2f}% {mins:.0f} min ago — avoid revenge re-entry"
+    return None
+
+
+def _quality_gate_reason(
+    symbol: str,
+    action: str,
+    entry_score: Optional[float],
+    market_tier: str,
+    strategy_key: str,
+    high_conviction: bool = False,
+) -> Optional[str]:
+    if action not in ("buy", "short") or entry_score is None:
+        return None
+    min_score = 58.0 if strategy_key == "aggressive" else 63.0
+    if action == "short" and market_tier == "bull":
+        min_score = max(min_score, 72.0)
+    elif action == "short" and market_tier == "neutral":
+        min_score = max(min_score, 66.0)
+    elif action == "buy" and market_tier == "bear":
+        min_score = max(min_score, 68.0)
+    if high_conviction and action == "buy":
+        min_score -= 6.0
+    if high_conviction and action == "short" and market_tier != "bull":
+        min_score -= 4.0
+    min_score = max(min_score, 52.0)
+    if entry_score < min_score:
+        return f"{symbol} {action} blocked — entry score {entry_score:.1f} below {min_score:.1f} threshold for {market_tier} regime"
+    return None
+
+
+def _news_confirmation_block(
+    symbol: str,
+    action: str,
+    relative_volume: float,
+    macd_hist_pct: Optional[float],
+    high_conviction: bool = False,
+) -> Optional[str]:
+    if action not in ("buy", "short"):
+        return None
+    try:
+        from services.news_stream import get_cached_news
+        recent_articles = [
+            article for article in get_cached_news(limit=120, max_age_minutes=90)
+            if symbol in (article.get("symbols") or []) and article.get("event_impact") == "high"
+        ]
+    except Exception:
+        return None
+
+    if not recent_articles:
+        return None
+
+    bullish = any(a.get("event_sentiment") == "bullish" for a in recent_articles)
+    bearish = any(a.get("event_sentiment") == "bearish" for a in recent_articles)
+    mixed = bullish and bearish
+    rel_vol_floor = 1.8 if high_conviction else 1.4
+
+    if mixed:
+        return f"{symbol} has mixed fresh high-impact news — skipping until direction is clearer"
+    if relative_volume < rel_vol_floor:
+        return (
+            f"{symbol} has fresh high-impact news but only {relative_volume:.1f}x relative volume — "
+            "wait for stronger confirmation"
+        )
+    if action == "buy":
+        if bearish:
+            return f"{symbol} buy blocked — fresh high-impact news is bearish"
+        if macd_hist_pct is not None and macd_hist_pct < 0:
+            return f"{symbol} buy blocked — news is fresh but MACD confirmation is still negative"
+    if action == "short":
+        if bullish:
+            return f"{symbol} short blocked — fresh high-impact news is bullish"
+        if macd_hist_pct is not None and macd_hist_pct > 0:
+            return f"{symbol} short blocked — news is fresh but downside momentum has not confirmed"
+    return None
+
+
+def _predictive_block(
+    symbol: str,
+    action: str,
+    predictive_expectancy_pct: Optional[float],
+    predictive_trades: int,
+    high_conviction: bool = False,
+) -> Optional[str]:
+    if action not in ("buy", "short"):
+        return None
+    if predictive_expectancy_pct is None or predictive_trades < 3:
+        return None
+    if predictive_expectancy_pct <= -0.35 and not high_conviction:
+        return (
+            f"{symbol} {action} blocked — historical predictive prior is {predictive_expectancy_pct:.2f}% "
+            f"over {predictive_trades} trades"
+        )
+    return None
 
 
 def get_status() -> TradingStatus:
@@ -643,21 +848,45 @@ async def run_trading_cycle():
         # logging duplicate position_open entries for positions that are already in the DB.
         old_symbols = set(_previous_positions.keys())
         if old_symbols:  # only run if we have a baseline from the previous cycle
-            for sym in current_symbols - old_symbols:
+            for sym in current_symbols:
                 pos = next((p for p in positions if p.symbol == sym), None)
                 if pos:
-                    logger.info(f"New position detected (limit order filled between cycles): {sym} @ ${pos.avg_entry_price:.2f}")
-                    log_position_open(
-                        symbol=sym,
-                        entry_price=pos.avg_entry_price,
-                        quantity=int(float(pos.qty)),
-                        strategy=strategy_key,
-                        claude_reasoning="Limit order filled between cycles — entry logged on position detection",
-                        market_regime=macro.get("market_regime"),
-                        side=pos.side,
-                    )
-                    _position_high_watermarks[sym] = pos.current_price
-                    _save_watermarks()
+                    prev_meta = _previous_positions.get(sym, {})
+                    is_new_symbol = sym not in old_symbols
+                    needs_entry_log = is_new_symbol or not prev_meta.get("entry_logged", True)
+                    if needs_entry_log:
+                        logger.info(f"New position detected (filled between cycles): {sym} @ ${pos.avg_entry_price:.2f}")
+                        log_position_open(
+                            symbol=sym,
+                            entry_price=pos.avg_entry_price,
+                            quantity=int(float(pos.qty)),
+                            strategy=prev_meta.get("strategy", strategy_key),
+                            claude_reasoning=prev_meta.get("claude_reasoning") or "Limit order filled between cycles — entry logged on position detection",
+                            market_regime=prev_meta.get("market_regime") or macro.get("market_regime"),
+                            side=pos.side,
+                            entry_rsi=prev_meta.get("entry_rsi"),
+                            entry_macd_hist_pct=prev_meta.get("entry_macd_hist_pct"),
+                            entry_score=prev_meta.get("entry_score"),
+                        )
+                        if sym in _previous_positions:
+                            _previous_positions[sym]["entry_logged"] = True
+                    if (
+                        pos.side == "long"
+                        and prev_meta.get("partial_exit")
+                        and not prev_meta.get("exit_legs_attached", False)
+                    ):
+                        attached = alpaca_service.ensure_partial_exit_orders(
+                            symbol=sym,
+                            qty=int(float(pos.qty)),
+                            entry_price=float(pos.avg_entry_price),
+                            take_profit_pct=float(prev_meta.get("take_profit_pct") or _risk_settings["take_profit_pct"]),
+                            stop_loss_pct=float(prev_meta.get("stop_loss_pct") or _risk_settings["stop_loss_pct"]),
+                        )
+                        if attached and sym in _previous_positions:
+                            _previous_positions[sym]["exit_legs_attached"] = True
+                    if pos.side == "long":
+                        _position_high_watermarks[sym] = pos.current_price
+                        _save_watermarks()
         for sym, prev in _previous_positions.items():
             if sym not in current_symbols:
                 # Skip symbols handled by an AI sell — reserve + log already applied.
@@ -689,7 +918,14 @@ async def run_trading_cycle():
                     quantity=prev.get("qty"),
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
+                    strategy=prev.get("strategy"),
+                    claude_reasoning=prev.get("claude_reasoning"),
+                    market_regime=prev.get("market_regime"),
+                    entry_rsi=prev.get("entry_rsi"),
+                    entry_macd_hist_pct=prev.get("entry_macd_hist_pct"),
+                    entry_score=prev.get("entry_score"),
                 )
+                _record_recent_exit(sym, prev.get("exit_reason", "unknown"), prev.get("last_pl_pct"))
                 # ── Profit reserve: take % of realized gain before it re-enters trading pool ──
                 try:
                     reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
@@ -725,8 +961,20 @@ async def run_trading_cycle():
                     _previous_positions.get(p.symbol, {}).get("entry_time")
                     or datetime.now(timezone.utc)
                 ),
-                "exit_reason": "unknown",
+                "exit_reason": _previous_positions.get(p.symbol, {}).get("exit_reason", "unknown"),
                 "side": p.side,
+                "strategy": _previous_positions.get(p.symbol, {}).get("strategy"),
+                "claude_reasoning": _previous_positions.get(p.symbol, {}).get("claude_reasoning"),
+                "market_regime": _previous_positions.get(p.symbol, {}).get("market_regime"),
+                "entry_rsi": _previous_positions.get(p.symbol, {}).get("entry_rsi"),
+                "entry_macd_hist_pct": _previous_positions.get(p.symbol, {}).get("entry_macd_hist_pct"),
+                "entry_score": _previous_positions.get(p.symbol, {}).get("entry_score"),
+                "partial_exit": _previous_positions.get(p.symbol, {}).get("partial_exit", False),
+                "take_profit_pct": _previous_positions.get(p.symbol, {}).get("take_profit_pct"),
+                "stop_loss_pct": _previous_positions.get(p.symbol, {}).get("stop_loss_pct"),
+                "entry_logged": _previous_positions.get(p.symbol, {}).get("entry_logged", True),
+                "exit_legs_attached": _previous_positions.get(p.symbol, {}).get("exit_legs_attached", False),
+                "last_pl_pct": p.unrealized_pl_percent,
             }
             for p in positions
         }
@@ -1198,11 +1446,8 @@ async def run_trading_cycle():
                 order_side = "buy" if is_short else "sell"
                 logger.info(f"{action_label.upper()} triggered: {reason} — {'covering' if is_short else 'selling'} {exit_qty} shares")
                 if position.symbol in _previous_positions:
-                    _previous_positions[position.symbol]["exit_reason"] = (
-                        "trailing_stop" if "trailing stop" in reason.lower()
-                        else "take_profit" if "profit" in reason.lower()
-                        else "short_cover" if is_short
-                        else "loss_cut"
+                    _previous_positions[position.symbol]["exit_reason"] = _classify_exit_reason(
+                        reason, is_short=is_short, fraction=fraction
                     )
                 log_bot_activity(
                     action_label, reason,
@@ -1703,6 +1948,63 @@ async def run_trading_cycle():
                 _macd_hist = _macd_data.get("histogram")
             except Exception:
                 pass
+            _entry_rsi = compute_rsi(closing_prices) if closing_prices else None
+            _entry_macd_hist_pct = (
+                (_macd_hist / current_price * 100)
+                if (_macd_hist is not None and current_price and current_price > 0)
+                else None
+            )
+            _entry_score = _compute_entry_score(
+                action=decision.action,
+                confidence=_conf_val,
+                relative_volume=_rel_vol,
+                rsi=_entry_rsi,
+                macd_hist_pct=_entry_macd_hist_pct,
+                market_tier=market_tier,
+            )
+            _cooldown_block = _recent_exit_block(decision.symbol, decision.action)
+            if _cooldown_block:
+                logger.info(f"Churn guard: {_cooldown_block}")
+                log_bot_activity("entry_rejected", _cooldown_block,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
+            _quality_block = _quality_gate_reason(
+                symbol=decision.symbol,
+                action=decision.action,
+                entry_score=_entry_score,
+                market_tier=market_tier,
+                strategy_key=strategy_key,
+                high_conviction=decision.high_conviction,
+            )
+            if _quality_block:
+                logger.info(f"Quality gate: {_quality_block}")
+                log_bot_activity("entry_rejected", _quality_block,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
+            _news_block = _news_confirmation_block(
+                symbol=decision.symbol,
+                action=decision.action,
+                relative_volume=_rel_vol,
+                macd_hist_pct=_entry_macd_hist_pct,
+                high_conviction=decision.high_conviction,
+            )
+            if _news_block:
+                logger.info(f"News confirmation gate: {_news_block}")
+                log_bot_activity("entry_rejected", _news_block,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
+            _predictive_reject = _predictive_block(
+                symbol=decision.symbol,
+                action=decision.action,
+                predictive_expectancy_pct=decision.predictive_expectancy_pct,
+                predictive_trades=decision.predictive_trades,
+                high_conviction=decision.high_conviction,
+            )
+            if _predictive_reject:
+                logger.info(f"Predictive gate: {_predictive_reject}")
+                log_bot_activity("entry_rejected", _predictive_reject,
+                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                continue
 
             confirmed, confirm_reason = should_confirm_entry(
                 symbol=decision.symbol,
@@ -1779,14 +2081,25 @@ async def run_trading_cycle():
                         # than longs unless the strategy explicitly sets a lower value.
                         effective_max_pct = min(effective_max_pct, strat["max_position_pct"] * 0.50)
 
+                    regime_mult = _regime_risk_multiplier(macro, geo)
+                    base_risk_pct = strat.get("risk_per_trade_pct", 0.01) * (
+                        0.50 if decision.action == "short" else 1.0
+                    )
+                    if regime_mult < 1.0:
+                        effective_max_pct *= regime_mult
+                        base_risk_pct *= regime_mult
+                        logger.info(
+                            f"Regime throttle: {decision.symbol} {decision.action} sized at "
+                            f"{regime_mult:.2f}x due to regime={macro.get('market_regime')} "
+                            f"vix={macro.get('vix_level')} geo={geo.get('risk_level')}"
+                        )
+
                     vol_qty = volatility_adjusted_quantity(
                         portfolio_value=account.portfolio_value,
                         max_position_pct=effective_max_pct,
                         current_price=price,
                         atr=atr,
-                        risk_per_trade_pct=(
-                            strat.get("risk_per_trade_pct", 0.01) * (0.50 if decision.action == "short" else 1.0)
-                        ),
+                        risk_per_trade_pct=base_risk_pct,
                     )
                     if vol_qty != decision.quantity:
                         logger.info(f"Vol-adjust: {decision.symbol} {decision.quantity}→{vol_qty} shares (ATR={atr:.2f})")
@@ -1810,6 +2123,26 @@ async def run_trading_cycle():
                             f"Conviction sizing: {decision.symbol} "
                             f"{'HIGH' if _conv_mult > 1 else 'LOW'} confidence → "
                             f"{_pre_conv}→{vol_qty} shares ({_conv_mult:.2f}×)"
+                        )
+                    if decision.high_conviction and decision.action == "buy":
+                        _pre_hc = vol_qty
+                        vol_qty = max(1, int(vol_qty * 1.20))
+                        logger.info(
+                            f"Rocket setup sizing: {decision.symbol} {_pre_hc}→{vol_qty} shares "
+                            f"(high conviction breakout/catalyst)"
+                        )
+                    if (
+                        decision.action in ("buy", "short")
+                        and decision.predictive_expectancy_pct is not None
+                        and decision.predictive_trades >= 3
+                        and decision.predictive_expectancy_pct > 0.35
+                    ):
+                        _pre_pred = vol_qty
+                        pred_mult = 1.10 if decision.predictive_expectancy_pct < 0.80 else 1.15
+                        vol_qty = max(1, int(vol_qty * pred_mult))
+                        logger.info(
+                            f"Predictive sizing: {decision.symbol} {_pre_pred}→{vol_qty} shares "
+                            f"(prior {decision.predictive_expectancy_pct:+.2f}% over {decision.predictive_trades} trades)"
                         )
 
                     # ── Sector momentum tilt ──────────────────────────────────
@@ -1968,6 +2301,7 @@ async def run_trading_cycle():
                     qty=decision.quantity,
                     stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
                     take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                    high_conviction=decision.high_conviction,
                 )
             else:
                 order = alpaca_service.submit_market_order(
@@ -1977,6 +2311,7 @@ async def run_trading_cycle():
                     stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
                     take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
                     partial_exit=decision.partial_exit,
+                    high_conviction=decision.high_conviction,
                 )
             if order:
                 # Track daily trade count (_cycle_open_count already incremented above)
@@ -2016,6 +2351,17 @@ async def run_trading_cycle():
                             "entry_time": datetime.now(timezone.utc),
                             "exit_reason": "unknown",
                             "side": "long",
+                            "strategy": strategy_key,
+                            "claude_reasoning": decision.reasoning,
+                            "market_regime": macro.get("market_regime"),
+                            "entry_rsi": _entry_rsi,
+                            "entry_macd_hist_pct": _entry_macd_hist_pct,
+                            "entry_score": _entry_score,
+                            "partial_exit": decision.partial_exit,
+                            "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                            "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                            "entry_logged": False,
+                            "exit_legs_attached": False,
                         }
                     elif decision.action == "short" and fill_price > 0:
                         _short_low_watermarks[decision.symbol] = fill_price
@@ -2026,6 +2372,17 @@ async def run_trading_cycle():
                             "entry_time": datetime.now(timezone.utc),
                             "exit_reason": "unknown",
                             "side": "short",
+                            "strategy": f"{strategy_key}_short",
+                            "claude_reasoning": decision.reasoning,
+                            "market_regime": macro.get("market_regime"),
+                            "entry_rsi": _entry_rsi,
+                            "entry_macd_hist_pct": _entry_macd_hist_pct,
+                            "entry_score": _entry_score,
+                            "partial_exit": False,
+                            "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                            "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                            "entry_logged": False,
+                            "exit_legs_attached": False,
                         }
                 elif decision.action == "short" and fill_price > 0:
                     log_position_open(
@@ -2036,6 +2393,9 @@ async def run_trading_cycle():
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
                         side="short",
+                        entry_rsi=_entry_rsi,
+                        entry_macd_hist_pct=_entry_macd_hist_pct,
+                        entry_score=_entry_score,
                     )
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
@@ -2046,6 +2406,17 @@ async def run_trading_cycle():
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "short",
+                        "strategy": f"{strategy_key}_short",
+                        "claude_reasoning": decision.reasoning,
+                        "market_regime": macro.get("market_regime"),
+                        "entry_rsi": _entry_rsi,
+                        "entry_macd_hist_pct": _entry_macd_hist_pct,
+                        "entry_score": _entry_score,
+                        "partial_exit": False,
+                        "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                        "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                        "entry_logged": True,
+                        "exit_legs_attached": False,
                     }
                 elif decision.action == "buy" and fill_price > 0:
                     log_position_open(
@@ -2056,6 +2427,9 @@ async def run_trading_cycle():
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
                         side="long",
+                        entry_rsi=_entry_rsi,
+                        entry_macd_hist_pct=_entry_macd_hist_pct,
+                        entry_score=_entry_score,
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price
@@ -2067,6 +2441,17 @@ async def run_trading_cycle():
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "long",
+                        "strategy": strategy_key,
+                        "claude_reasoning": decision.reasoning,
+                        "market_regime": macro.get("market_regime"),
+                        "entry_rsi": _entry_rsi,
+                        "entry_macd_hist_pct": _entry_macd_hist_pct,
+                        "entry_score": _entry_score,
+                        "partial_exit": decision.partial_exit,
+                        "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                        "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                        "entry_logged": True,
+                        "exit_legs_attached": False,
                     }
                 elif decision.action == "sell" and fill_price:
                     prev = _previous_positions.get(decision.symbol, {})
@@ -2080,7 +2465,14 @@ async def run_trading_cycle():
                         quantity=prev.get("qty"),
                         entry_time=prev.get("entry_time"),
                         side=prev.get("side", "long"),
+                        strategy=prev.get("strategy"),
+                        claude_reasoning=prev.get("claude_reasoning"),
+                        market_regime=prev.get("market_regime"),
+                        entry_rsi=prev.get("entry_rsi"),
+                        entry_macd_hist_pct=prev.get("entry_macd_hist_pct"),
+                        entry_score=prev.get("entry_score"),
                     )
+                    _record_recent_exit(decision.symbol, "ai_sell", prev.get("last_pl_pct"))
                     # ── Profit reserve on AI-initiated sells ──
                     _ai_sold_symbols.add(decision.symbol)  # guard cycle-detect from double-counting
                     try:
@@ -2126,7 +2518,7 @@ async def _save_eod_snapshot():
     Called once automatically when the market transitions from open → closed.
     """
     try:
-        from services.db import save_daily_summary
+        from services.db import save_daily_summary, get_trade_metrics_report, set_setting
         from services.strategy import get_strategy
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame
@@ -2184,6 +2576,12 @@ async def _save_eod_snapshot():
             "strategy":         strat["key"],
             "spy_close":        spy_close,
         })
+        try:
+            report = get_trade_metrics_report(days=30)
+            report["generated_for_date"] = today.isoformat()
+            set_setting("latest_daily_trade_report", report)
+        except Exception as report_exc:
+            logger.warning(f"EOD report snapshot failed (non-fatal): {report_exc}")
         logger.info(f"EOD snapshot saved for {today}: portfolio=${account.portfolio_value:,.2f}, day_pl={account.day_pl_percent:.2f}%")
     except Exception as e:
         logger.warning(f"EOD snapshot failed (non-fatal): {e}")

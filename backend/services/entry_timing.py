@@ -95,8 +95,8 @@ def should_confirm_entry(
     AGGRESSIVE mode (designed for active trading):
     - Only blocks on severe confirmed weakness, not ordinary dips
     - RSI ceiling: 94 for leveraged ETFs (momentum instruments), 90 for all others
-    - MA20 extension: ticker-aware (penny=40%, leveraged=18%, broad=12%, stocks=10%)
-    - Thin portfolio (<3 positions) lowers bar further, capped at 1.5× normal limit
+    - MA20 extension: softer than balanced, but still blocks parabolic chases
+    - Thin portfolio (<3 positions) lowers bar further, capped at 2.0× normal limit
     - Volume threshold lowered to 0.25x — don't miss momentum on quiet days
 
     BALANCED / CONSERVATIVE mode:
@@ -146,29 +146,44 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
 
-            # Aggressive mode: skip MA20 extension check entirely.
-            # In aggressive mode, momentum IS the strategy. RSI (capped at 85/92),
-            # MACD, and volume are the real guards. MA20 extension is an
-            # anti-momentum filter — it conflicts with the aggressive thesis.
-            # Leveraged ETFs also exempt: their MA20 is distorted by 3x daily rebalancing.
-            if ma20 and symbol not in _LEVERAGED_ETFS and not is_aggressive:
+            # Aggressive mode still needs a parabolic-chase guard.
+            # We allow more extension than balanced mode, especially when
+            # relative volume and MACD support the move, but we no longer buy
+            # anything no matter how far it has already stretched above MA20.
+            if ma20 and symbol not in _LEVERAGED_ETFS:
                 ext_limit = _ma20_extension_limit(symbol, current_price)
-                hard_cap  = ext_limit * 1.5
+                macd_hist_pct = (
+                    (macd_histogram / current_price) * 100
+                    if (macd_histogram is not None and current_price > 0)
+                    else None
+                )
                 pct_above = (current_price / ma20 - 1) * 100
 
-                if needs_positions:
-                    if current_price > ma20 * (1 + hard_cap):
+                if is_aggressive:
+                    if relative_volume >= 2.0 and (macd_hist_pct is None or macd_hist_pct >= 0.10):
+                        aggressive_limit = ext_limit * 2.0
+                    elif relative_volume >= 1.3 and (macd_hist_pct is None or macd_hist_pct >= 0.0):
+                        aggressive_limit = ext_limit * 1.6
+                    else:
+                        aggressive_limit = ext_limit * 1.35
+                    if needs_positions:
+                        aggressive_limit *= 1.15
+                    aggressive_limit = min(aggressive_limit, ext_limit * 2.1)
+                    if current_price > ma20 * (1 + aggressive_limit):
                         reason = (
                             f"{symbol} is {pct_above:.0f}% above MA20 (${ma20:.2f}) — "
-                            f"too extended even with thin portfolio (cap={hard_cap*100:.0f}%)"
+                            f"too extended even for aggressive chase control "
+                            f"(cap={aggressive_limit*100:.0f}%)"
                         )
                         _record_rejection(symbol)
                         return False, reason
                 else:
-                    if current_price > ma20 * (1 + ext_limit):
+                    ext_limit = _ma20_extension_limit(symbol, current_price)
+                    pct_above = (current_price / ma20 - 1) * 100
+                    if current_price > ma20 * (1 + ext_limit * 0.5 if not (0 < current_price < 5.0) else 1 + ext_limit):
                         reason = (
                             f"{symbol} is {pct_above:.0f}%+ above MA20 (${ma20:.2f}) — "
-                            f"parabolic, not a breakout (limit={ext_limit*100:.0f}%)"
+                            f"parabolic, not a breakout (limit={(ext_limit if (0 < current_price < 5.0) else ext_limit*0.5)*100:.0f}%)"
                         )
                         _record_rejection(symbol)
                         return False, reason
@@ -256,7 +271,11 @@ def should_confirm_entry(
         _macd_s = _cm(closing_prices)
         _hist_s = _macd_s.get("histogram", 0) or 0
         _hist_pct_s = (_hist_s / current_price * 100) if current_price and current_price > 0 else 0
-        hist_ceiling = 0.50 if is_aggressive and tier == "bear" else 0.25 if is_aggressive else 0.0
+        # Short entries degraded after the May 28, 2026 threshold loosening:
+        # allowing positive MACD histogram up to +0.25% / +0.50% means we can
+        # short symbols that still have clear upside momentum. Keep bear-regime
+        # flexibility, but require materially tighter confirmation.
+        hist_ceiling = 0.08 if is_aggressive and tier == "bear" else 0.03 if is_aggressive else 0.0
         if _hist_pct_s > hist_ceiling:
             # Note: intentionally NOT recording rejection here — MACD can flip between
             # cycles so we don't want to cool down a symbol that may become a valid

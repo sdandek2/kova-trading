@@ -43,7 +43,7 @@ struct AccountCardView: View {
 
             // ── Cash + Buying Power ───────────────────────────────────────
             HStack(spacing: 0) {
-                StatCell(label: "Cash", value: formatCurrency(account.cash), alignment: .leading)
+                StatCell(label: "Tradeable Cash", value: formatCurrency(account.tradeableCash ?? account.cash), alignment: .leading)
 
                 Rectangle()
                     .fill(Color(.separator))

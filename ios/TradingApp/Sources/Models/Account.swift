@@ -4,6 +4,8 @@ struct AccountInfo: Codable {
     let portfolioValue: Double
     let cash: Double
     let buyingPower: Double
+    let tradeableCash: Double?
+    let rawCash: Double?
     let dayPl: Double
     let dayPlPercent: Double
 
@@ -11,6 +13,8 @@ struct AccountInfo: Codable {
         case portfolioValue = "portfolio_value"
         case cash
         case buyingPower = "buying_power"
+        case tradeableCash = "tradeable_cash"
+        case rawCash = "raw_cash"
         case dayPl = "day_pl"
         case dayPlPercent = "day_pl_percent"
     }

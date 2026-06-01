@@ -114,6 +114,9 @@ def _ensure_table(conn):
                 entry_price          FLOAT,
                 exit_price           FLOAT,
                 quantity             INTEGER,
+                entry_rsi            FLOAT,
+                entry_macd_hist_pct  FLOAT,
+                entry_score          FLOAT,
                 realized_pl          FLOAT,
                 realized_pl_pct      FLOAT,
                 hold_duration_mins   INTEGER,
@@ -128,6 +131,9 @@ def _ensure_table(conn):
             ALTER TABLE position_log
             ADD COLUMN IF NOT EXISTS side VARCHAR(10) DEFAULT 'long'
         """)
+        cur.execute("""ALTER TABLE position_log ADD COLUMN IF NOT EXISTS entry_rsi FLOAT""")
+        cur.execute("""ALTER TABLE position_log ADD COLUMN IF NOT EXISTS entry_macd_hist_pct FLOAT""")
+        cur.execute("""ALTER TABLE position_log ADD COLUMN IF NOT EXISTS entry_score FLOAT""")
         # ── NEW: circuit_breaker_log ────────────────────────────────────────
         # Every time the daily loss limit fires, record when and why.
         cur.execute("""
@@ -466,7 +472,9 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 
 def log_position_open(symbol: str, entry_price: float, quantity: int,
                       strategy: str = None, claude_reasoning: str = None,
-                      market_regime: str = None, side: str = "long") -> Optional[int]:
+                      market_regime: str = None, side: str = "long",
+                      entry_rsi: float = None, entry_macd_hist_pct: float = None,
+                      entry_score: float = None) -> Optional[int]:
     """
     Record that a new position was opened.
     side: "long" | "short"
@@ -480,11 +488,12 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
             cur.execute("""
                 INSERT INTO position_log
                     (symbol, side, entry_time, entry_price, quantity, strategy,
-                     claude_reasoning, market_regime)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     claude_reasoning, market_regime, entry_rsi, entry_macd_hist_pct, entry_score)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
-                  strategy, claude_reasoning, market_regime))
+                  strategy, claude_reasoning, market_regime, entry_rsi,
+                  entry_macd_hist_pct, entry_score))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:
@@ -494,7 +503,10 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                        entry_price: float = None, quantity: int = None,
-                       entry_time: datetime = None, side: str = "long") -> None:
+                       entry_time: datetime = None, side: str = "long",
+                       strategy: str = None, claude_reasoning: str = None,
+                       market_regime: str = None, entry_rsi: float = None,
+                       entry_macd_hist_pct: float = None, entry_score: float = None) -> None:
     """
     Update the most recent open position_log row for *symbol* with exit data.
     Also handles the case where no open row exists (logs a standalone closed row).
@@ -548,10 +560,17 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                         realized_pl       = %s,
                         realized_pl_pct   = %s,
                         hold_duration_mins = %s,
-                        exit_reason       = %s
+                        exit_reason       = %s,
+                        strategy          = COALESCE(strategy, %s),
+                        claude_reasoning  = COALESCE(claude_reasoning, %s),
+                        market_regime     = COALESCE(market_regime, %s),
+                        entry_rsi         = COALESCE(entry_rsi, %s),
+                        entry_macd_hist_pct = COALESCE(entry_macd_hist_pct, %s),
+                        entry_score       = COALESCE(entry_score, %s)
                     WHERE id = %s
                 """, (now, exit_price, realized_pl, realized_pl_pct,
-                      hold_mins, exit_reason, pos_id))
+                      hold_mins, exit_reason, strategy, claude_reasoning,
+                      market_regime, entry_rsi, entry_macd_hist_pct, entry_score, pos_id))
             else:
                 # No open row — insert a closed record directly
                 ep = entry_price or 0
@@ -560,10 +579,14 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 cur.execute("""
                     INSERT INTO position_log
                         (symbol, side, entry_time, exit_time, entry_price, exit_price,
-                         quantity, realized_pl, realized_pl_pct, exit_reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         quantity, entry_rsi, entry_macd_hist_pct, entry_score,
+                         realized_pl, realized_pl_pct, exit_reason, strategy,
+                         claude_reasoning, market_regime)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (symbol, side or "long", entry_time or now, now, ep, exit_price,
-                      qty, realized_pl, realized_pl_pct, exit_reason))
+                      qty, entry_rsi, entry_macd_hist_pct, entry_score,
+                      realized_pl, realized_pl_pct, exit_reason, strategy,
+                      claude_reasoning, market_regime))
         logger.info(f"log_position_close: {symbol} exit=${exit_price:.2f} reason={exit_reason}")
     except Exception as e:
         logger.warning(f"log_position_close failed ({e})")
@@ -581,7 +604,8 @@ def get_position_history(limit: int = 50) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT symbol, side, entry_time, exit_time, entry_price, exit_price,
-                       quantity, realized_pl, realized_pl_pct, hold_duration_mins,
+                       quantity, entry_rsi, entry_macd_hist_pct, entry_score,
+                       realized_pl, realized_pl_pct, hold_duration_mins,
                        exit_reason, strategy, claude_reasoning, market_regime
                 FROM position_log
                 WHERE exit_time IS NOT NULL
@@ -598,13 +622,16 @@ def get_position_history(limit: int = 50) -> list[dict]:
                 "entry_price":       r[4],
                 "exit_price":        r[5],
                 "quantity":          r[6],
-                "realized_pl":       r[7],
-                "realized_pl_pct":   r[8],
-                "hold_duration_mins": r[9],
-                "exit_reason":       r[10],
-                "strategy":          r[11],
-                "claude_reasoning":  r[12],
-                "market_regime":     r[13],
+                "entry_rsi":         r[7],
+                "entry_macd_hist_pct": r[8],
+                "entry_score":       r[9],
+                "realized_pl":       r[10],
+                "realized_pl_pct":   r[11],
+                "hold_duration_mins": r[12],
+                "exit_reason":       r[13],
+                "strategy":          r[14],
+                "claude_reasoning":  r[15],
+                "market_regime":     r[16],
             }
             for r in rows
         ]
@@ -696,6 +723,441 @@ def get_trade_performance_summary() -> dict:
         }
 
 
+def get_trade_metrics_report(days: int = 30) -> dict:
+    """Return an expectancy-focused report over recent closed trades."""
+    empty = {
+        "period_days": days,
+        "summary": {
+            "trades": 0,
+            "win_rate_pct": 0.0,
+            "avg_winner_pct": 0.0,
+            "avg_loser_pct": 0.0,
+            "profit_factor": 0.0,
+            "expectancy_pct": 0.0,
+            "avg_hold_mins": 0.0,
+            "total_realized_pl": 0.0,
+        },
+        "by_strategy": [],
+        "by_symbol": [],
+        "biggest_losers": [],
+    }
+    try:
+        conn = _get_conn()
+        if not conn:
+            return empty
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS trades,
+                    COUNT(*) FILTER (WHERE realized_pl > 0) AS wins,
+                    ROUND(AVG(realized_pl_pct) FILTER (WHERE realized_pl > 0)::numeric, 2) AS avg_winner_pct,
+                    ROUND(AVG(realized_pl_pct) FILTER (WHERE realized_pl < 0)::numeric, 2) AS avg_loser_pct,
+                    ROUND(SUM(CASE WHEN realized_pl > 0 THEN realized_pl ELSE 0 END)::numeric, 2) AS gross_profit,
+                    ROUND(ABS(SUM(CASE WHEN realized_pl < 0 THEN realized_pl ELSE 0 END))::numeric, 2) AS gross_loss,
+                    ROUND(AVG(hold_duration_mins)::numeric, 2) AS avg_hold_mins,
+                    ROUND(SUM(realized_pl)::numeric, 2) AS total_realized_pl
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                  AND realized_pl IS NOT NULL
+            """, (cutoff,))
+            row = cur.fetchone() or (0, 0, 0, 0, 0, 0, 0, 0)
+            trades, wins, avg_winner, avg_loser, gross_profit, gross_loss, avg_hold, total_realized_pl = row
+
+            trades = int(trades or 0)
+            wins = int(wins or 0)
+            win_rate_pct = round((wins / trades) * 100, 2) if trades else 0.0
+            avg_winner = float(avg_winner or 0.0)
+            avg_loser = float(avg_loser or 0.0)
+            expectancy_pct = round(
+                (win_rate_pct / 100.0 * avg_winner) - ((1 - win_rate_pct / 100.0) * abs(avg_loser)),
+                2,
+            ) if trades else 0.0
+            profit_factor = round(float(gross_profit or 0.0) / float(gross_loss or 0.0), 2) if gross_loss else 0.0
+
+            cur.execute("""
+                SELECT
+                    COALESCE(strategy, 'unknown') AS strategy_name,
+                    COUNT(*) AS trades,
+                    ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pl_pct,
+                    ROUND(SUM(realized_pl)::numeric, 2) AS total_pl
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                GROUP BY COALESCE(strategy, 'unknown')
+                ORDER BY total_pl DESC, avg_pl_pct DESC
+            """, (cutoff,))
+            by_strategy = [
+                {
+                    "strategy": r[0],
+                    "trades": int(r[1] or 0),
+                    "avg_pl_pct": float(r[2] or 0.0),
+                    "total_realized_pl": float(r[3] or 0.0),
+                }
+                for r in cur.fetchall()
+            ]
+
+            cur.execute("""
+                SELECT
+                    symbol,
+                    COUNT(*) AS trades,
+                    ROUND(AVG(realized_pl_pct)::numeric, 2) AS avg_pl_pct,
+                    ROUND(SUM(realized_pl)::numeric, 2) AS total_pl
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                GROUP BY symbol
+                ORDER BY total_pl DESC, avg_pl_pct DESC
+                LIMIT 25
+            """, (cutoff,))
+            by_symbol = [
+                {
+                    "symbol": r[0],
+                    "trades": int(r[1] or 0),
+                    "avg_pl_pct": float(r[2] or 0.0),
+                    "total_realized_pl": float(r[3] or 0.0),
+                }
+                for r in cur.fetchall()
+            ]
+
+            cur.execute("""
+                SELECT
+                    symbol, side, exit_time, realized_pl, realized_pl_pct, hold_duration_mins,
+                    exit_reason, strategy, market_regime, entry_rsi, entry_macd_hist_pct, entry_score
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                ORDER BY realized_pl_pct ASC NULLS LAST
+                LIMIT 20
+            """, (cutoff,))
+            biggest_losers = [
+                {
+                    "symbol": r[0],
+                    "side": r[1] or "long",
+                    "exit_time": r[2].isoformat() if r[2] else None,
+                    "realized_pl": float(r[3] or 0.0),
+                    "realized_pl_pct": float(r[4] or 0.0),
+                    "hold_duration_mins": int(r[5] or 0),
+                    "exit_reason": r[6] or "unknown",
+                    "strategy": r[7] or "unknown",
+                    "market_regime": r[8] or "unknown",
+                    "entry_rsi": float(r[9]) if r[9] is not None else None,
+                    "entry_macd_hist_pct": float(r[10]) if r[10] is not None else None,
+                    "entry_score": float(r[11]) if r[11] is not None else None,
+                }
+                for r in cur.fetchall()
+            ]
+
+        return {
+            "period_days": days,
+            "summary": {
+                "trades": trades,
+                "win_rate_pct": win_rate_pct,
+                "avg_winner_pct": avg_winner,
+                "avg_loser_pct": avg_loser,
+                "profit_factor": profit_factor,
+                "expectancy_pct": expectancy_pct,
+                "avg_hold_mins": float(avg_hold or 0.0),
+                "total_realized_pl": float(total_realized_pl or 0.0),
+            },
+            "by_strategy": by_strategy,
+            "by_symbol": by_symbol,
+            "biggest_losers": biggest_losers,
+        }
+    except Exception as e:
+        logger.warning(f"get_trade_metrics_report failed ({e})")
+        return empty
+
+
+def _bucket_rsi(value: Optional[float]) -> str:
+    if value is None:
+        return "unknown"
+    if value < 30:
+        return "<30"
+    if value < 40:
+        return "30-39"
+    if value < 50:
+        return "40-49"
+    if value < 60:
+        return "50-59"
+    if value < 70:
+        return "60-69"
+    return "70+"
+
+
+def _bucket_macd_hist_pct(value: Optional[float]) -> str:
+    if value is None:
+        return "unknown"
+    if value <= -0.50:
+        return "<=-0.50%"
+    if value <= -0.20:
+        return "-0.49% to -0.20%"
+    if value < 0.0:
+        return "-0.19% to -0.01%"
+    if value < 0.20:
+        return "0.00% to 0.19%"
+    if value < 0.50:
+        return "0.20% to 0.49%"
+    return ">=0.50%"
+
+
+def _bucket_entry_score(value: Optional[float]) -> str:
+    if value is None:
+        return "unknown"
+    if value < 50:
+        return "<50"
+    if value < 60:
+        return "50-59"
+    if value < 70:
+        return "60-69"
+    if value < 80:
+        return "70-79"
+    return "80+"
+
+
+def get_trade_diagnostics_report(days: int = 30, min_trades: int = 3) -> dict:
+    """
+    Diagnose what is driving wins and losses.
+    Groups recent closed trades by regime, exit reason, entry score, RSI bucket,
+    and MACD histogram bucket so tuning can focus on real edge.
+    """
+    empty = {
+        "period_days": days,
+        "min_trades": min_trades,
+        "by_market_regime": [],
+        "by_exit_reason": [],
+        "by_entry_score_bucket": [],
+        "by_entry_rsi_bucket": [],
+        "by_entry_macd_hist_pct_bucket": [],
+        "by_news_profile": [],
+        "by_conviction_profile": [],
+        "worst_clusters": [],
+        "best_clusters": [],
+    }
+    try:
+        conn = _get_conn()
+        if not conn:
+            return empty
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    symbol, side, realized_pl, realized_pl_pct, hold_duration_mins,
+                    exit_reason, strategy, market_regime, entry_rsi, entry_macd_hist_pct, entry_score,
+                    claude_reasoning
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                  AND realized_pl IS NOT NULL
+                  AND realized_pl_pct IS NOT NULL
+                ORDER BY exit_time DESC
+            """, (cutoff,))
+            rows = cur.fetchall()
+        if not rows:
+            return empty
+
+        def summarize(name: str, grouped: dict[str, list[tuple]]) -> list[dict]:
+            items = []
+            for key, vals in grouped.items():
+                if len(vals) < min_trades:
+                    continue
+                wins = sum(1 for v in vals if v[0] > 0)
+                gross_profit = sum(v[0] for v in vals if v[0] > 0)
+                gross_loss = abs(sum(v[0] for v in vals if v[0] < 0))
+                avg_pct = sum(v[1] for v in vals) / len(vals)
+                avg_hold = sum((v[2] or 0) for v in vals) / len(vals)
+                avg_win = sum(v[1] for v in vals if v[1] > 0) / wins if wins else 0.0
+                losses = len(vals) - wins
+                avg_loss = sum(abs(v[1]) for v in vals if v[1] < 0) / losses if losses else 0.0
+                expectancy = (wins / len(vals) * avg_win) - ((1 - wins / len(vals)) * avg_loss)
+                items.append({
+                    name: key,
+                    "trades": len(vals),
+                    "win_rate_pct": round(wins / len(vals) * 100, 2),
+                    "avg_pl_pct": round(avg_pct, 2),
+                    "avg_hold_mins": round(avg_hold, 2),
+                    "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss else 0.0,
+                    "expectancy_pct": round(expectancy, 2),
+                })
+            return sorted(items, key=lambda x: (x["expectancy_pct"], x["avg_pl_pct"]), reverse=True)
+
+        by_regime: dict[str, list[tuple]] = {}
+        by_exit_reason: dict[str, list[tuple]] = {}
+        by_score: dict[str, list[tuple]] = {}
+        by_rsi: dict[str, list[tuple]] = {}
+        by_macd: dict[str, list[tuple]] = {}
+        by_news: dict[str, list[tuple]] = {}
+        by_conviction: dict[str, list[tuple]] = {}
+        clusters: dict[str, list[tuple]] = {}
+
+        for symbol, side, realized_pl, realized_pl_pct, hold_mins, exit_reason, strategy, market_regime, entry_rsi, entry_macd_hist_pct, entry_score, claude_reasoning in rows:
+            pnl = float(realized_pl or 0.0)
+            pct = float(realized_pl_pct or 0.0)
+            hold = int(hold_mins or 0)
+            regime_key = market_regime or "unknown"
+            exit_key = exit_reason or "unknown"
+            score_key = _bucket_entry_score(float(entry_score) if entry_score is not None else None)
+            rsi_key = _bucket_rsi(float(entry_rsi) if entry_rsi is not None else None)
+            macd_key = _bucket_macd_hist_pct(float(entry_macd_hist_pct) if entry_macd_hist_pct is not None else None)
+            reasoning = claude_reasoning or ""
+            news_key = "news_event" if "NEWS_EVENT=" in reasoning else "non_news"
+            conviction_key = "rocket" if "[ROCKET]" in reasoning else "standard"
+            triple_key = f"{regime_key} | {score_key} | {exit_key}"
+            triple_val = (pnl, pct, hold)
+
+            by_regime.setdefault(regime_key, []).append(triple_val)
+            by_exit_reason.setdefault(exit_key, []).append(triple_val)
+            by_score.setdefault(score_key, []).append(triple_val)
+            by_rsi.setdefault(rsi_key, []).append(triple_val)
+            by_macd.setdefault(macd_key, []).append(triple_val)
+            by_news.setdefault(news_key, []).append(triple_val)
+            by_conviction.setdefault(conviction_key, []).append(triple_val)
+            clusters.setdefault(triple_key, []).append(triple_val)
+
+        cluster_stats = summarize("cluster", clusters)
+
+        return {
+            "period_days": days,
+            "min_trades": min_trades,
+            "by_market_regime": summarize("market_regime", by_regime),
+            "by_exit_reason": summarize("exit_reason", by_exit_reason),
+            "by_entry_score_bucket": summarize("entry_score_bucket", by_score),
+            "by_entry_rsi_bucket": summarize("entry_rsi_bucket", by_rsi),
+            "by_entry_macd_hist_pct_bucket": summarize("entry_macd_hist_pct_bucket", by_macd),
+            "by_news_profile": summarize("news_profile", by_news),
+            "by_conviction_profile": summarize("conviction_profile", by_conviction),
+            "worst_clusters": sorted(cluster_stats, key=lambda x: (x["expectancy_pct"], x["avg_pl_pct"]))[:8],
+            "best_clusters": cluster_stats[:8],
+        }
+    except Exception as e:
+        logger.warning(f"get_trade_diagnostics_report failed ({e})")
+        return empty
+
+
+def _extract_setup_tag(reasoning: str, strategy: str = None, side: str = None) -> str:
+    import re
+    text = reasoning or ""
+    match = re.search(r"\[STRATEGY:([A-Za-z0-9_\-]+)\]", text)
+    return match.group(1) if match else (strategy or f"{side or 'trade'}_unknown")
+
+
+def get_predictive_trade_priors(
+    symbols: list[str],
+    market_regime: str | None = None,
+    days: int = 180,
+    min_symbol_trades: int = 2,
+    min_context_trades: int = 5,
+) -> dict:
+    """
+    Build lightweight predictive priors from realized closed trades.
+    Returns side-aware symbol expectancy plus broader setup/regime/news/conviction priors.
+    """
+    empty = {
+        "symbol_side": {},
+        "symbol_regime_side": {},
+        "setup": {},
+        "regime_side": {},
+        "news_profile": {},
+        "conviction_profile": {},
+    }
+    try:
+        conn = _get_conn()
+        if not conn or not symbols:
+            return empty
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, side, realized_pl_pct, strategy, claude_reasoning, market_regime
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                  AND exit_time >= %s
+                  AND realized_pl_pct IS NOT NULL
+            """, (cutoff,))
+            rows = cur.fetchall()
+        if not rows:
+            return empty
+
+        def _pack(values: list[float], min_trades: int) -> dict | None:
+            if len(values) < min_trades:
+                return None
+            wins = sum(1 for v in values if v > 0)
+            avg = sum(values) / len(values)
+            avg_win = sum(v for v in values if v > 0) / wins if wins else 0.0
+            losses = len(values) - wins
+            avg_loss = sum(abs(v) for v in values if v < 0) / losses if losses else 0.0
+            expectancy = (wins / len(values) * avg_win) - ((1 - wins / len(values)) * avg_loss)
+            return {
+                "trades": len(values),
+                "win_rate_pct": round(wins / len(values) * 100, 2),
+                "avg_pl_pct": round(avg, 2),
+                "expectancy_pct": round(expectancy, 2),
+            }
+
+        symbol_side_vals: dict[str, list[float]] = {}
+        symbol_regime_side_vals: dict[str, list[float]] = {}
+        setup_vals: dict[str, list[float]] = {}
+        regime_side_vals: dict[str, list[float]] = {}
+        news_vals: dict[str, list[float]] = {}
+        conviction_vals: dict[str, list[float]] = {}
+        wanted = {s.upper() for s in symbols}
+
+        for symbol, side, pl_pct, strategy, reasoning, regime in rows:
+            sym = (symbol or "").upper()
+            trade_side = (side or "long").lower()
+            pct = float(pl_pct or 0.0)
+            setup = _extract_setup_tag(reasoning, strategy=strategy, side=trade_side)
+            news_key = "news_event" if "NEWS_EVENT=" in (reasoning or "") else "non_news"
+            conviction_key = "rocket" if "[ROCKET]" in (reasoning or "") else "standard"
+            regime_key = regime or "unknown"
+
+            setup_vals.setdefault(setup, []).append(pct)
+            regime_side_vals.setdefault(f"{regime_key}|{trade_side}", []).append(pct)
+            news_vals.setdefault(news_key, []).append(pct)
+            conviction_vals.setdefault(conviction_key, []).append(pct)
+
+            if sym in wanted:
+                symbol_side_vals.setdefault(f"{sym}|{trade_side}", []).append(pct)
+                symbol_regime_side_vals.setdefault(f"{sym}|{regime_key}|{trade_side}", []).append(pct)
+
+        result = {
+            "symbol_side": {},
+            "symbol_regime_side": {},
+            "setup": {},
+            "regime_side": {},
+            "news_profile": {},
+            "conviction_profile": {},
+        }
+        for key, vals in symbol_side_vals.items():
+            packed = _pack(vals, min_symbol_trades)
+            if packed:
+                result["symbol_side"][key] = packed
+        for key, vals in symbol_regime_side_vals.items():
+            packed = _pack(vals, min_symbol_trades)
+            if packed:
+                result["symbol_regime_side"][key] = packed
+        for key, vals in setup_vals.items():
+            packed = _pack(vals, min_context_trades)
+            if packed:
+                result["setup"][key] = packed
+        for key, vals in regime_side_vals.items():
+            packed = _pack(vals, min_context_trades)
+            if packed:
+                result["regime_side"][key] = packed
+        for key, vals in news_vals.items():
+            packed = _pack(vals, min_context_trades)
+            if packed:
+                result["news_profile"][key] = packed
+        for key, vals in conviction_vals.items():
+            packed = _pack(vals, min_context_trades)
+            if packed:
+                result["conviction_profile"][key] = packed
+        return result
+    except Exception as e:
+        logger.warning(f"get_predictive_trade_priors failed ({e})")
+        return empty
+
+
 def get_trade_learning_summary(limit: int = 80) -> dict:
     """
     Summarize recent closed-trade outcomes by setup tag and market regime.
@@ -710,7 +1172,6 @@ def get_trade_learning_summary(limit: int = 80) -> dict:
         "lessons": [],
     }
     try:
-        import re
         conn = _get_conn()
         if not conn:
             return empty
@@ -730,9 +1191,7 @@ def get_trade_learning_summary(limit: int = 80) -> dict:
         by_setup: dict[str, list[float]] = {}
         by_regime: dict[str, list[float]] = {}
         for symbol, side, pl_pct, strategy, reasoning, regime in rows:
-            text = reasoning or ""
-            match = re.search(r"\[STRATEGY:([A-Za-z0-9_\-]+)\]", text)
-            setup = match.group(1) if match else (strategy or f"{side or 'trade'}_unknown")
+            setup = _extract_setup_tag(reasoning, strategy=strategy, side=side)
             by_setup.setdefault(setup, []).append(float(pl_pct or 0))
             by_regime.setdefault(regime or "unknown", []).append(float(pl_pct or 0))
 

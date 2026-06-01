@@ -9,6 +9,121 @@ from services.ai_client import ask_ai, ask_ai_pro, parse_ai_json
 
 logger = logging.getLogger(__name__)
 
+
+def _predictive_side_from_action(action: str) -> str:
+    return "short" if action == "short" else "long"
+
+
+def _predictive_boost(expectancy_pct: float, trades: int) -> float:
+    if trades <= 0:
+        return 0.0
+    sample_mult = min(trades, 8) / 8.0
+    return max(-12.0, min(12.0, expectancy_pct * 6.0 * sample_mult))
+
+
+def _pre_rank_market_snapshot(
+    market_snapshot: dict,
+    sentiment: dict | None = None,
+    sector_context: dict | None = None,
+    macro: dict | None = None,
+    earnings_map: dict | None = None,
+) -> tuple[list[str], list[str], dict]:
+    """
+    Deterministic pre-ranker for Step 1.
+    Reduces prompt noise by surfacing the best long and short candidates before the LLM scans them.
+    """
+    regime = (macro or {}).get("market_regime", "")
+    spy_trend = (macro or {}).get("spy_trend", "")
+    vix_level = (macro or {}).get("vix_level", "normal")
+    is_bull = regime in ("bull", "bullish") and "uptrend" in (spy_trend or "")
+    is_bear = regime in ("bear", "bearish") or "downtrend" in (spy_trend or "")
+
+    long_scores: list[tuple[float, str]] = []
+    short_scores: list[tuple[float, str]] = []
+    details: dict[str, dict] = {}
+
+    for sym, data in market_snapshot.items():
+        closes = data.get("closing_prices", [])
+        if not closes:
+            continue
+        indicators = compute_all(closes)
+        rsi = indicators.get("rsi")
+        macd_hist = (indicators.get("macd") or {}).get("histogram")
+        price = data.get("current_price") or 0
+        rel_vol = float(data.get("relative_volume", 1.0) or 1.0)
+        five_day = float(data.get("five_day_change_pct", 0.0) or 0.0)
+        news_count = float((sentiment or {}).get(sym, 0) or 0)
+        earnings_timing = (earnings_map or {}).get(sym)
+        sector = (sector_context or {}).get(sym, {})
+        sector_pct = float(sector.get("sector_pct", 0.0) or 0.0)
+
+        long_score = 50.0
+        short_score = 50.0
+
+        long_score += min(max(rel_vol - 1.0, 0.0), 3.0) * 7.0
+        short_score += min(max(rel_vol - 1.0, 0.0), 3.0) * 5.0
+
+        long_score += min(max(five_day, -4.0), 12.0) * 1.3
+        short_score += min(max(-five_day, -4.0), 12.0) * 1.0
+
+        long_score += min(news_count, 8.0) * 2.0
+        short_score += min(news_count, 8.0) * 1.5
+
+        long_score += sector_pct * 2.0
+        short_score += (-sector_pct) * 1.8
+
+        if isinstance(rsi, (int, float)):
+            if 48 <= rsi <= 72:
+                long_score += 8.0
+            elif rsi > 82:
+                long_score -= 10.0
+            elif rsi < 35:
+                long_score += 2.0
+
+            if rsi >= 68:
+                short_score += min((rsi - 68.0) * 1.8, 18.0)
+            elif rsi < 60:
+                short_score -= 10.0
+
+        if isinstance(macd_hist, (int, float)) and price > 0:
+            macd_hist_pct = (macd_hist / price) * 100
+            long_score += min(max(macd_hist_pct, -0.2), 0.5) * 28.0
+            short_score += min(max(-macd_hist_pct, -0.2), 0.5) * 28.0
+        else:
+            macd_hist_pct = None
+
+        if earnings_timing == "today/tomorrow":
+            long_score -= 35.0
+            short_score -= 35.0
+        elif earnings_timing == "this_week":
+            long_score -= 8.0
+            short_score -= 8.0
+
+        if is_bull:
+            long_score += 6.0
+            short_score -= 8.0
+        elif is_bear:
+            long_score -= 6.0
+            short_score += 6.0
+
+        if vix_level in ("elevated", "extreme_fear"):
+            long_score -= 4.0
+            short_score += 2.0
+
+        details[sym] = {
+            "long_score": round(long_score, 2),
+            "short_score": round(short_score, 2),
+            "rsi": rsi,
+            "macd_hist_pct": round(macd_hist_pct, 3) if macd_hist_pct is not None else None,
+            "relative_volume": rel_vol,
+        }
+        long_scores.append((long_score, sym))
+        short_scores.append((short_score, sym))
+
+    long_symbols = [sym for _, sym in sorted(long_scores, reverse=True)[:26]]
+    short_symbols = [sym for _, sym in sorted(short_scores, reverse=True)[:14]]
+    return long_symbols, short_symbols, details
+
 def _get_watchlist() -> list[str]:
     from routers.watchlist import load_watchlist
     return load_watchlist()
@@ -135,6 +250,75 @@ def analyze_and_decide(
     current_strategy = strategy_service.get_strategy()
     max_position = effective_portfolio * current_strategy["max_position_pct"]
 
+    ranked_longs, ranked_shorts, pre_rank_details = _pre_rank_market_snapshot(
+        market_snapshot=market_snapshot,
+        sentiment=sentiment,
+        sector_context=sector_context,
+        macro=macro,
+        earnings_map=earnings_map,
+    )
+    pre_rank_symbols = []
+    for sym in ranked_longs + ranked_shorts:
+        if sym not in pre_rank_symbols:
+            pre_rank_symbols.append(sym)
+    if pre_rank_symbols:
+        market_snapshot = {sym: market_snapshot[sym] for sym in pre_rank_symbols if sym in market_snapshot}
+        logger.info(
+            f"Step 1 pre-ranker shortlisted {len(market_snapshot)} symbols | "
+            f"top longs: {ranked_longs[:6]} | top shorts: {ranked_shorts[:4]}"
+        )
+
+    predictive_priors = {}
+    try:
+        from services.db import get_predictive_trade_priors
+        predictive_priors = get_predictive_trade_priors(
+            symbols=list(market_snapshot.keys())[:40],
+            market_regime=(macro or {}).get("market_regime"),
+            days=180,
+        )
+    except Exception as pred_exc:
+        logger.debug(f"Predictive priors unavailable (non-fatal): {pred_exc}")
+
+    current_regime = (macro or {}).get("market_regime") or "unknown"
+    for sym, detail in pre_rank_details.items():
+        long_regime_key = f"{sym}|{current_regime}|long"
+        short_regime_key = f"{sym}|{current_regime}|short"
+        long_key = f"{sym}|long"
+        short_key = f"{sym}|short"
+        long_prior = (
+            predictive_priors.get("symbol_regime_side", {}).get(long_regime_key)
+            or predictive_priors.get("symbol_side", {}).get(long_key)
+        )
+        short_prior = (
+            predictive_priors.get("symbol_regime_side", {}).get(short_regime_key)
+            or predictive_priors.get("symbol_side", {}).get(short_key)
+        )
+        if long_prior:
+            detail["long_predictive_expectancy_pct"] = long_prior["expectancy_pct"]
+            detail["long_predictive_trades"] = long_prior["trades"]
+            detail["long_score"] += _predictive_boost(long_prior["expectancy_pct"], long_prior["trades"])
+        if short_prior:
+            detail["short_predictive_expectancy_pct"] = short_prior["expectancy_pct"]
+            detail["short_predictive_trades"] = short_prior["trades"]
+            detail["short_score"] += _predictive_boost(short_prior["expectancy_pct"], short_prior["trades"])
+
+    ranked_longs = sorted(
+        [sym for sym in market_snapshot.keys()],
+        key=lambda sym: pre_rank_details.get(sym, {}).get("long_score", 0.0),
+        reverse=True,
+    )[:26]
+    ranked_shorts = sorted(
+        [sym for sym in market_snapshot.keys()],
+        key=lambda sym: pre_rank_details.get(sym, {}).get("short_score", 0.0),
+        reverse=True,
+    )[:14]
+    reordered_symbols = []
+    for sym in ranked_longs + ranked_shorts:
+        if sym not in reordered_symbols and sym in market_snapshot:
+            reordered_symbols.append(sym)
+    if reordered_symbols:
+        market_snapshot = {sym: market_snapshot[sym] for sym in reordered_symbols}
+
     positions_text = "\n".join([
         f"  - {p.symbol} [{getattr(p, 'side', 'long').upper()}]: {p.qty} shares @ avg ${p.avg_entry_price:.2f}, "
         f"current ${p.current_price:.2f}, P&L: ${p.unrealized_pl:.2f} ({p.unrealized_pl_percent:.1f}%)"
@@ -158,6 +342,25 @@ def analyze_and_decide(
 
         rel_vol = data.get("relative_volume", 1.0)
         vol_flag = f" [VOL:{rel_vol:.1f}x]" if rel_vol >= 1.5 else ""
+        pre_rank = pre_rank_details.get(sym, {})
+        rank_flag = ""
+        if pre_rank:
+            rank_flag = (
+                f" [RANK:L{int(round(pre_rank.get('long_score', 0)))}"
+                f"/S{int(round(pre_rank.get('short_score', 0)))}]"
+            )
+        pred_flag = ""
+        _lp = pre_rank.get("long_predictive_expectancy_pct")
+        _lt = int(pre_rank.get("long_predictive_trades", 0) or 0)
+        _sp = pre_rank.get("short_predictive_expectancy_pct")
+        _st = int(pre_rank.get("short_predictive_trades", 0) or 0)
+        if _lt >= 2 or _st >= 2:
+            pred_flag = (
+                f" [PRED:L{_lp:+.2f}%/{_lt}t" if _lt >= 2 and _lp is not None else " [PRED:Ln/a"
+            )
+            pred_flag += (
+                f" S{_sp:+.2f}%/{_st}t]" if _st >= 2 and _sp is not None else " Sn/a]"
+            )
 
         line = (
             f"  - {sym}{penny_flag}{sentiment_flag}{earnings_flag}: ${price}, "
@@ -165,7 +368,7 @@ def analyze_and_decide(
             f"RSI: {rsi}, "
             f"MACD hist: {macd.get('histogram', 'N/A')}, "
             f"MA20: ${mas.get('ma20', 'N/A')}, MA50: ${mas.get('ma50', 'N/A')}"
-            f"{vol_flag}"
+            f"{vol_flag}{rank_flag}{pred_flag}"
         )
 
         if sector_context and sym in sector_context:
@@ -215,6 +418,30 @@ Note: Avoid re-entering worst symbols unless fundamentals have materially change
 {chr(10).join(learning_lines)}
 {f"- Frequently rejected symbols today: {rejected_syms}" if rejected_syms else ""}
 Use this as a quality filter, not a reason to sit idle: rotate toward setups that are working and replace rejected patterns with better candidates.
+"""
+        regime_side = predictive_priors.get("regime_side", {})
+        news_profiles = predictive_priors.get("news_profile", {})
+        conviction_profiles = predictive_priors.get("conviction_profile", {})
+        setup_profiles = predictive_priors.get("setup", {})
+        if regime_side or news_profiles or conviction_profiles:
+            _reg_long = regime_side.get(f"{current_regime}|long")
+            _reg_short = regime_side.get(f"{current_regime}|short")
+            _news = news_profiles.get("news_event")
+            _non_news = news_profiles.get("non_news")
+            _rocket = conviction_profiles.get("rocket")
+            _standard = conviction_profiles.get("standard")
+            _best_setup = None
+            _worst_setup = None
+            if setup_profiles:
+                _best_setup = max(setup_profiles.items(), key=lambda kv: kv[1]["expectancy_pct"])
+                _worst_setup = min(setup_profiles.items(), key=lambda kv: kv[1]["expectancy_pct"])
+            performance_text += f"""
+## Predictive Priors (trained on your closed trades)
+- Regime prior now: long {(_reg_long or {}).get('expectancy_pct', 'n/a')}% expectancy / short {(_reg_short or {}).get('expectancy_pct', 'n/a')}% expectancy in {current_regime}
+- News trades: {(_news or {}).get('expectancy_pct', 'n/a')}% expectancy vs non-news: {(_non_news or {}).get('expectancy_pct', 'n/a')}%
+- Rocket trades: {(_rocket or {}).get('expectancy_pct', 'n/a')}% expectancy vs standard: {(_standard or {}).get('expectancy_pct', 'n/a')}%
+- Best setup prior: {_best_setup[0] if _best_setup else 'n/a'} ({_best_setup[1]['expectancy_pct']}%) | Worst setup prior: {_worst_setup[0] if _worst_setup else 'n/a'} ({_worst_setup[1]['expectancy_pct']}%)
+Use these priors as a tie-breaker and conviction guide. Avoid forcing setups with clearly negative expectancy unless fresh evidence is unusually strong.
 """
     except Exception:
         pass
@@ -387,7 +614,7 @@ Factor these into your trade approvals — confirm or override based on today's 
             _cached_events: dict[str, list[str]] = {}
             try:
                 from services.news_stream import get_cached_news as _gcn
-                for _art in _gcn(limit=150, max_age_minutes=240):
+                for _art in _gcn(limit=150, max_age_minutes=90):
                     for _s in (_art.get("symbols") or []):
                         if _s not in _cached_events:
                             _cached_events[_s] = []
@@ -402,10 +629,10 @@ Factor these into your trade approvals — confirm or override based on today's 
                 _catalyst_lines.append(f"  • {_sym}: {_cnt} mentions{_evt_str}")
 
             top_news_block = f"""
-## 🔥 Top News Catalysts RIGHT NOW (MUST evaluate these first)
+## 🔥 Top News Catalysts RIGHT NOW
 These symbols have the highest news activity this cycle — they may have analyst upgrades, partnerships, earnings, or major announcements driving them. Check each one's technicals and include the strongest setups in your candidate pool:
 {chr(10).join(_catalyst_lines)}
-Do NOT skip these without explicitly considering their signals. A stock with high news volume + confirming technicals (RSI not overbought, MACD positive) is a high-priority candidate.
+Evaluate these early, but skip them if price, volume, and momentum do not confirm the headline.
 """
     except Exception:
         pass
@@ -441,6 +668,7 @@ Do NOT skip these without explicitly considering their signals. A stock with hig
 
 Scan the stocks above. Identify separate candidate pools based on technicals and macro context.
 Current market tier: {_market_tier.upper()} → nominate TOP {_long_count} long candidates + TOP {_short_count} short candidates (total 10).
+- [RANK:Lx/Sy] is the deterministic pre-ranker score. Higher = stronger fit. Use it as a strong prior, but override it when fresh catalyst or technical context clearly says otherwise.
 - BULL tier: favor longs and leveraged ETFs — short slots are scarce, only the most obvious overextensions qualify
 - NEUTRAL tier: balanced mix — shorts need clear overbought signals
 - BEAR tier: favor inverse ETFs and short candidates — more short setups available
@@ -514,7 +742,7 @@ EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL",
     realtime_news_by_symbol = {}
     try:
         from services.news_stream import get_cached_news
-        for article in get_cached_news(limit=100, max_age_minutes=180):
+        for article in get_cached_news(limit=100, max_age_minutes=90):
             for news_sym in article.get("symbols") or []:
                 realtime_news_by_symbol.setdefault(news_sym, []).append(article)
     except Exception:
@@ -570,16 +798,16 @@ EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL",
 
     default_tp = current_strategy.get("default_take_profit_pct", 0.10)
     default_sl = current_strategy.get("default_stop_loss_pct", 0.04)
-    max_ai_trades = 5 if current_strategy.get("key") == "aggressive" else 3
+    max_ai_trades = 4 if current_strategy.get("key") == "aggressive" else 3
     min_trade_instruction = (
-        "MUST approve 2-5 trades when at least 2 candidates have tradable signals; idle cash is a failure."
+        "Approve only A- or B-grade setups. Holding cash is acceptable when signals are mixed, crowded, or low-quality."
         if current_strategy.get("key") == "aggressive"
-        else "MUST approve at least 1 trade if any candidate has medium+ signal."
+        else "Approve trades only when setup quality is clearly sufficient."
     )
     positions_count = len(positions)
     cash_pct = (effective_cash / effective_portfolio * 100) if effective_portfolio > 0 else 0
 
-    pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
+    pressure_note = "\n⚠️ AFTERNOON CHECK: Activity has been light today. If a clean setup exists, don't ignore it, but do NOT force a trade just to increase count.\n" if afternoon_pressure else ""
 
     # ── Urgent news context — injected when a high-impact headline woke this cycle early ──
     urgent_news_note = ""
@@ -590,9 +818,9 @@ EXAMPLE (copy this structure exactly): {{"long_candidates": [{{"symbol": "AAPL",
             reason = n.get("reason", "")[:200]
             news_lines.append(f"  • [{symbols_str}] {reason}")
         urgent_news_note = f"""
-⚡ URGENT NEWS TRIGGER — This cycle was woken early by high-impact news. Prioritize the affected symbols.
+⚡ URGENT NEWS TRIGGER — This cycle was woken early by high-impact news. Evaluate the affected symbols early.
 {chr(10).join(news_lines)}
-Treat these events as high-priority evidence. Evaluate the affected symbols first — if the setup confirms the news direction, approve the trade with higher confidence.
+Treat these events as important context, not automatic trades. Only approve when price, volume, and momentum confirm the news direction.
 """
 
     # ── Rotation context: assess each held position for momentum strength ──
@@ -646,7 +874,7 @@ ROTATION RULES:
 - Max 1 rotation per cycle (1 sell + 1 buy)
 """
 
-    step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 1-{max_ai_trades} trades this cycle.
+    step2_prompt = f"""You are building a high-performance trading portfolio that profits in ANY market direction. Evaluate EACH candidate and approve the best 0-{max_ai_trades} trades this cycle.
 {pressure_note}{urgent_news_note}{regime_direction_note}
 {eod_step2_context}{performance_text}
 {portfolio_context}
@@ -670,6 +898,10 @@ Rules:
 - In bearish regime: prioritize inverse ETF buys first; use individual stock shorts only when the bearish setup is unusually clear
 - If geo risk is HIGH: only approve inverse ETFs, short sells, or safe havens
 - {min_trade_instruction}
+- Do NOT trade just to stay active. Skip mediocre setups even in aggressive mode.
+- Prefer fewer high-quality trades over multiple average trades.
+- Avoid rotating or re-entering a symbol unless the new setup is clearly better than the previous one.
+- Mark high_conviction=true only for rare A+ setups: fresh catalyst or breakout, high relative volume, strong trend alignment, and unusually asymmetric upside/downside.
 - Treat NEWS_EVENT as high-priority evidence. Bullish high-impact events favor BUY; bearish high-impact events usually favor inverse ETF BUY or SELL first, and SHORT only when price/volume confirms downside.
 
 For LONG trades:
@@ -682,7 +914,7 @@ For SHORT trades:
 - partial_exit: cover 50% at first target, let rest ride
 
 Respond in valid JSON only, no markdown — only include approved trades (put any sell/rotation BEFORE the buy):
-{{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
+{{"trades": [{{"symbol": "X", "action": "buy|short|sell", "confidence": "high|medium|low", "high_conviction": boolean, "quantity_suggestion": integer, "take_profit_pct": float, "stop_loss_pct": float, "partial_exit": boolean, "analysis": "2 sentences: catalyst + why long/short/sell"}}], "skipped": "brief reason"}}"""
 
     # ── Inject override into step2 ───────────────────────────────────────────
     # step1 override was already injected above before it was sent.
@@ -731,6 +963,7 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
         action = trade.get("action", "hold")
         confidence = trade.get("confidence", "medium")
         qty_suggestion = trade.get("quantity_suggestion")
+        high_conviction = bool(trade.get("high_conviction", False))
 
         def _strategy_tag(symbol: str, action_value: str, raw_signal: str) -> str:
             signal = (raw_signal or "").lower()
@@ -758,6 +991,14 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             return "long_momentum"
 
         signal_for_trade = next((o.get("signal", "") for o in opportunities if o.get("symbol") == sym), "")
+        predictive_side = _predictive_side_from_action(action)
+        predictive_detail = pre_rank_details.get(sym, {})
+        predictive_expectancy_pct = predictive_detail.get(
+            "short_predictive_expectancy_pct" if predictive_side == "short" else "long_predictive_expectancy_pct"
+        )
+        predictive_trades = int(predictive_detail.get(
+            "short_predictive_trades" if predictive_side == "short" else "long_predictive_trades", 0
+        ) or 0)
 
         # Sanitize pct fields — Claude occasionally returns "15%" (string with %) or null.
         # A raw float("15%") raises ValueError which would crash the entire loop and
@@ -977,7 +1218,8 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             continue
 
         reasoning = (
-            f"[{confidence.upper()}][STRATEGY:{_strategy_tag(sym, action, signal_for_trade)}] {analysis} "
+            f"[{confidence.upper()}]{'[ROCKET]' if high_conviction else ''}[STRATEGY:{_strategy_tag(sym, action, signal_for_trade)}] {analysis} "
+            f"{f'[PRED:{predictive_expectancy_pct:+.2f}%/{predictive_trades}t] ' if predictive_expectancy_pct is not None and predictive_trades >= 2 else ''}"
             f"TP={take_profit_pct*100:.0f}% | SL={stop_loss_pct*100:.0f}%"
             f"{' | partial exit' if partial_exit else ''}."
         )
@@ -989,6 +1231,9 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             take_profit_pct=take_profit_pct,
             stop_loss_pct=stop_loss_pct,
             partial_exit=partial_exit,
+            high_conviction=high_conviction,
+            predictive_expectancy_pct=predictive_expectancy_pct,
+            predictive_trades=predictive_trades,
         ))
         logger.info(f"Approved: {action.upper()} {sym} x{final_qty} | TP={take_profit_pct*100:.0f}% SL={stop_loss_pct*100:.0f}%")
 

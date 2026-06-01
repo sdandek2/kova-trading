@@ -140,3 +140,31 @@ def get_performance():
             "spy_return_1m": None,
             "alpha": None,
         }
+
+
+@router.get("/report")
+def get_performance_report(days: int = 30):
+    from services.db import get_trade_metrics_report
+    return get_trade_metrics_report(days=days)
+
+
+@router.get("/diagnostics")
+def get_performance_diagnostics(days: int = 30, min_trades: int = 3):
+    from services.db import get_trade_diagnostics_report
+    return get_trade_diagnostics_report(days=days, min_trades=min_trades)
+
+
+@router.get("/replay")
+def get_performance_replay(
+    days: int = 180,
+    min_prior_trades: int = 3,
+    negative_cutoff: float = -0.35,
+    positive_boost_cutoff: float = 0.35,
+):
+    from services.replay_service import run_trade_replay
+    return run_trade_replay(
+        days=days,
+        min_prior_trades=min_prior_trades,
+        negative_cutoff=negative_cutoff,
+        positive_boost_cutoff=positive_boost_cutoff,
+    )

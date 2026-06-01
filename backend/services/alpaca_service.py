@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -14,6 +15,7 @@ from models.account import AccountInfo
 from models.trade import Position, Order
 
 logger = logging.getLogger(__name__)
+_NY_TZ = ZoneInfo("America/New_York")
 
 trading_client = TradingClient(
     settings.alpaca_api_key,
@@ -33,6 +35,7 @@ def get_account() -> AccountInfo:
     prev_value = float(account.last_equity)
     day_pl = portfolio_value - prev_value
     day_pl_percent = (day_pl / prev_value * 100) if prev_value else 0.0
+    raw_cash = float(account.cash)
 
     # daytrading_buying_power is only set on margin accounts subject to PDT rules.
     # On cash accounts it's 0 or None — fall back to 0 safely.
@@ -43,9 +46,11 @@ def get_account() -> AccountInfo:
 
     return AccountInfo(
         portfolio_value=portfolio_value,
-        cash=float(account.cash),
+        cash=raw_cash,
         buying_power=float(account.buying_power),
         daytrading_buying_power=dt_bp,
+        tradeable_cash=max(0.0, min(raw_cash, dt_bp)) if dt_bp > 0 else max(0.0, raw_cash),
+        raw_cash=raw_cash,
         day_pl=day_pl,
         day_pl_percent=round(day_pl_percent, 2),
     )
@@ -99,6 +104,7 @@ def submit_market_order(
     stop_loss_pct: float = 0.05,
     take_profit_pct: float = 0.15,
     partial_exit: bool = False,
+    high_conviction: bool = False,
 ) -> Optional[Order]:
     from alpaca.trading.requests import TakeProfitRequest, TrailingStopOrderRequest, LimitOrderRequest
     from alpaca.trading.enums import OrderClass
@@ -124,85 +130,76 @@ def submit_market_order(
             if ask_price <= 0:
                 raise ValueError(f"Invalid ask price for {symbol}: {ask_price} — using plain market order")
 
-            # ── LIMIT ORDER: midpoint + 0.2% buffer ──
-            # Avoids paying full ask spread while still getting filled in normal conditions.
-            # 0.2% buffer ensures we're competitive without overpaying on wide-spread stocks.
             midpoint = round((bid_price + ask_price) / 2, 2) if bid_price > 0 else ask_price
-            limit_price = round(midpoint * 1.002, 2)  # 0.2% above midpoint
-            current_price = ask_price  # use ask for TP/SL calculation
+            limit_price = round(midpoint * 1.002, 2)
+            current_price = midpoint if midpoint > 0 else ask_price
 
             take_profit_price = round(current_price * (1 + take_profit_pct), 2)
             stop_price = round(current_price * (1 - stop_loss_pct), 2)
 
             if partial_exit and qty >= 2:
-                # ── Partial exit strategy: sell half at TP, let other half ride with trailing stop ──
-                # Buy with limit order for better fill
-                buy_req = LimitOrderRequest(
-                    symbol=symbol,
-                    qty=qty,
-                    side=order_side,
-                    time_in_force=TimeInForce.DAY,
-                    limit_price=limit_price,
-                )
+                # High-conviction breakouts get a market entry so we catch the move first;
+                # calmer names still use a limit to reduce slippage.
+                if high_conviction:
+                    buy_req = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=order_side,
+                        time_in_force=TimeInForce.DAY,
+                    )
+                else:
+                    buy_req = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=order_side,
+                        time_in_force=TimeInForce.DAY,
+                        limit_price=limit_price,
+                    )
                 order = trading_client.submit_order(buy_req)
-                logger.info(f"Partial-exit limit buy: {qty} {symbol} @ limit ${limit_price:.2f} (ask ${ask_price:.2f})")
+                logger.info(
+                    f"Partial-exit {'market' if high_conviction else 'limit'} buy: "
+                    f"{qty} {symbol} @ ref ${current_price:.2f}"
+                )
 
-                half_qty = qty // 2
-                remaining_qty = qty - half_qty
-
-                # Only place sell legs if the buy actually filled.
-                # Alpaca trailing stops require GTC (DAY is rejected with HTTP 422).
-                # If we placed GTC sell orders before the buy fills, they could
-                # execute independently and open an unintended short position.
-                # By gating on fill confirmation we guarantee the shares exist first.
                 buy_filled = order.filled_avg_price is not None or str(order.status) == "filled"
                 if buy_filled:
-                    # First half: limit sell at TP price (DAY — expires if not hit today)
-                    try:
-                        limit_sell = LimitOrderRequest(
-                            symbol=symbol,
-                            qty=half_qty,
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.DAY,
-                            limit_price=take_profit_price,
-                        )
-                        trading_client.submit_order(limit_sell)
-                        logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
-                    except Exception as e:
-                        logger.warning(f"Partial limit sell failed (non-fatal): {e}")
-
-                    # Second half: trailing stop — MUST use GTC (Alpaca rejects DAY for trailing stops)
-                    try:
-                        trail_req = TrailingStopOrderRequest(
-                            symbol=symbol,
-                            qty=remaining_qty,
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.GTC,
-                            trail_percent=stop_loss_pct * 100,
-                        )
-                        trading_client.submit_order(trail_req)
-                        logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
-                    except Exception as e:
-                        logger.warning(f"Trailing stop failed (non-fatal): {e}")
+                    fill_basis = float(order.filled_avg_price or current_price)
+                    ensure_partial_exit_orders(
+                        symbol=symbol,
+                        qty=qty,
+                        entry_price=fill_basis,
+                        take_profit_pct=take_profit_pct,
+                        stop_loss_pct=stop_loss_pct,
+                    )
                 else:
                     logger.info(f"Partial-exit buy for {symbol} not yet filled — sell legs deferred until fill confirmed")
 
             else:
-                # ── Standard exit: LIMIT BRACKET order (limit entry + TP + SL) ──
-                # Limit order gets better fills than market; bracket legs protect the position.
-                bracket_req = LimitOrderRequest(
-                    symbol=symbol,
-                    qty=qty,
-                    side=order_side,
-                    time_in_force=TimeInForce.DAY,
-                    order_class=OrderClass.BRACKET,
-                    limit_price=limit_price,
-                    take_profit=TakeProfitRequest(limit_price=take_profit_price),
-                    stop_loss=StopLossRequest(stop_price=stop_price),
-                )
+                if high_conviction:
+                    bracket_req = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=order_side,
+                        time_in_force=TimeInForce.DAY,
+                        order_class=OrderClass.BRACKET,
+                        take_profit=TakeProfitRequest(limit_price=take_profit_price),
+                        stop_loss=StopLossRequest(stop_price=stop_price),
+                    )
+                else:
+                    bracket_req = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=order_side,
+                        time_in_force=TimeInForce.DAY,
+                        order_class=OrderClass.BRACKET,
+                        limit_price=limit_price,
+                        take_profit=TakeProfitRequest(limit_price=take_profit_price),
+                        stop_loss=StopLossRequest(stop_price=stop_price),
+                    )
                 order = trading_client.submit_order(bracket_req)
                 logger.info(
-                    f"Limit bracket buy: {qty} {symbol} @ limit ${limit_price:.2f} (ask ${ask_price:.2f}) | "
+                    f"{'Market' if high_conviction else 'Limit'} bracket buy: {qty} {symbol} "
+                    f"@ ref ${current_price:.2f} | "
                     f"TP: ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%) | "
                     f"SL: ${stop_price:.2f} (-{stop_loss_pct*100:.0f}%)"
                 )
@@ -275,10 +272,11 @@ def submit_short_order(
     qty: int,
     stop_loss_pct: float = 0.05,
     take_profit_pct: float = 0.12,
+    high_conviction: bool = False,
 ) -> Optional[Order]:
     """
     Open a short position: sell shares we don't own, profiting as price falls.
-    - Entry: limit sell just below midpoint (competitive fill)
+    - Entry: marketable on high-conviction downside, otherwise limit sell just below midpoint
     - Take profit: GTC limit buy at cover price (lock in gain when price falls)
     - Stop loss: monitored by trading engine per cycle (avoids Alpaca stop complexity)
     """
@@ -296,17 +294,24 @@ def submit_short_order(
         entry_limit = round(midpoint * 0.998, 2)          # 0.2% below mid — fill aggressively
         cover_target = round(midpoint * (1 - take_profit_pct), 2)   # buy to cover at profit
 
-        # Short entry: limit sell
-        entry_req = LimitOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            limit_price=entry_limit,
-        )
+        if high_conviction:
+            entry_req = MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+        else:
+            entry_req = LimitOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+                limit_price=entry_limit,
+            )
         order = trading_client.submit_order(entry_req)
         logger.info(
-            f"SHORT {symbol} x{qty} @ limit ${entry_limit:.2f} | "
+            f"SHORT {symbol} x{qty} @ {'market' if high_conviction else f'limit ${entry_limit:.2f}'} | "
             f"cover target ${cover_target:.2f} (-{take_profit_pct*100:.0f}%) | "
             f"stop +{stop_loss_pct*100:.0f}% (engine-monitored)"
         )
@@ -342,6 +347,67 @@ def submit_short_order(
         return None
 
 
+def ensure_partial_exit_orders(
+    symbol: str,
+    qty: int,
+    entry_price: float,
+    take_profit_pct: float,
+    stop_loss_pct: float,
+) -> bool:
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, TrailingStopOrderRequest
+
+    if qty < 2 or entry_price <= 0:
+        return False
+
+    try:
+        open_orders = trading_client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=200))
+        existing_exit_orders = [
+            o for o in open_orders
+            if o.symbol == symbol and getattr(o.side, "value", o.side) == OrderSide.SELL.value
+        ]
+        if existing_exit_orders:
+            logger.info(f"Partial-exit orders already present for {symbol} — skipping duplicate legs")
+            return False
+    except Exception as e:
+        logger.warning(f"Could not inspect existing exit orders for {symbol}: {e}")
+
+    take_profit_price = round(entry_price * (1 + take_profit_pct), 2)
+    half_qty = qty // 2
+    remaining_qty = qty - half_qty
+    placed_any = False
+
+    try:
+        limit_sell = LimitOrderRequest(
+            symbol=symbol,
+            qty=half_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=take_profit_price,
+        )
+        trading_client.submit_order(limit_sell)
+        logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+        placed_any = True
+    except Exception as e:
+        logger.warning(f"Partial limit sell failed for {symbol} (non-fatal): {e}")
+
+    try:
+        trail_req = TrailingStopOrderRequest(
+            symbol=symbol,
+            qty=remaining_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            trail_percent=stop_loss_pct * 100,
+        )
+        trading_client.submit_order(trail_req)
+        logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
+        placed_any = True
+    except Exception as e:
+        logger.warning(f"Trailing stop failed for {symbol} (non-fatal): {e}")
+
+    return placed_any
+
+
 def get_market_snapshot(symbols: list[str]) -> dict:
     """Return latest quote + 5-day price change for each symbol."""
     snapshot = {}
@@ -367,7 +433,11 @@ def get_market_snapshot(symbols: list[str]) -> dict:
         bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
         for symbol in symbols:
             quote = quotes.get(symbol)
-            current_price = float(quote.ask_price) if quote and quote.ask_price else None
+            ask_price = float(quote.ask_price or 0) if quote else 0.0
+            bid_price = float(quote.bid_price or 0) if quote else 0.0
+            current_price = round((ask_price + bid_price) / 2, 2) if ask_price > 0 and bid_price > 0 else (
+                round(ask_price or bid_price, 2) if (ask_price > 0 or bid_price > 0) else None
+            )
 
             symbol_bars = bars_dict.get(symbol, [])
             closing_prices = [float(b.close) for b in symbol_bars]
@@ -392,11 +462,8 @@ def get_market_snapshot(symbols: list[str]) -> dict:
             market_open_minutes = 9.5 * 60    # 9:30 AM ET in minutes since midnight
             market_close_minutes = 16.0 * 60  # 4:00 PM ET
             total_session_minutes = market_close_minutes - market_open_minutes  # 390 min
-            now_et = datetime.now(timezone.utc)
-            # Convert UTC to ET (UTC-4 in summer, UTC-5 in winter — use fixed offset as approximation)
-            import time as _time
-            et_offset = -4 if _time.daylight else -5
-            now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
+            now_et = datetime.now(_NY_TZ)
+            now_et_minutes = now_et.hour * 60 + now_et.minute
             minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
             day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
             projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume
@@ -559,7 +626,11 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
         bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
         for symbol in symbols:
             quote = quotes.get(symbol)
-            current_price = float(quote.ask_price) if quote and quote.ask_price else None
+            ask_price = float(quote.ask_price or 0) if quote else 0.0
+            bid_price = float(quote.bid_price or 0) if quote else 0.0
+            current_price = round((ask_price + bid_price) / 2, 2) if ask_price > 0 and bid_price > 0 else (
+                round(ask_price or bid_price, 2) if (ask_price > 0 or bid_price > 0) else None
+            )
 
             symbol_bars = bars_dict.get(symbol, [])
             closing_prices = [float(b.close) for b in symbol_bars]
@@ -584,10 +655,8 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
             market_open_minutes = 9.5 * 60
             market_close_minutes = 16.0 * 60
             total_session_minutes = market_close_minutes - market_open_minutes
-            now_et = datetime.now(timezone.utc)
-            import time as _time
-            et_offset = -4 if _time.daylight else -5
-            now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
+            now_et = datetime.now(_NY_TZ)
+            now_et_minutes = now_et.hour * 60 + now_et.minute
             minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
             day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
             projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume

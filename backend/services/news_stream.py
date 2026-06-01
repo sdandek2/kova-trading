@@ -145,7 +145,14 @@ def _save_article(article: dict[str, Any]) -> None:
 def _should_trigger(article: dict[str, Any]) -> bool:
     global _last_global_trigger_at
     symbols = article.get("symbols") or []
-    if not symbols or article.get("event_impact") != "high":
+    event_score = abs(float(article.get("event_score") or 0.0))
+    sentiment = article.get("event_sentiment")
+    if (
+        not symbols
+        or article.get("event_impact") != "high"
+        or event_score < 3.0
+        or sentiment not in {"bullish", "bearish"}
+    ):
         return False
 
     now = datetime.now(timezone.utc)

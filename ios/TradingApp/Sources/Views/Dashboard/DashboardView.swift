@@ -195,8 +195,8 @@ private struct QuickStatsStrip: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            DashStatPill(label: "Cash",
-                     value: formatK(account.cash),
+            DashStatPill(label: "Tradeable Cash",
+                     value: formatK(account.tradeableCash ?? account.cash),
                      icon: "banknote",
                      color: KovaTheme.positive)
             DashStatPill(label: "Buying Power",
