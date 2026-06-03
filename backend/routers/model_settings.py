@@ -122,3 +122,14 @@ def update_models(req: ModelSettingsRequest):
         "message": "Model settings updated — takes effect on next AI call",
         "settings": get_model_settings(),
     }
+
+
+@router.delete("/models/reset")
+def reset_models():
+    """Reset AI model settings to code defaults — clears any stale DB overrides."""
+    from services.db import set_setting
+    set_setting("model_settings", None)
+    return {
+        "message": "Model settings reset to defaults",
+        "settings": get_model_settings(),
+    }

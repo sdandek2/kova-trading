@@ -53,13 +53,13 @@ struct ModelPickerCard: View {
             // ── Critical tier ────────────────────────────────────────────
             tierSection(
                 label: "Critical",
-                subtitle: "Trade decisions · EOD · Daily picks · Earnings",
+                subtitle: "Step 2 trade decisions only",
                 primaryOptions: allModels,
                 secondaryOptions: allModels,
                 primary: $criticalPrimary,
                 secondary: $criticalSecondary,
-                recommendedPrimary: "gemini-2.5-pro",
-                recommendedSecondary: "claude-sonnet-4-6",
+                recommendedPrimary: "claude-sonnet-4-6",
+                recommendedSecondary: "gemini-2.5-flash",
                 color: .red
             )
 
@@ -68,13 +68,13 @@ struct ModelPickerCard: View {
             // ── Non-Critical tier ────────────────────────────────────────
             tierSection(
                 label: "Non-Critical",
-                subtitle: "Stock predictions · Suggestions",
+                subtitle: "Step 1 scan · Earnings · EOD · Daily picks · Predictions · Suggestions",
                 primaryOptions: allModels,
                 secondaryOptions: allModels,
                 primary: $standardPrimary,
                 secondary: $standardSecondary,
-                recommendedPrimary: "gemini-2.5-flash",
-                recommendedSecondary: "claude-haiku-4-5-20251001",
+                recommendedPrimary: "claude-haiku-4-5-20251001",
+                recommendedSecondary: "gemini-2.5-flash",
                 color: .orange
             )
 
