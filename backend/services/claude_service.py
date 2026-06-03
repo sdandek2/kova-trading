@@ -879,7 +879,7 @@ ROTATION RULES:
 {eod_step2_context}{performance_text}
 {portfolio_context}
 Cash available: ${effective_cash:,.2f} ({cash_pct:.0f}% of portfolio) | Open positions: {positions_count}
-{"⚠️ PORTFOLIO THIN — only " + str(positions_count) + " positions open. Prioritise building positions." if positions_count < 3 else ""}
+{"Cash is available — deploy only into A/B-grade setups. Never trade to stay active." if positions_count < 3 else ""}
 {rotation_note}
 {geo_text if geo_context else ""}{news_text}{bearish_etf_note}
 ## Candidates to evaluate:
@@ -905,12 +905,14 @@ Rules:
 - Treat NEWS_EVENT as high-priority evidence. Bullish high-impact events favor BUY; bearish high-impact events usually favor inverse ETF BUY or SELL first, and SHORT only when price/volume confirms downside.
 
 For LONG trades:
-- take_profit_pct: realistic upside. Leveraged ETF (TQQQ/SOXL/SPXL)=0.30-0.80 on bull days, strong catalyst=0.20-0.40, normal stock=0.10-0.30. Let winners run — don't cap early.
-- stop_loss_pct: trailing stop (0.03-0.08)
+- take_profit_pct: REALISTIC session-level upside only. Normal stock=0.05-0.12, strong catalyst=0.08-0.15, leveraged ETF (TQQQ/SOXL/SPXL)=0.10-0.25 on strong trend days only. DO NOT set targets above 0.25 — they will never be hit intraday and positions will ride into stop losses instead.
+- stop_loss_pct: trailing stop (0.03-0.06). REQUIRED: take_profit_pct must be at least 2× stop_loss_pct (minimum 2:1 R:R). If you can't find a 2:1 setup, SKIP the trade.
+- partial_exit=true when upside > 0.10 — lock in half at first target, trail the rest
 
 For SHORT trades:
-- take_profit_pct: how far you expect it to FALL (0.08-0.20)
-- stop_loss_pct: how much RISE to tolerate before covering (0.04-0.07)
+- take_profit_pct: how far you expect it to FALL (0.05-0.12)
+- stop_loss_pct: how much RISE to tolerate before covering (0.03-0.06)
+- REQUIRED: take_profit_pct must be at least 2× stop_loss_pct
 - partial_exit: cover 50% at first target, let rest ride
 
 Respond in valid JSON only, no markdown — only include approved trades (put any sell/rotation BEFORE the buy):
@@ -1011,12 +1013,19 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             except (ValueError, TypeError):
                 return default
 
-        # TP cap: 0.80 for leveraged ETFs (TQQQ/SOXL can run 60-100%+ on bull weeks),
-        # 0.60 for all others. Old 0.40 cap was cutting winners short on strong moves.
+        # TP cap: 0.25 for leveraged ETFs, 0.20 for all others (realistic intraday targets).
+        # Prior caps of 0.80/0.60 caused TPs to never be hit — positions rode into stop losses.
         from services.entry_timing import _LEVERAGED_ETFS as _lev_check
-        _tp_cap = 0.80 if sym in _lev_check else 0.60
+        _tp_cap = 0.25 if sym in _lev_check else 0.20
         take_profit_pct = max(0.05, min(_safe_pct(trade.get("take_profit_pct"), default_tp), _tp_cap))
-        stop_loss_pct   = max(0.02, min(_safe_pct(trade.get("stop_loss_pct"),   default_sl), 0.10))
+        stop_loss_pct   = max(0.02, min(_safe_pct(trade.get("stop_loss_pct"),   default_sl), 0.08))
+
+        # Enforce minimum 2:1 R:R — if AI set a TP that doesn't clear the bar, reject the trade
+        if action in ("buy", "short") and take_profit_pct < stop_loss_pct * 2.0:
+            logger.info(
+                f"Skipping {sym} — R:R below 2:1 (TP={take_profit_pct*100:.0f}% vs SL={stop_loss_pct*100:.0f}%)"
+            )
+            continue
         partial_exit = bool(trade.get("partial_exit", False))
         analysis = trade.get("analysis", "")
 
