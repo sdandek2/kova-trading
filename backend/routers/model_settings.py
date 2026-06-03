@@ -35,10 +35,10 @@ STANDARD_FALLBACK_OPTIONS = ALL_MODELS
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "pro_primary":        "gemini-2.5-pro",
-    "pro_fallback":       "claude-sonnet-4-6",
-    "standard_primary":   "gemini-2.5-flash",
-    "standard_fallback":  "claude-haiku-4-5-20251001",
+    "pro_primary":        "claude-sonnet-4-6",
+    "pro_fallback":       "gemini-2.5-flash",
+    "standard_primary":   "claude-haiku-4-5-20251001",
+    "standard_fallback":  "gemini-2.5-flash",
 }
 
 
