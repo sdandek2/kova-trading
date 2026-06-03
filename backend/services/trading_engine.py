@@ -2059,6 +2059,83 @@ async def run_trading_cycle():
                 }})
                 continue  # Try next decision, don't abort the whole cycle
 
+            # ── Max open positions cap: never hold more than 6 at once ───────
+            # 10 simultaneous positions dilutes capital and means every down day
+            # hits everything. Concentrated portfolios of high-conviction ideas
+            # outperform spray-and-pray approaches.
+            _MAX_OPEN_POSITIONS = 6
+            if decision.action in ("buy", "short"):
+                _open_count = len(positions)
+                if _open_count >= _MAX_OPEN_POSITIONS:
+                    _pos_cap_msg = (
+                        f"{decision.action.upper()} {decision.symbol} blocked — "
+                        f"already holding {_open_count} positions (max {_MAX_OPEN_POSITIONS}). "
+                        f"Wait for a position to close before opening new ones."
+                    )
+                    logger.info(f"Position cap: {_pos_cap_msg}")
+                    log_bot_activity("entry_rejected", _pos_cap_msg,
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    continue
+
+            # ── Minimum volume gate: require relative volume > 1.2x ──────────
+            # Below 1.2x means no institutional interest. RSI/MACD signals on
+            # thin volume are almost always noise — skip and wait for conviction.
+            if decision.action in ("buy", "short") and not decision.high_conviction:
+                _MIN_REL_VOL = 1.2
+                if _rel_vol < _MIN_REL_VOL:
+                    _vol_gate_msg = (
+                        f"{decision.symbol} relative volume {_rel_vol:.1f}x below minimum {_MIN_REL_VOL}x — "
+                        f"no institutional interest, signals are noise at this volume"
+                    )
+                    logger.info(f"Volume gate: {_vol_gate_msg}")
+                    log_bot_activity("entry_rejected", _vol_gate_msg,
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    _record_rejection(decision.symbol)
+                    continue
+
+            # ── SPY trend filter: trade WITH the market, not against it ───────
+            # The single most reliable systematic filter. Individual stocks have
+            # strong headwinds when SPY is in a downtrend, and shorts are harder
+            # when SPY is in an uptrend. Inverse ETFs (SQQQ/SPXS) are exempt —
+            # they're designed to profit from downtrends. High conviction overrides.
+            if decision.action in ("buy", "short") and not decision.high_conviction and macro:
+                _spy_trend = macro.get("spy_trend", "neutral")
+                _is_inverse = decision.symbol in {"SQQQ", "SPXS", "SPXU", "SOXS", "SDOW", "TZA", "SRTY", "UVXY"}
+                _is_lev_long = decision.symbol in {"TQQQ", "SOXL", "SPXL", "UPRO", "TECL"}
+
+                if decision.action == "buy" and not _is_inverse:
+                    if _spy_trend in ("strong_downtrend", "downtrend"):
+                        _spy_block = (
+                            f"{decision.symbol} BUY blocked — SPY in {_spy_trend}. "
+                            f"Trading longs against a falling market is fighting the tape. "
+                            f"Wait for SPY to reclaim MA20 or use inverse ETFs."
+                        )
+                        logger.info(f"SPY trend filter: {_spy_block}")
+                        log_bot_activity("entry_rejected", _spy_block,
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+                    if _is_lev_long and _spy_trend not in ("strong_uptrend", "uptrend"):
+                        _lev_block = (
+                            f"{decision.symbol} BUY blocked — leveraged long ETF requires SPY uptrend, "
+                            f"current SPY trend: {_spy_trend}"
+                        )
+                        logger.info(f"SPY trend filter (leveraged): {_lev_block}")
+                        log_bot_activity("entry_rejected", _lev_block,
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+
+                if decision.action == "short" and not _is_inverse:
+                    if _spy_trend in ("strong_uptrend", "uptrend"):
+                        _spy_short_block = (
+                            f"{decision.symbol} SHORT blocked — SPY in {_spy_trend}. "
+                            f"Shorting individual stocks in a rising market is high risk. "
+                            f"Use inverse ETFs (SQQQ/SPXS) instead."
+                        )
+                        logger.info(f"SPY trend filter: {_spy_short_block}")
+                        log_bot_activity("entry_rejected", _spy_short_block,
+                                         symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+
             # ── Cycle trade cap: limit confirmed new opens per cycle ─────────
             # Entry rejections should not burn a slot; confirmed attempts still
             # consume one even if Alpaca later rejects the order.

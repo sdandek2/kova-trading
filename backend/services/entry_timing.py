@@ -123,6 +123,52 @@ def should_confirm_entry(
     is_aggressive = strategy_key == "aggressive"
     needs_positions = positions_count < 3
 
+    # ── 3-Signal Confluence Gate ───────────────────────────────────────────
+    # Require at least 2 of 3 confirming signals for all entries.
+    # Single-signal trades are coin flips — confluence dramatically improves win rate.
+    # Leveraged ETFs and high-conviction trades are exempt (they're momentum plays).
+    if action == "buy" and symbol not in _LEVERAGED_ETFS:
+        _macd_hist_pct = (
+            (macd_histogram / current_price * 100)
+            if (macd_histogram is not None and current_price and current_price > 0)
+            else None
+        )
+        _signals_confirmed = 0
+        _signal_details = []
+
+        # Signal 1: RSI in buy zone (not overbought, not deeply oversold crash)
+        if 35 <= rsi <= 72:
+            _signals_confirmed += 1
+            _signal_details.append(f"RSI={rsi:.0f}✓")
+        else:
+            _signal_details.append(f"RSI={rsi:.0f}✗")
+
+        # Signal 2: MACD histogram positive or turning positive (momentum aligned)
+        if _macd_hist_pct is not None and _macd_hist_pct >= -0.05:
+            _signals_confirmed += 1
+            _signal_details.append(f"MACD={_macd_hist_pct:.2f}%✓")
+        elif _macd_hist_pct is None:
+            _signals_confirmed += 1  # no data = don't penalise
+            _signal_details.append("MACD=N/A✓")
+        else:
+            _signal_details.append(f"MACD={_macd_hist_pct:.2f}%✗")
+
+        # Signal 3: Relative volume showing interest (already checked at engine level,
+        # but this gives the confluence count a boost for strong volume days)
+        if relative_volume >= 1.2:
+            _signals_confirmed += 1
+            _signal_details.append(f"Vol={relative_volume:.1f}x✓")
+        else:
+            _signal_details.append(f"Vol={relative_volume:.1f}x✗")
+
+        if _signals_confirmed < 2:
+            reason = (
+                f"{symbol} failed 3-signal confluence gate ({_signals_confirmed}/3 confirmed): "
+                f"{', '.join(_signal_details)} — need at least 2/3 aligned signals"
+            )
+            _record_rejection(symbol)
+            return False, reason
+
     if action == "buy":
         if is_aggressive:
             if (
@@ -440,20 +486,27 @@ def is_good_trading_window() -> tuple[str, str]:
     """
     Time-of-day filter using proper ET timezone (handles EDT/EST DST automatically).
     Returns (mode, reason) where mode is "full" | "exits_only" | "closed".
+
+    Trading windows (based on empirical volume/signal quality):
+      9:30 - 9:45  → exits only (opening volatility, no new entries)
+      9:45 - 10:45 → FULL (morning momentum window — highest volume, cleanest signals)
+     10:45 - 14:30 → exits only (midday chop — low volume, RSI/MACD signals unreliable)
+     14:30 - 16:00 → FULL (afternoon power hour — volume returns, trends resolve)
     """
     try:
         from zoneinfo import ZoneInfo
         now_et = datetime.now(ZoneInfo("America/New_York"))
     except Exception:
-        # Fallback: approximate with UTC-4 (EDT) if zoneinfo unavailable
         from datetime import timedelta
         now_et = datetime.now(timezone.utc) - timedelta(hours=4)
 
     total_minutes = now_et.hour * 60 + now_et.minute
 
-    market_open_et   = 9 * 60 + 30   # 9:30 AM ET
-    entries_start_et = 9 * 60 + 45   # 9:45 AM ET
-    market_close_et  = 16 * 60        # 4:00 PM ET
+    market_open_et    = 9 * 60 + 30   # 9:30 AM ET
+    entries_start_et  = 9 * 60 + 45   # 9:45 AM ET
+    morning_end_et    = 10 * 60 + 45  # 10:45 AM ET — morning window closes
+    afternoon_start   = 14 * 60 + 30  # 2:30 PM ET — afternoon window opens
+    market_close_et   = 16 * 60       # 4:00 PM ET
 
     if total_minutes < market_open_et:
         return "closed", "Pre-market — market not yet open"
@@ -464,7 +517,14 @@ def is_good_trading_window() -> tuple[str, str]:
             f"Opening 15 min window — exits allowed, new entries blocked "
             f"({entries_start_et - total_minutes} min until entries open)"
         )
-    if total_minutes >= 15 * 60:   # 3:00 PM ET
-        return "full", "Power hour — prime exit window"
-
-    return "full", "Normal trading hours"
+    if total_minutes < morning_end_et:
+        remaining = morning_end_et - total_minutes
+        return "full", f"Morning momentum window — {remaining} min remaining (best signal quality)"
+    if total_minutes < afternoon_start:
+        remaining = afternoon_start - total_minutes
+        return "exits_only", (
+            f"Midday chop window — exits/trailing stops only, no new entries "
+            f"({remaining} min until afternoon session opens). "
+            f"RSI/MACD signals unreliable during low-volume midday hours."
+        )
+    return "full", "Afternoon power hour — volume returning, new entries allowed"
