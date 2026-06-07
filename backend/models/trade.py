@@ -40,6 +40,10 @@ class TradingStatus(BaseModel):
     is_running: bool
     last_analysis_at: Optional[datetime] = None
     next_run_in_seconds: Optional[int] = None
+    brain_regime: Optional[str] = None          # bull | bear | chop
+    vix_level: Optional[str] = None             # low | normal | high | extreme
+    regime_confidence: Optional[float] = None   # 0.0–1.0
+    regime_capital_mult: Optional[float] = None # 0.4–1.0
 
 
 class AIAnalysis(BaseModel):

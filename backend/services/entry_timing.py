@@ -314,6 +314,7 @@ def should_scale_out(
     high_watermark: float = None,
     current_price: float = None,
     trail_pct: float = 0.05,
+    atr_stop_price: float = None,
 ) -> tuple[bool, float, str]:
     """
     Partial profit-taking and loss-cutting for LONG positions.
@@ -365,14 +366,23 @@ def should_scale_out(
         )
 
     # ── Stop loss ──────────────────────────────────────────────────────────────
-    # Leveraged ETFs: 5% stop — normal intraday swings are 3-4%, tighter stop
-    # shakes out winners on noise. Regular stocks: 3% aggressive, 3% balanced.
-    _stop_threshold = -5.0 if _is_leveraged else (-3.0 if is_aggressive else -3.0)
-    if position_unrealized_pl_percent <= _stop_threshold:
-        return True, 1.0, (
-            f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
-            + (", redeploying cash" if is_aggressive else "")
-        )
+    # ATR stop: entry_price - (1.5× ATR for stocks, 2× for leveraged ETFs).
+    # Gives each stock room proportional to its own volatility — a 4% ATR stock
+    # won't be shaken out by normal noise the way a flat 3% stop would.
+    # Falls back to flat % stop when ATR data is unavailable.
+    if atr_stop_price is not None and current_price is not None and current_price > 0:
+        if current_price <= atr_stop_price:
+            return True, 1.0, (
+                f"{symbol} hit ATR stop at ${atr_stop_price:.2f} (current ${current_price:.2f}) — cutting losses"
+                + (", redeploying cash" if is_aggressive else "")
+            )
+    else:
+        _stop_threshold = -5.0 if _is_leveraged else -3.0
+        if position_unrealized_pl_percent <= _stop_threshold:
+            return True, 1.0, (
+                f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
+                + (", redeploying cash" if is_aggressive else "")
+            )
 
     return False, 0.0, ""
 
@@ -385,6 +395,7 @@ def should_cover_short(
     current_price: float = None,
     trail_pct: float = 0.05,
     strategy_key: str = "aggressive",
+    atr_stop_price: float = None,
 ) -> tuple[bool, float, str]:
     """
     Partial profit-taking and loss-cutting for SHORT positions.
@@ -435,7 +446,14 @@ def should_cover_short(
         )
 
     # ── Stop loss: price rising against short ─────────────────────────────────
-    if position_unrealized_pl_percent <= -3.5:
+    # ATR stop for shorts: entry_price + (2× ATR). Tighter than longs (2× vs 1.5×)
+    # because short squeezes are fast and violent — need to cut early.
+    if atr_stop_price is not None and current_price is not None and current_price > 0:
+        if current_price >= atr_stop_price:
+            return True, 1.0, (
+                f"{symbol} SHORT hit ATR stop at ${atr_stop_price:.2f} (current ${current_price:.2f}) — covering"
+            )
+    elif position_unrealized_pl_percent <= -3.5:
         return True, 1.0, (
             f"{symbol} SHORT down {abs(position_unrealized_pl_percent):.1f}% (price rose against short) — covering to stop loss"
         )

@@ -203,6 +203,36 @@ def _score_symbol(
     except Exception:
         pass
 
+    # ── Earnings proximity scoring (yfinance, free) ───────────────────────────
+    # +10 if earnings in 2-5 days AND suggested action is bullish (pre-earnings run)
+    # -10 if earnings tomorrow AND action is uncertain (binary event risk)
+    try:
+        import yfinance as _yf
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _ticker = _yf.Ticker(symbol)
+        _cal = _ticker.calendar
+        if _cal is not None and not _cal.empty:
+            _earnings_col = None
+            for _col in ("Earnings Date", "Earnings Date (Start)", "Event"):
+                if _col in _cal.columns:
+                    _earnings_col = _col
+                    break
+            if _earnings_col:
+                _ed = _cal[_earnings_col].iloc[0] if hasattr(_cal[_earnings_col], "iloc") else None
+                if _ed is not None:
+                    import pandas as _pd
+                    _ed_dt = _pd.Timestamp(_ed).to_pydatetime()
+                    _days_until = (_ed_dt.date() - _dt.now(_tz.utc).date()).days
+                    if 2 <= _days_until <= 5:
+                        breakdown["earnings_proximity"] = 10
+                    elif _days_until == 1:
+                        breakdown["earnings_proximity"] = -10
+                    else:
+                        breakdown["earnings_proximity"] = 0
+                    score += breakdown.get("earnings_proximity", 0)
+    except Exception:
+        pass
+
     # ── Determine signal type and action ─────────────────────────────────────
     regime = regime_result.regime if regime_result else "chop"
     is_leveraged = symbol in _LEVERAGED_ETFS

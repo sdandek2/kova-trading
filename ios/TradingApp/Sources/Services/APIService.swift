@@ -116,6 +116,34 @@ class APIService {
         try await fetch("/api/performance")
     }
 
+    func getLongShortScorecard() async throws -> [String: SideScorecard] {
+        try await fetch("/api/performance/scorecard")
+    }
+
+    func getBlockedTradesReport() async throws -> [BlockedTradeReport] {
+        try await fetch("/api/performance/blocked-trades")
+    }
+
+    func getPortfolioVaR() async throws -> PortfolioVaR {
+        try await fetch("/api/performance/var")
+    }
+
+    func getPerformanceBySetup() async throws -> [SetupPerformance] {
+        try await fetch("/api/performance/by-setup")
+    }
+
+    func getAIBaselineStats() async throws -> AIBaselineStats {
+        try await fetch("/api/performance/ai-baseline")
+    }
+
+    func getSlippageSummary() async throws -> SlippageSummary {
+        try await fetch("/api/performance/slippage")
+    }
+
+    func getPerformanceByHour() async throws -> [HourPerformance] {
+        try await fetch("/api/performance/by-hour")
+    }
+
     func getStrategy() async throws -> String {
         let response: [String: String] = try await fetch("/api/strategy/")
         return response["key"] ?? "aggressive"

@@ -179,12 +179,42 @@ Return valid JSON only — no markdown:
     if prompt_override:
         prompt += f"\n\n## Operator Override\n{prompt_override}"
 
+    # ── Signal-score baseline: log what a pure signal-only system would do ──────
+    # This lets us compare Claude's decisions vs raw signal scores after 60 days.
+    # BUY if signal_score >= 55, SKIP otherwise. Logged before Claude is called.
+    try:
+        from services.db import log_bot_activity as _lba
+        for _c in scored_candidates:
+            _baseline_action = "buy" if _c.signal_score >= 55 else "skip"
+            _lba("signal_baseline",
+                 f"signal_only={_baseline_action} score={_c.signal_score:.0f} "
+                 f"side={_c.suggested_action}",
+                 symbol=_c.symbol)
+    except Exception as _be:
+        logger.debug(f"signal_baseline logging failed (non-fatal): {_be}")
+
     try:
         raw = ask_ai_pro(prompt, max_tokens=2000)
         data = parse_ai_json(raw)
         approved = data.get("trades", [])
         skipped = data.get("skipped", "")
         logger.info(f"AI Brain approved {len(approved)} trades: {[t.get('symbol') for t in approved]} | Skipped: {skipped}")
+
+        # ── Claude override logging ───────────────────────────────────────────
+        # If Claude skipped a candidate with signal_score >= 65, log as claude_override.
+        # After 60 days: if > 30% of high-score signals were overridden, Claude kills alpha.
+        try:
+            from services.db import log_bot_activity as _lba2
+            _approved_syms = {t.get("symbol") for t in approved}
+            for _c in scored_candidates:
+                if _c.signal_score >= 65 and _c.symbol not in _approved_syms:
+                    _lba2("claude_override",
+                          f"Claude skipped score={_c.signal_score:.0f} "
+                          f"side={_c.suggested_action} (signal said buy, AI said no)",
+                          symbol=_c.symbol)
+                    logger.info(f"claude_override: {_c.symbol} score={_c.signal_score:.0f} skipped by AI")
+        except Exception as _oe:
+            logger.debug(f"claude_override logging failed (non-fatal): {_oe}")
 
         # Save prompt for viewer
         try:

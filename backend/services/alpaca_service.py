@@ -607,6 +607,41 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
     return snapshot
 
 
+def get_vwap(symbol: str) -> float | None:
+    """
+    Intraday VWAP approximation using 1-minute bars since market open.
+    Returns VWAP price, or None on failure.
+    """
+    from datetime import timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        today = now_et.date()
+        market_open = datetime(today.year, today.month, today.day, 9, 30,
+                               tzinfo=ZoneInfo("America/New_York"))
+        bars_request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Minute,
+            feed="iex",
+            start=market_open,
+            end=datetime.now(timezone.utc),
+        )
+        bars = data_client.get_stock_bars(bars_request)
+        bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
+        symbol_bars = bars_dict.get(symbol, [])
+        if not symbol_bars:
+            return None
+        total_tp_vol = sum(
+            ((b.high + b.low + b.close) / 3) * b.volume
+            for b in symbol_bars
+        )
+        total_vol = sum(b.volume for b in symbol_bars)
+        return round(total_tp_vol / total_vol, 4) if total_vol > 0 else None
+    except Exception as e:
+        logger.debug(f"get_vwap({symbol}) failed: {e}")
+        return None
+
+
 def get_intraday_bars(symbols: list[str], lookback_bars: int = 8) -> dict[str, list[dict]]:
     """
     Fetch the last `lookback_bars` 15-minute bars for each symbol.
@@ -828,7 +863,7 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     _FINANCE_KEYWORDS = {
         "stock", "stocks", "shares", "market", "markets", "invest", "investing",
         "investor", "investors", "earnings", "revenue", "profit", "loss", "ipo",
-        "sec", "fed", "rate", "rates", "bond", "bonds", "etf", "fund", "quarter",
+        "sec", "fed", "interest rate", "fed rate", "rate hike", "rates", "bond", "bonds", "etf", "fund", "quarter",
         "fiscal", "dividend", "dividends", "acquisition", "merger", "guidance",
         "forecast", "analyst", "analysts", "upgrade", "downgrade", "equity",
         "nasdaq", "nyse", "s&p", "dow", "bitcoin", "crypto", "economy", "gdp",

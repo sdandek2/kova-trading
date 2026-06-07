@@ -116,3 +116,27 @@ def volatility_adjusted_quantity(
 
     # Take the smaller of risk-based and max-position-based sizing
     return max(1, min(shares_by_risk, shares_by_max))
+
+
+def compute_correlation(prices_a: list[float], prices_b: list[float], period: int = 60) -> float:
+    """
+    Pearson correlation of daily returns between two price series over `period` days.
+    Returns float in [-1, 1], or 0.0 if insufficient data.
+    """
+    if len(prices_a) < period + 1 or len(prices_b) < period + 1:
+        return 0.0
+    a = prices_a[-period - 1:]
+    b = prices_b[-period - 1:]
+    ret_a = [(a[i] - a[i-1]) / a[i-1] for i in range(1, len(a)) if a[i-1] != 0]
+    ret_b = [(b[i] - b[i-1]) / b[i-1] for i in range(1, len(b)) if b[i-1] != 0]
+    n = min(len(ret_a), len(ret_b))
+    if n < 10:
+        return 0.0
+    ret_a, ret_b = ret_a[:n], ret_b[:n]
+    mean_a = sum(ret_a) / n
+    mean_b = sum(ret_b) / n
+    cov = sum((ret_a[i] - mean_a) * (ret_b[i] - mean_b) for i in range(n)) / n
+    var_a = sum((x - mean_a) ** 2 for x in ret_a) / n
+    var_b = sum((x - mean_b) ** 2 for x in ret_b) / n
+    denom = (var_a * var_b) ** 0.5
+    return round(cov / denom, 4) if denom > 0 else 0.0

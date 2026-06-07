@@ -123,10 +123,18 @@ def _ensure_table(conn):
                 market_regime        TEXT
             )
         """)
-        # Migration: add side column to existing tables that predate this column
+        # Migrations: add columns to existing tables
         cur.execute("""
             ALTER TABLE position_log
             ADD COLUMN IF NOT EXISTS side VARCHAR(10) DEFAULT 'long'
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS setup_type TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS entry_hour_et INTEGER
         """)
         # ── NEW: circuit_breaker_log ────────────────────────────────────────
         # Every time the daily loss limit fires, record when and why.
@@ -152,6 +160,26 @@ def _ensure_table(conn):
                 message     TEXT NOT NULL
             )
         """)
+        # ── NEW: blocked_trades ────────────────────────────────────────────
+        # Tracks every blocked trade + where the stock went afterwards.
+        # Quantifies opportunity cost of each protection rule.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS blocked_trades (
+                id               SERIAL PRIMARY KEY,
+                timestamp        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                cycle_id         TEXT,
+                symbol           TEXT NOT NULL,
+                block_reason     TEXT NOT NULL,
+                intended_side    TEXT DEFAULT 'buy',
+                signal_score     FLOAT,
+                price_at_block   FLOAT,
+                price_15m        FLOAT,
+                price_1h         FLOAT,
+                price_eod        FLOAT,
+                price_next_day   FLOAT,
+                hypothetical_pnl_pct FLOAT
+            )
+        """)
         # ── NEW: app_settings ───────────────────────────────────────────────
         # Persistent user preferences (trading_budget, prompt_override, etc.)
         # Unlike ai_cache, these have no TTL and never expire.
@@ -160,6 +188,21 @@ def _ensure_table(conn):
                 key        TEXT PRIMARY KEY,
                 value      JSONB NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # ── NEW: trade_slippage_log ────────────────────────────────────────
+        # Records slippage (actual fill vs limit price) per trade.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS trade_slippage_log (
+                id              SERIAL PRIMARY KEY,
+                timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                symbol          TEXT NOT NULL,
+                side            TEXT NOT NULL,
+                limit_price     FLOAT NOT NULL,
+                fill_price      FLOAT NOT NULL,
+                slippage_dollars FLOAT NOT NULL,
+                slippage_pct    FLOAT NOT NULL,
+                quantity        INTEGER
             )
         """)
 
@@ -466,10 +509,13 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 
 def log_position_open(symbol: str, entry_price: float, quantity: int,
                       strategy: str = None, claude_reasoning: str = None,
-                      market_regime: str = None, side: str = "long") -> Optional[int]:
+                      market_regime: str = None, side: str = "long",
+                      setup_type: str = None, entry_hour_et: int = None) -> Optional[int]:
     """
     Record that a new position was opened.
     side: "long" | "short"
+    setup_type: "momentum_breakout" | "mean_reversion" | "event_driven" | "extended_hours"
+    entry_hour_et: hour of entry in ET (9-15) for time-of-day analysis
     Returns the row id so the caller can update it on close, or None on failure.
     """
     try:
@@ -480,11 +526,11 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
             cur.execute("""
                 INSERT INTO position_log
                     (symbol, side, entry_time, entry_price, quantity, strategy,
-                     claude_reasoning, market_regime)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                     claude_reasoning, market_regime, setup_type, entry_hour_et)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
-                  strategy, claude_reasoning, market_regime))
+                  strategy, claude_reasoning, market_regime, setup_type, entry_hour_et))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:
@@ -722,18 +768,119 @@ def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
 
 
 def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
-                      price_at_block: float = 0.0, cycle_id: str = None) -> None:
+                      price_at_block: float = 0.0, cycle_id: str = None,
+                      intended_side: str = "buy") -> int:
     """
-    Log a blocked trade with signal score so opportunity cost can be ranked later.
-    block_reason: normalized key — 'circuit_breaker' | 'entry_rejected' | 'fomc' |
-                  'concentration' | 'trade_cap' | 'earnings_block' | 'premarket_no_news' |
+    Log a blocked trade to blocked_trades table. Returns the row id for price followup.
+    block_reason: 'circuit_breaker' | 'entry_rejected' | 'fomc' | 'concentration' |
+                  'trade_cap' | 'earnings_block' | 'premarket_no_news' |
                   'afterhours_no_earnings' | 'window_closed'
     """
+    row_id = None
     try:
+        conn = _get_conn()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO blocked_trades
+                        (cycle_id, symbol, block_reason, intended_side, signal_score, price_at_block)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (cycle_id, symbol, block_reason, intended_side, signal_score, price_at_block))
+                row_id = cur.fetchone()[0]
         msg = f"BLOCKED [{block_reason}] {symbol} signal={signal_score:.0f} price=${price_at_block:.2f}"
         log_bot_activity("blocked_trade", msg, symbol=symbol, cycle_id=cycle_id)
     except Exception as e:
         logger.warning(f"log_blocked_trade failed ({e})")
+    return row_id or 0
+
+
+def update_blocked_trade_prices(row_id: int, field: str, price: float) -> None:
+    """Update a single price field on a blocked_trades row. field: price_15m|price_1h|price_eod|price_next_day"""
+    if not row_id:
+        return
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        allowed = {"price_15m", "price_1h", "price_eod", "price_next_day"}
+        if field not in allowed:
+            return
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE blocked_trades SET {field} = %s WHERE id = %s", (price, row_id))
+            # Compute hypothetical P&L once all four prices are filled
+            cur.execute("""
+                UPDATE blocked_trades SET
+                    hypothetical_pnl_pct = CASE
+                        WHEN price_at_block > 0 AND price_eod IS NOT NULL
+                        THEN (price_eod - price_at_block) / price_at_block * 100
+                        ELSE NULL END
+                WHERE id = %s
+            """, (row_id,))
+    except Exception as e:
+        logger.warning(f"update_blocked_trade_prices failed ({e})")
+
+
+def get_blocked_trades_report() -> list[dict]:
+    """Opportunity cost report: which block reason suppressed the most profit."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    block_reason,
+                    COUNT(*)                              AS times_blocked,
+                    AVG(signal_score)                     AS avg_signal_score,
+                    AVG(hypothetical_pnl_pct)             AS avg_hypothetical_pnl,
+                    SUM(hypothetical_pnl_pct)             AS total_hypothetical_pnl,
+                    COUNT(*) FILTER (WHERE hypothetical_pnl_pct > 0) AS would_have_won,
+                    COUNT(*) FILTER (WHERE hypothetical_pnl_pct < 0) AS would_have_lost
+                FROM blocked_trades
+                WHERE hypothetical_pnl_pct IS NOT NULL
+                GROUP BY block_reason
+                ORDER BY total_hypothetical_pnl DESC
+            """)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.warning(f"get_blocked_trades_report failed ({e})")
+        return []
+
+
+def get_long_short_scorecard() -> dict:
+    """Win rate, avg winner/loser, profit factor, avg hold time — split by long vs short."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    side,
+                    COUNT(*)                                                        AS trades,
+                    ROUND(AVG(CASE WHEN realized_pl > 0 THEN 1.0 ELSE 0 END)::numeric, 3)
+                                                                                    AS win_rate,
+                    ROUND(AVG(CASE WHEN realized_pl > 0 THEN realized_pl_pct END)::numeric, 2)
+                                                                                    AS avg_winner_pct,
+                    ROUND(AVG(CASE WHEN realized_pl < 0 THEN realized_pl_pct END)::numeric, 2)
+                                                                                    AS avg_loser_pct,
+                    ROUND((
+                        SUM(CASE WHEN realized_pl > 0 THEN realized_pl ELSE 0 END) /
+                        NULLIF(ABS(SUM(CASE WHEN realized_pl < 0 THEN realized_pl ELSE 0 END)), 0)
+                    )::numeric, 2)                                                  AS profit_factor,
+                    ROUND(AVG(hold_duration_mins)::numeric, 0)                     AS avg_hold_mins
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                GROUP BY side
+            """)
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            return {row[0]: dict(zip(cols[1:], row[1:])) for row in rows}
+    except Exception as e:
+        logger.warning(f"get_long_short_scorecard failed ({e})")
+        return {}
 
 
 def log_bot_activity(event_type: str, message: str,
@@ -893,3 +1040,185 @@ def cleanup_expired_cache() -> None:
             logger.debug(f"cleanup_expired_cache: removed {deleted} expired entries")
     except Exception as e:
         logger.warning(f"cleanup_expired_cache failed ({e}), skipping.")
+
+
+def log_slippage(symbol: str, side: str, limit_price: float, fill_price: float,
+                 quantity: int = None) -> None:
+    """
+    Record slippage for a completed fill.
+    slippage_dollars = fill_price - limit_price (positive = paid more than intended)
+    slippage_pct = slippage_dollars / limit_price
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        slippage_dollars = round(fill_price - limit_price, 4)
+        slippage_pct = round(slippage_dollars / limit_price, 6) if limit_price else 0.0
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO trade_slippage_log
+                    (symbol, side, limit_price, fill_price, slippage_dollars, slippage_pct, quantity)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (symbol, side, limit_price, fill_price, slippage_dollars, slippage_pct, quantity))
+    except Exception as e:
+        logger.warning(f"log_slippage failed ({e})")
+
+
+def get_portfolio_var() -> dict:
+    """Latest VaR and gross exposure from bot_activity_log."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT message, timestamp
+                FROM bot_activity_log
+                WHERE event_type = 'portfolio_var'
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            if not row:
+                return {"var_dollars": None, "var_pct": None, "gross_dollars": None, "gross_pct": None}
+            # message format: "VaR=$X (Y%) gross=$A (B%)"
+            import re as _re
+            msg = row[0] or ""
+            var_d = _re.search(r'VaR=\$([\d,\.]+)', msg)
+            var_p = _re.search(r'VaR=.*?\(([\d\.]+)%\)', msg)
+            gr_d  = _re.search(r'gross=\$([\d,\.]+)', msg)
+            gr_p  = _re.search(r'gross=.*?\(([\d\.]+)%\)', msg)
+            return {
+                "var_dollars": float(var_d.group(1).replace(",", "")) if var_d else None,
+                "var_pct": float(var_p.group(1)) if var_p else None,
+                "gross_dollars": float(gr_d.group(1).replace(",", "")) if gr_d else None,
+                "gross_pct": float(gr_p.group(1)) if gr_p else None,
+                "as_of": row[1].isoformat() if row[1] else None,
+            }
+    except Exception as e:
+        logger.warning(f"get_portfolio_var failed ({e})")
+        return {}
+
+
+def get_performance_by_setup() -> list[dict]:
+    """P&L breakdown by setup_type from position_log."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COALESCE(setup_type, 'unknown') AS setup_type,
+                    COUNT(*) AS trades,
+                    ROUND(SUM(COALESCE(realized_pl, 0))::numeric, 2) AS total_pl,
+                    ROUND(AVG(COALESCE(realized_pl_pct, 0))::numeric, 2) AS avg_pl_pct,
+                    ROUND(AVG(CASE WHEN realized_pl > 0 THEN 1.0 ELSE 0 END)::numeric, 3) AS win_rate
+                FROM position_log
+                WHERE exit_time IS NOT NULL
+                GROUP BY setup_type
+                ORDER BY total_pl DESC
+            """)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.warning(f"get_performance_by_setup failed ({e})")
+        return []
+
+
+def get_ai_baseline_comparison() -> dict:
+    """Compare signal-only win rate vs Claude-assisted win rate, plus override rate."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            # Count signal_baseline events where signal said buy
+            cur.execute("""
+                SELECT COUNT(*) FROM bot_activity_log
+                WHERE event_type = 'signal_baseline' AND message LIKE '%signal_only=buy%'
+            """)
+            signal_buys = (cur.fetchone() or [0])[0]
+
+            # Count claude_override events (Claude said no to score>=65)
+            cur.execute("""
+                SELECT COUNT(*) FROM bot_activity_log
+                WHERE event_type = 'claude_override'
+            """)
+            overrides = (cur.fetchone() or [0])[0]
+
+            # Actual win rate from position_log
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN realized_pl > 0 THEN 1 ELSE 0 END) AS wins
+                FROM position_log WHERE exit_time IS NOT NULL
+            """)
+            row = cur.fetchone()
+            total, wins = (row[0] or 0), (row[1] or 0)
+            claude_win_rate = round(wins / total, 3) if total > 0 else None
+
+            override_rate = round(overrides / signal_buys, 3) if signal_buys > 0 else None
+
+            return {
+                "signal_buys": signal_buys,
+                "claude_overrides": overrides,
+                "override_rate": override_rate,
+                "claude_win_rate": claude_win_rate,
+                "total_closed_trades": total,
+            }
+    except Exception as e:
+        logger.warning(f"get_ai_baseline_comparison failed ({e})")
+        return {}
+
+
+def get_slippage_summary() -> dict:
+    """Aggregate slippage stats from trade_slippage_log."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS fills,
+                    ROUND(AVG(slippage_dollars)::numeric, 4) AS avg_slippage_dollars,
+                    ROUND(AVG(slippage_pct * 100)::numeric, 4) AS avg_slippage_pct,
+                    ROUND(SUM(ABS(slippage_dollars))::numeric, 2) AS total_slippage_cost,
+                    ROUND(MIN(slippage_dollars)::numeric, 4) AS best_slippage,
+                    ROUND(MAX(slippage_dollars)::numeric, 4) AS worst_slippage
+                FROM trade_slippage_log
+            """)
+            row = cur.fetchone()
+            if not row or row[0] == 0:
+                return {"fills": 0}
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+    except Exception as e:
+        logger.warning(f"get_slippage_summary failed ({e})")
+        return {}
+
+
+def get_performance_by_hour() -> list[dict]:
+    """Win rate by entry_hour_et from position_log."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    entry_hour_et,
+                    COUNT(*) AS trades,
+                    ROUND(AVG(CASE WHEN realized_pl > 0 THEN 1.0 ELSE 0 END)::numeric, 3) AS win_rate,
+                    ROUND(AVG(COALESCE(realized_pl_pct, 0))::numeric, 2) AS avg_pl_pct
+                FROM position_log
+                WHERE exit_time IS NOT NULL AND entry_hour_et IS NOT NULL
+                GROUP BY entry_hour_et
+                ORDER BY entry_hour_et
+            """)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.warning(f"get_performance_by_hour failed ({e})")
+        return []

@@ -62,6 +62,24 @@ struct AIView: View {
                                 .buttonStyle(.borderedProminent)
                             }
 
+                            NavigationLink {
+                                AnalyticsView()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "chart.bar.fill")
+                                    Text("Analytics & Scorecards")
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(14)
+                            }
+                            .foregroundColor(.primary)
+
                             HStack(spacing: 12) {
                                 NavigationLink {
                                     TaxSummaryView()

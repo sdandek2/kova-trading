@@ -130,6 +130,14 @@ _earnings_day_positions: set = set()   # symbols entered as earnings plays — f
 # Pending fills: limit orders placed but not yet confirmed filled.
 # Each cycle checks these and attaches TP/trailing at the actual fill price.
 _pending_fill_orders: dict = {}  # order_id → {symbol, side, stop_loss_pct, take_profit_pct}
+_atr_stops: dict = {}            # symbol → atr_stop_price (entry_price - 1.5×ATR; 2×ATR for leveraged ETFs)
+# Blocked trade price followup: row_id → {symbol, blocked_at, fields_needed}
+_pending_block_price_checks: dict = {}  # row_id → {symbol, blocked_at, pending: set}
+# Regime state: updated each cycle, read by get_status() for iOS dashboard
+_last_regime: Optional[str] = None        # bull | bear | chop
+_last_vix_level: Optional[str] = None     # low | normal | high | extreme
+_last_regime_confidence: Optional[float] = None
+_last_regime_capital_mult: float = 1.0
 
 
 def _save_watermarks() -> None:
@@ -177,6 +185,10 @@ def get_status() -> TradingStatus:
         is_running=_is_running,
         last_analysis_at=_last_analysis_at,
         next_run_in_seconds=next_run_in,
+        brain_regime=_last_regime,
+        vix_level=_last_vix_level,
+        regime_confidence=_last_regime_confidence,
+        regime_capital_mult=_last_regime_capital_mult,
     )
 
 
@@ -258,7 +270,8 @@ async def run_premarket_scan():
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
-           _ai_sold_symbols, _earnings_day_positions
+           _ai_sold_symbols, _earnings_day_positions, \
+           _last_regime, _last_vix_level, _last_regime_confidence, _last_regime_capital_mult
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
@@ -279,7 +292,7 @@ async def run_trading_cycle():
                     _filled_order = await loop.run_in_executor(
                         None, lambda oid=_oid: alpaca_service.trading_client.get_order_by_id(oid)
                     )
-                    if _filled_order.filled_avg_price is not None or str(_filled_order.status) == "filled":
+                    if _filled_order.filled_avg_price is not None and str(_filled_order.status) in ("filled", "partially_filled"):
                         _actual_fill = float(_filled_order.filled_avg_price)
                         _sym = _pf["symbol"]
                         if _pf["side"] == "buy":
@@ -292,12 +305,52 @@ async def run_trading_cycle():
                                 _previous_positions[_sym]["avg_entry_price"] = _actual_fill
                         _save_watermarks()
                         logger.info(f"Fill-followup: {_sym} filled @ ${_actual_fill:.2f} — watermarks updated")
+                        # Log slippage: difference between estimated entry and actual fill
+                        try:
+                            from services.db import log_slippage as _ls
+                            _est = _pf.get("estimated_price", 0)
+                            if _est and _est > 0:
+                                _ls(symbol=_sym, side=_pf["side"],
+                                    limit_price=_est, fill_price=_actual_fill,
+                                    quantity=_pf.get("quantity"))
+                        except Exception as _slip_err:
+                            logger.debug(f"log_slippage failed (non-fatal): {_slip_err}")
                         del _pending_fill_orders[_oid]
                     elif str(_filled_order.status) in ("canceled", "expired", "rejected"):
                         logger.info(f"Fill-followup: order {_oid} {_filled_order.status} — removing from pending")
                         del _pending_fill_orders[_oid]
                 except Exception as _fe:
                     logger.debug(f"Fill-followup check failed for {_oid}: {_fe}")
+
+        # ── Blocked-trade price followup: update where-did-it-go prices ──────
+        if _pending_block_price_checks:
+            from services.db import update_blocked_trade_prices
+            from zoneinfo import ZoneInfo
+            _now_et = datetime.now(ZoneInfo("America/New_York"))
+            _now_utc = datetime.now(timezone.utc)
+            for _bid in list(_pending_block_price_checks.keys()):
+                _bc = _pending_block_price_checks[_bid]
+                _elapsed_mins = (_now_utc - _bc["blocked_at"]).total_seconds() / 60
+                _sym = _bc["symbol"]
+                try:
+                    _snap = alpaca_service.get_market_snapshot([_sym])
+                    _cur_price = (_snap.get(_sym) or {}).get("current_price") or 0
+                    if _cur_price <= 0:
+                        continue
+                    _pending = _bc["pending"]
+                    if "price_15m" in _pending and _elapsed_mins >= 15:
+                        update_blocked_trade_prices(_bid, "price_15m", _cur_price)
+                        _pending.discard("price_15m")
+                    if "price_1h" in _pending and _elapsed_mins >= 60:
+                        update_blocked_trade_prices(_bid, "price_1h", _cur_price)
+                        _pending.discard("price_1h")
+                    if "price_eod" in _pending and _now_et.hour >= 16:
+                        update_blocked_trade_prices(_bid, "price_eod", _cur_price)
+                        _pending.discard("price_eod")
+                    if not _pending:
+                        del _pending_block_price_checks[_bid]
+                except Exception as _bpe:
+                    logger.debug(f"Block price followup failed for {_sym}: {_bpe}")
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
@@ -449,6 +502,7 @@ async def run_trading_cycle():
         _brain_regime = None
         _rs_map = {}
         _kelly_history = []
+        _regime_capital_mult = 1.0  # default full size — overwritten below if regime detected
         try:
             _spy_data = snapshot_light.get("SPY", {})
             _spy_prices = _spy_data.get("closing_prices", [])
@@ -459,6 +513,26 @@ async def run_trading_cycle():
             # Block leveraged ETF buys when regime is not bull or VIX is high
             if not _brain_regime.allows_leveraged_etfs:
                 logger.info(f"Brain: leveraged ETF entries BLOCKED (regime={_brain_regime.regime}, vix={_brain_regime.vix_level})")
+
+            # ── Regime capital multiplier ──────────────────────────────────
+            # Scale position sizes down in unfavorable regimes.
+            # Bull: full size. Chop: 60% (breakouts fail constantly in sideways markets).
+            # Bear: 50% longs (exits dominate), 100% shorts.
+            # Extreme VIX (>30): 40% — capital preservation, avoid whipsaws.
+            if _brain_regime.vix_level == "extreme":
+                _regime_capital_mult = 0.40
+            elif _brain_regime.regime == "bear":
+                _regime_capital_mult = 0.50
+            elif _brain_regime.regime == "chop":
+                _regime_capital_mult = 0.60
+            else:  # bull
+                _regime_capital_mult = 1.00
+            logger.info(f"Regime capital multiplier: {_regime_capital_mult:.0%} (regime={_brain_regime.regime}, vix={_brain_regime.vix_level})")
+            # Persist for get_status() → iOS dashboard
+            _last_regime = _brain_regime.regime
+            _last_vix_level = _brain_regime.vix_level
+            _last_regime_confidence = _brain_regime.confidence
+            _last_regime_capital_mult = _regime_capital_mult
         except Exception as _re:
             logger.warning(f"Brain regime detection failed (non-fatal): {_re}")
 
@@ -525,6 +599,11 @@ async def run_trading_cycle():
                 pos = next((p for p in positions if p.symbol == sym), None)
                 if pos:
                     logger.info(f"New position detected (limit order filled between cycles): {sym} @ ${pos.avg_entry_price:.2f}")
+                    try:
+                        from zoneinfo import ZoneInfo as _zi_det
+                        _det_hour_et = datetime.now(_zi_det("America/New_York")).hour
+                    except Exception:
+                        _det_hour_et = None
                     log_position_open(
                         symbol=sym,
                         entry_price=pos.avg_entry_price,
@@ -533,6 +612,8 @@ async def run_trading_cycle():
                         claude_reasoning="Limit order filled between cycles — entry logged on position detection",
                         market_regime=macro.get("market_regime"),
                         side=pos.side,
+                        setup_type="momentum_breakout",  # limit orders are always momentum entries
+                        entry_hour_et=_det_hour_et,
                     )
                     _position_high_watermarks[sym] = pos.current_price
                     _save_watermarks()
@@ -600,6 +681,7 @@ async def run_trading_cycle():
                 _earnings_day_positions.discard(sym)
                 if sym in _position_high_watermarks:
                     del _position_high_watermarks[sym]
+                _atr_stops.pop(sym, None)
 
         # Bug fix: flush stale _ai_sold_symbols entries — symbols that are still in
         # positions should stay guarded; symbols gone for >1 cycle should be cleared
@@ -655,6 +737,38 @@ async def run_trading_cycle():
                 del _pre_scaleout_qty[sym]
         # Persist long watermarks so trailing stops survive server restarts
         _save_watermarks()
+
+        # ── Portfolio VaR + gross exposure logging ────────────────────────────
+        # VaR: sum of (position_value × ATR/price) across all open positions.
+        # Gross exposure: sum of abs(position_value) regardless of direction.
+        # Both logged to bot_activity_log for Phase 3 analysis.
+        try:
+            _pv_for_var = float(account.portfolio_value or 1)
+            _var_dollars = 0.0
+            _gross_dollars = 0.0
+            for _vp in positions:
+                _vp_price = float(_vp.current_price or _vp.avg_entry_price or 0)
+                _vp_qty = abs(float(_vp.qty))
+                _vp_val = _vp_price * _vp_qty
+                _gross_dollars += _vp_val
+                _vp_sym_data = snapshot_light.get(_vp.symbol, {})
+                _vp_atr = compute_atr(
+                    highs=_vp_sym_data.get("high_prices", []),
+                    lows=_vp_sym_data.get("low_prices", []),
+                    closes=_vp_sym_data.get("closing_prices", []),
+                )
+                if _vp_price > 0 and _vp_atr > 0:
+                    _var_dollars += _vp_val * (_vp_atr / _vp_price)
+            _var_pct = _var_dollars / _pv_for_var * 100
+            _gross_pct = _gross_dollars / _pv_for_var * 100
+            log_bot_activity("portfolio_var",
+                             f"VaR=${_var_dollars:,.0f} ({_var_pct:.1f}%) gross=${_gross_dollars:,.0f} ({_gross_pct:.1f}%)",
+                             cycle_id=_current_cycle_id)
+            log_bot_activity("gross_exposure",
+                             f"gross_exposure_dollars={_gross_dollars:.2f} gross_exposure_pct={_gross_pct:.2f}",
+                             cycle_id=_current_cycle_id)
+        except Exception as _var_err:
+            logger.debug(f"VaR logging failed (non-fatal): {_var_err}")
 
         # ── Correlated-position groups ────────────────────────────────────────
         # In AGGRESSIVE mode: allow up to 2 correlated leveraged ETFs — the whole
@@ -1043,6 +1157,7 @@ async def run_trading_cycle():
                     current_price=position.current_price,
                     trail_pct=trail_pct,
                     strategy_key=strategy_key,
+                    atr_stop_price=_atr_stops.get(position.symbol),
                 )
                 # ── Staircase gate for shorts: prevent cascading covers ────────────
                 # After covering 50% at 10%, the remaining position still shows the
@@ -1069,6 +1184,7 @@ async def run_trading_cycle():
                     high_watermark=_position_high_watermarks.get(position.symbol),
                     current_price=position.current_price,
                     trail_pct=trail_pct,
+                    atr_stop_price=_atr_stops.get(position.symbol),
                 )
                 # ── Staircase gate: prevent cascading scale-outs ──────────────────
                 # After the first scale-out at 20%, the remaining position still
@@ -1447,6 +1563,42 @@ async def run_trading_cycle():
                                          symbol=decision.symbol, cycle_id=_current_cycle_id)
                         continue
 
+            # ── Price-correlation check on new buys ───────────────────────────
+            # If an existing long has 60-day price correlation > 0.75 with the candidate
+            # AND combined exposure > 20% portfolio → reduce new position size by 50%.
+            # Don't block — just reduce. Concentration risk, not a hard veto.
+            # Uses snapshot_light (always in scope) not sym_data (assigned later in loop).
+            if decision.action == "buy":
+                try:
+                    from services.indicators import compute_correlation as _corr_fn
+                    _pv_corr = float(account.portfolio_value or 1)
+                    _cand_closes = snapshot_light.get(decision.symbol, {}).get("closing_prices", [])
+                    for _ep in positions:
+                        if _ep.side != "long":
+                            continue
+                        _ep_data = snapshot_light.get(_ep.symbol, {})
+                        _ep_closes = _ep_data.get("closing_prices", [])
+                        _corr_val = _corr_fn(_cand_closes, _ep_closes)
+                        if _corr_val > 0.75:
+                            _ep_price = float(_ep.current_price or _ep.avg_entry_price or 0)
+                            _ep_val = abs(float(_ep.qty)) * _ep_price
+                            _cand_val = decision.quantity * (snapshot_light.get(decision.symbol, {}).get("current_price") or 0)
+                            _combined_pct = (_ep_val + _cand_val) / _pv_corr
+                            if _combined_pct > 0.20:
+                                _reduced_qty = max(1, decision.quantity // 2)
+                                logger.info(
+                                    f"Correlation cap: {decision.symbol} corr={_corr_val:.2f} with {_ep.symbol}, "
+                                    f"combined={_combined_pct*100:.0f}% → reducing {decision.quantity}→{_reduced_qty} shares"
+                                )
+                                log_bot_activity("entry_rejected",
+                                                 f"Correlation cap: {decision.symbol} corr={_corr_val:.2f} with {_ep.symbol} "
+                                                 f"combined={_combined_pct*100:.0f}% — qty halved",
+                                                 symbol=decision.symbol, cycle_id=_current_cycle_id)
+                                decision = decision.model_copy(update={"quantity": _reduced_qty})
+                                break
+                except Exception as _ce:
+                    logger.debug(f"Correlation check failed (non-fatal): {_ce}")
+
             # ── Same-symbol conflict check ────────────────────────────────────
             # Block going long on a symbol we're already short, and vice versa.
             # SOXL long + SOXL short = net zero exposure while paying twice the spread.
@@ -1466,6 +1618,39 @@ async def run_trading_cycle():
                         logger.info(f"Conflict check: {_conflict_msg}")
                         log_bot_activity("entry_rejected", _conflict_msg,
                                          symbol=decision.symbol, cycle_id=_current_cycle_id)
+                        continue
+
+            # ── Short position limits ──────────────────────────────────────────
+            # Max 5% portfolio per short name; max 15% total short exposure.
+            # Reduces new position size rather than blocking — lets the best shorts still go through.
+            if decision.action == "short":
+                _pv = float(account.portfolio_value or 1)
+                _short_positions = [p for p in positions if p.side == "short"]
+                _total_short_val = sum(
+                    abs(float(p.qty)) * float(p.current_price or p.avg_entry_price or 0)
+                    for p in _short_positions
+                )
+                _total_short_pct = _total_short_val / _pv
+                if _total_short_pct >= 0.15:
+                    _short_cap_msg = (
+                        f"SHORT {decision.symbol} blocked — total short exposure "
+                        f"{_total_short_pct*100:.1f}% already at 15% cap"
+                    )
+                    logger.info(_short_cap_msg)
+                    log_bot_activity("entry_rejected", _short_cap_msg,
+                                     symbol=decision.symbol, cycle_id=_current_cycle_id)
+                    continue
+                _sym_price = sym_data.get("current_price") or 0
+                if _sym_price > 0:
+                    _max_short_qty = int(_pv * 0.05 / _sym_price)
+                    if decision.quantity > _max_short_qty and _max_short_qty >= 1:
+                        logger.info(
+                            f"Short size cap: {decision.symbol} {decision.quantity}→{_max_short_qty} "
+                            f"(5% portfolio = ${_pv*0.05:,.0f})"
+                        )
+                        decision = decision.model_copy(update={"quantity": _max_short_qty})
+                    elif _max_short_qty < 1:
+                        logger.info(f"SHORT {decision.symbol} blocked — 5% cap allows <1 share at ${_sym_price:.2f}")
                         continue
 
             # ── Opening window: block new entries during first 15 min but allow exits ──
@@ -1495,9 +1680,16 @@ async def run_trading_cycle():
                                  f"BUY {decision.symbol} blocked — daily loss limit active",
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 from services.db import log_blocked_trade
-                log_blocked_trade(decision.symbol, "circuit_breaker",
-                                  getattr(decision, "signal_score", 0),
-                                  decision.price or 0, _current_cycle_id)
+                _blk_price = sym_data.get("current_price") or decision.price or 0
+                _blk_id = log_blocked_trade(decision.symbol, "circuit_breaker",
+                                            getattr(decision, "signal_score", 0),
+                                            _blk_price, _current_cycle_id)
+                if _blk_id:
+                    _pending_block_price_checks[_blk_id] = {
+                        "symbol": decision.symbol,
+                        "blocked_at": datetime.now(timezone.utc),
+                        "pending": {"price_15m", "price_1h", "price_eod", "price_next_day"},
+                    }
                 continue
 
             # ── Earnings play duplicate block ─────────────────────────────────
@@ -1730,6 +1922,32 @@ async def run_trading_cycle():
                 }})
                 continue  # Try next decision, don't abort the whole cycle
 
+            # ── VWAP-aware entry filter ───────────────────────────────────────
+            # If price is >0.8% above intraday VWAP, reduce position size by 25%.
+            # Buying extended above VWAP increases mean-reversion risk — don't block, just trim.
+            if decision.action == "buy":
+                try:
+                    _vwap = alpaca_service.get_vwap(decision.symbol)
+                    _vwap_price = sym_data.get("current_price") or 0
+                    if _vwap and _vwap > 0 and _vwap_price > 0:
+                        _vwap_ext = (_vwap_price / _vwap - 1)
+                        if _vwap_ext > 0.008:
+                            _vwap_reduced_qty = max(1, int(decision.quantity * 0.75))
+                            logger.info(
+                                f"VWAP filter: {decision.symbol} price ${_vwap_price:.2f} is "
+                                f"{_vwap_ext*100:.1f}% above VWAP ${_vwap:.2f} — "
+                                f"reducing {decision.quantity}→{_vwap_reduced_qty} shares"
+                            )
+                            decision = decision.model_copy(update={"quantity": _vwap_reduced_qty})
+                except Exception as _ve:
+                    logger.debug(f"VWAP check failed (non-fatal): {_ve}")
+
+            # Compute ATR for all new entries (used for ATR stops + vol-adjust sizing)
+            atr = compute_atr(
+                highs=sym_data.get("high_prices", []),
+                lows=sym_data.get("low_prices", []),
+                closes=closing_prices,
+            ) if decision.action in ("buy", "short") else 0.0
             if decision.action == "buy" and decision.symbol not in _earnings_play_pending:
                 # Volatility-adjusted sizing
                 # Skip for earnings plays — their quantity was already capped at 2-5%
@@ -1759,6 +1977,14 @@ async def run_trading_cycle():
                         )
                     else:
                         effective_max_pct = strat["max_position_pct"]
+
+                    # Apply regime capital multiplier — scale down in chop/bear/extreme VIX
+                    effective_max_pct = effective_max_pct * _regime_capital_mult
+                    if _regime_capital_mult < 1.0:
+                        logger.info(
+                            f"Regime sizing: {decision.symbol} max_pos {strat['max_position_pct']*100:.0f}%"
+                            f" → {effective_max_pct*100:.0f}% ({_regime_capital_mult:.0%} regime mult)"
+                        )
 
                     vol_qty = volatility_adjusted_quantity(
                         portfolio_value=account.portfolio_value,
@@ -2028,6 +2254,42 @@ async def run_trading_cycle():
                 # trades and causes the cycle-detect logic to fire a false close next cycle.
                 order_filled = order.filled_avg_price is not None or order.status == "filled"
                 fill_price = float(order.filled_avg_price or sym_data.get("current_price") or 0)
+
+                # Seed ATR stop for new positions
+                # Longs: entry - (1.5× ATR for stocks, 2× for leveraged ETFs)
+                # Shorts: entry + (2× ATR) — tighter because short squeezes are violent
+                if fill_price > 0 and atr > 0:
+                    from services.entry_timing import _LEVERAGED_ETFS as _lev_etfs_atr
+                    if decision.action == "buy":
+                        _atr_mult = 2.0 if decision.symbol in _lev_etfs_atr else 1.5
+                        _atr_stops[decision.symbol] = fill_price - (_atr_mult * atr)
+                        logger.info(
+                            f"ATR stop set (long): {decision.symbol} entry=${fill_price:.2f} "
+                            f"ATR={atr:.2f} mult={_atr_mult}× → stop=${_atr_stops[decision.symbol]:.2f}"
+                        )
+                    elif decision.action == "short":
+                        _atr_stops[decision.symbol] = fill_price + (2.0 * atr)
+                        logger.info(
+                            f"ATR stop set (short): {decision.symbol} entry=${fill_price:.2f} "
+                            f"ATR={atr:.2f} → stop=${_atr_stops[decision.symbol]:.2f}"
+                        )
+
+                # ── Setup type classification ──────────────────────────────────
+                _sig_type_entry = getattr(decision, "signal_type", None) or ""
+                if trading_window in ("premarket", "afterhours"):
+                    _setup_type = "extended_hours"
+                elif _sig_type_entry in ("mean_reversion", "oversold_bounce"):
+                    _setup_type = "mean_reversion"
+                elif _sig_type_entry in ("event_driven", "earnings", "news"):
+                    _setup_type = "event_driven"
+                else:
+                    _setup_type = "momentum_breakout"
+                try:
+                    from zoneinfo import ZoneInfo as _zi
+                    _entry_hour_et = datetime.now(_zi("America/New_York")).hour
+                except Exception:
+                    _entry_hour_et = None
+
                 if not order_filled:
                     # Bracket/limit order submitted but not yet filled.
                     # We still seed _previous_positions and watermarks with the estimated
@@ -2047,6 +2309,8 @@ async def run_trading_cycle():
                         "side": decision.action,
                         "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
                         "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                        "estimated_price": fill_price,
+                        "quantity": decision.quantity,
                     }
                     if decision.action == "buy" and fill_price > 0:
                         _position_high_watermarks[decision.symbol] = fill_price
@@ -2077,6 +2341,8 @@ async def run_trading_cycle():
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
                         side="short",
+                        setup_type=_setup_type,
+                        entry_hour_et=_entry_hour_et,
                     )
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
@@ -2097,6 +2363,8 @@ async def run_trading_cycle():
                         claude_reasoning=decision.reasoning,
                         market_regime=macro.get("market_regime"),
                         side="long",
+                        setup_type=_setup_type,
+                        entry_hour_et=_entry_hour_et,
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price

@@ -140,3 +140,52 @@ def get_performance():
             "spy_return_1m": None,
             "alpha": None,
         }
+
+
+@router.get("/scorecard")
+def get_long_short_scorecard():
+    """Win rate, avg winner/loser, profit factor, hold time — split by long vs short."""
+    from services.db import get_long_short_scorecard
+    return get_long_short_scorecard()
+
+
+@router.get("/blocked-trades")
+def get_blocked_trades_report():
+    """Opportunity cost report: which block reason suppressed the most profit."""
+    from services.db import get_blocked_trades_report
+    return get_blocked_trades_report()
+
+
+@router.get("/var")
+def get_portfolio_var():
+    """Latest portfolio VaR and gross exposure (updated each cycle)."""
+    from services.db import get_portfolio_var as _fn
+    return _fn()
+
+
+@router.get("/by-setup")
+def get_performance_by_setup():
+    """P&L breakdown by setup type: momentum_breakout / mean_reversion / event_driven / extended_hours."""
+    from services.db import get_performance_by_setup as _fn
+    return _fn()
+
+
+@router.get("/ai-baseline")
+def get_ai_baseline_comparison():
+    """Compare signal-only decisions vs Claude decisions; shows override rate."""
+    from services.db import get_ai_baseline_comparison as _fn
+    return _fn()
+
+
+@router.get("/slippage")
+def get_slippage_summary():
+    """Avg slippage per trade, total cost, best/worst single fill."""
+    from services.db import get_slippage_summary as _fn
+    return _fn()
+
+
+@router.get("/by-hour")
+def get_performance_by_hour():
+    """Win rate and avg P&L by entry hour (ET) for time-of-day analysis."""
+    from services.db import get_performance_by_hour as _fn
+    return _fn()
