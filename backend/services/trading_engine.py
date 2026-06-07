@@ -262,9 +262,11 @@ async def run_trading_cycle():
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
 
     try:
-        if not alpaca_service.is_market_open():
+        _market_status = alpaca_service.get_market_status()
+        if _market_status == "closed":
             logger.info("Market is closed. Skipping cycle.")
             return
+        _extended_hours = _market_status in ("premarket", "afterhours")
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
@@ -1928,6 +1930,28 @@ async def run_trading_cycle():
             if _options_handled:
                 order = None  # options_engine placed the order directly; skip stock order below
 
+            # Extended hours: limit orders only, no bracket/short orders
+            elif _extended_hours and decision.action == "buy":
+                # Pre-market: only news-triggered cycles (don't sweep all candidates)
+                if _market_status == "premarket" and not _urgent_ctx:
+                    logger.info(
+                        "Pre-market: skipping %s — only news-triggered trades allowed",
+                        decision.symbol,
+                    )
+                    continue
+                # After-hours: only earnings plays
+                if _market_status == "afterhours" and decision.symbol not in _earnings_play_pending:
+                    logger.info(
+                        "After-hours: skipping %s — only earnings plays allowed",
+                        decision.symbol,
+                    )
+                    continue
+                order = alpaca_service.submit_extended_hours_order(
+                    symbol=decision.symbol,
+                    qty=decision.quantity,
+                    side="buy",
+                )
+
             # Route to correct order executor
             elif decision.action == "short":
                 order = alpaca_service.submit_short_order(
@@ -2272,13 +2296,15 @@ async def _trading_loop():
             cleanup_old_bot_activity(days=30)
             logger.info("DB cleanup complete.")
 
-        # Sleep longer when market is closed (nights / weekends)
-        # so we don't spin every 5 min for 18 hours doing nothing
-        if market_open_now:
-            sleep_seconds = int(_risk_settings.get("cycle_interval_seconds", TRADING_INTERVAL_SECONDS))
-        else:
-            sleep_seconds = 900  # check every 15 min when closed
+        # Sleep longer when fully closed (nights / weekends).
+        # Run at normal interval during regular hours AND extended hours.
+        _status_now = alpaca_service.get_market_status()
+        if _status_now == "closed":
+            sleep_seconds = 900  # check every 15 min when fully closed
             logger.info("Market closed — checking again in 15 minutes")
+        else:
+            sleep_seconds = int(_risk_settings.get("cycle_interval_seconds", TRADING_INTERVAL_SECONDS))
+        market_open_now = _status_now != "closed"  # used for EOD detection below
 
         _next_run_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_seconds)
 

@@ -712,6 +712,85 @@ def is_market_open() -> bool:
     return clock.is_open
 
 
+def get_market_status() -> str:
+    """
+    Returns 'open' | 'premarket' | 'afterhours' | 'closed'.
+    Uses Alpaca clock for regular hours (handles holidays correctly).
+    Uses ET timezone for extended hours windows.
+    """
+    try:
+        clock = trading_client.get_clock()
+        if clock.is_open:
+            return "open"
+    except Exception:
+        pass
+
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        from datetime import timedelta
+        now_et = datetime.now(timezone.utc) - timedelta(hours=4)
+
+    if now_et.weekday() >= 5:
+        return "closed"
+
+    mins = now_et.hour * 60 + now_et.minute
+    if 8 * 60 + 30 <= mins < 9 * 60 + 30:
+        return "premarket"
+    if 16 * 60 <= mins < 18 * 60:
+        return "afterhours"
+    return "closed"
+
+
+def submit_extended_hours_order(
+    symbol: str,
+    qty: int,
+    side: str,
+) -> Optional[Order]:
+    """
+    Limit order for pre-market / after-hours sessions.
+    Alpaca requires: LimitOrderRequest + extended_hours=True + TimeInForce.DAY.
+    No bracket orders — TP/SL legs not supported in extended sessions.
+    """
+    from alpaca.trading.requests import LimitOrderRequest
+    order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+    try:
+        quote_request = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quotes = data_client.get_stock_latest_quote(quote_request)
+        quote = quotes[symbol]
+        ask_price = float(quote.ask_price or 0)
+        bid_price = float(quote.bid_price or 0)
+        if ask_price <= 0:
+            logger.warning(f"Extended hours {symbol}: no valid ask price — skipping")
+            return None
+        midpoint = round((bid_price + ask_price) / 2, 2) if bid_price > 0 else ask_price
+        # Slightly wider buffer than regular hours to account for extended-hours spreads
+        limit_price = round(midpoint * 1.003, 2) if side == "buy" else round(midpoint * 0.997, 2)
+        req = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+            limit_price=limit_price,
+            extended_hours=True,
+        )
+        order = trading_client.submit_order(req)
+        logger.info(f"Extended hours {side}: {qty} {symbol} @ limit ${limit_price:.2f}")
+        return Order(
+            id=str(order.id),
+            symbol=order.symbol,
+            side=order.side.value,
+            qty=float(order.qty),
+            status=order.status.value,
+            filled_avg_price=float(order.filled_avg_price) if order.filled_avg_price else None,
+            created_at=order.created_at,
+        )
+    except Exception as e:
+        logger.error(f"Extended hours order failed for {symbol}: {e}")
+        return None
+
+
 def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     """
     Fetch latest financial news in parallel from 10+ free sources:

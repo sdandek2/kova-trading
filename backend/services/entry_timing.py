@@ -441,32 +441,42 @@ def should_cover_short(
 def is_good_trading_window() -> tuple[str, str]:
     """
     Time-of-day filter using proper ET timezone (handles EDT/EST DST automatically).
-    Returns (mode, reason) where mode is "full" | "exits_only" | "closed".
+    Returns (mode, reason) where mode is:
+      "full"        — normal entries + exits
+      "exits_only"  — only exits/stop-losses, no new entries (9:30–9:35 opening window)
+      "premarket"   — extended hours, news-triggered limit orders only (8:30–9:30)
+      "afterhours"  — extended hours, earnings plays only (4:00–6:00 PM)
+      "closed"      — no trading at all
     """
     try:
         from zoneinfo import ZoneInfo
         now_et = datetime.now(ZoneInfo("America/New_York"))
     except Exception:
-        # Fallback: approximate with UTC-4 (EDT) if zoneinfo unavailable
         from datetime import timedelta
         now_et = datetime.now(timezone.utc) - timedelta(hours=4)
 
     total_minutes = now_et.hour * 60 + now_et.minute
 
+    premarket_start  = 8 * 60 + 30   # 8:30 AM ET
     market_open_et   = 9 * 60 + 30   # 9:30 AM ET
-    entries_start_et = 9 * 60 + 45   # 9:45 AM ET
+    entries_start_et = 9 * 60 + 35   # 9:35 AM ET  (was 9:45 — skip only worst 5 min)
     market_close_et  = 16 * 60        # 4:00 PM ET
+    afterhours_end   = 18 * 60        # 6:00 PM ET
 
+    if total_minutes < premarket_start:
+        return "closed", "Outside all trading windows"
     if total_minutes < market_open_et:
-        return "closed", "Pre-market — market not yet open"
-    if total_minutes >= market_close_et:
-        return "closed", "Market closed"
+        return "premarket", f"Pre-market (8:30–9:30 ET) — news-triggered limit orders only"
     if total_minutes < entries_start_et:
         return "exits_only", (
-            f"Opening 15 min window — exits allowed, new entries blocked "
+            f"Opening window — exits allowed, new entries blocked "
             f"({entries_start_et - total_minutes} min until entries open)"
         )
-    if total_minutes >= 15 * 60:   # 3:00 PM ET
+    if total_minutes >= afterhours_end:
+        return "closed", "Outside all trading windows"
+    if total_minutes >= market_close_et:
+        return "afterhours", "After-hours (4:00–6:00 PM ET) — earnings plays only"
+    if total_minutes >= 15 * 60:
         return "full", "Power hour — prime exit window"
 
     return "full", "Normal trading hours"
