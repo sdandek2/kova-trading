@@ -776,155 +776,305 @@ New card `G` in `AnalyticsView.swift` (after the existing 6 cards A–F):
 
 ---
 
-### Step 6 — Sprint Review Tracker (NEW FEATURE — Daily + Weekly)
+### Step 6 — Daily Universe Log (foundation for everything below)
 
-**Concept:** End-of-day and end-of-week automated report that answers:
-- "What were the biggest market moves today — did Kova capture them?"
-- "What did Kova trade well this week — which signals are working?"
-- "If Kova had bought every top-10 gainer at open, how much more would the portfolio be worth?"
+**Why needed first:** Sprint Review and Near-Miss Tracker both need to know "was this stock in Kova's universe today and which source put it there?" Without this log, we can't classify missed movers accurately.
 
-This is **different from Near-Miss Tracker (Step 5)**:
+**Modify `alpaca_service.py` → `get_tradeable_universe()`:** add one call at the end to log every symbol + source to DB.
 
-| Near-Miss Tracker | Sprint Review |
-|---|---|
-| Stocks scoring 35–54 (almost traded) | ALL significant market movers — regardless of whether Kova ever looked at them |
-| "Were we right to skip?" | "What did the whole market do vs what we captured?" |
-| Signal calibration tool | Strategy validation + opportunity cost measurement |
-| Real-time, logged during trading | Runs once at 4:30 PM ET daily, once on Friday EOD |
+**Modify `trading_engine.py`:** log near-misses (score 35–54) inline during scoring loop.
 
----
-
-**Three sections of the Sprint Review:**
-
-**Section 1 — Market Opportunity Map (daily)**
-- Pull top 20 gainers + top 20 losers at EOD via Alpaca screener
-- For each: classify into one of four buckets:
-  - `CAPTURED` — Kova traded it and made money ✅
-  - `IN_UNIVERSE_SKIPPED` — was in our universe, scored below 45, skipped
-  - `IN_UNIVERSE_WRONG` — was in our universe, we shorted when it went up (or vice versa)
-  - `MISSED_ENTIRELY` — never entered our universe at all
-- Calculate: "opportunity capture rate" = CAPTURED / total top-20 gainers
-
-**Section 2 — Hypothetical Portfolio (daily)**
-- Simulate: if Kova had bought top 10 gainers at 9:35 AM open and sold at 3:55 PM close
-- Simulate: if Kova had shorted top 10 losers at 9:35 AM and covered at 3:55 PM
-- Compare actual Kova P&L vs this hypothetical — gives "ceiling" for what was available
-- NOT a benchmark we try to beat — it's a sanity check ("market was up 3%, Kova made 0.8% — was anything available?")
-
-**Section 3 — What's Working (weekly, Friday EOD)**
-- Which signals triggered the most profitable completed trades this week?
-- Signal win rate this week: `{options_flow: 7/10 profitable, earnings_surprise: 3/3, insider_buy: 2/2}`
-- "Continue" list: signals with >60% win rate on trades they influenced
-- "Review" list: signals with <40% win rate (maybe tuning needed)
-- Regime accuracy: "Bull regime called correctly X/Y days (regime said bull, market was up)"
-
----
-
-**Backend implementation:**
-
-**New file: `backend/services/brain/sprint_review.py`**
-```python
-# Runs at 4:30 PM ET daily via APScheduler (already used for other EOD tasks)
-# Also runs full weekly summary on Fridays
-
-def run_daily_sprint_review():
-    """Fetch EOD movers, classify against our universe + trades, store to DB."""
-    pass
-
-def run_weekly_sprint_review():
-    """Aggregate daily reviews into weekly signal performance summary."""
-    pass
-```
-
-**DB tables needed:**
+**DB tables — create all at once:**
 ```sql
--- Daily snapshot of market movers vs Kova's activity
+-- Which symbols entered universe each cycle and via which source
+CREATE TABLE daily_universe_log (
+    id SERIAL PRIMARY KEY,
+    log_date DATE,
+    symbol VARCHAR(10),
+    sources TEXT[],       -- ["most_actives", "barchart_options", "fmp_earnings", "sec_insider", "sector_etf", "movers", "news"]
+    first_seen_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Stocks that almost traded (score 35–54) — for Near-Miss Tracker
+CREATE TABLE near_miss_log (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(10),
+    score INTEGER,
+    breakdown JSONB,          -- {rs:15, macd:10, options_flow:-18, regime:-15, ...}
+    suggested_action VARCHAR(10),
+    price_at_skip NUMERIC,
+    price_1h NUMERIC,
+    price_eod NUMERIC,
+    price_next_day NUMERIC,
+    hypothetical_pnl_pct NUMERIC,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Rolling signal performance — updated after every trade closes
+CREATE TABLE signal_performance_log (
+    id SERIAL PRIMARY KEY,
+    trade_date DATE,
+    symbol VARCHAR(10),
+    signal_name VARCHAR(50),  -- "options_flow", "barchart_short", "earnings_surprise", etc.
+    signal_boost INTEGER,     -- what the signal contributed (+18, -15, etc.)
+    trade_profitable BOOLEAN,
+    trade_pnl_pct NUMERIC,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Signal weights — read by signals.py instead of hardcoded constants
+-- Updated automatically every Sunday by weight adjustment job
+CREATE TABLE signal_weights (
+    signal_name VARCHAR(50) PRIMARY KEY,
+    current_weight INTEGER,
+    default_weight INTEGER,   -- fallback if DB unavailable
+    win_rate_30d NUMERIC,
+    sample_count_30d INTEGER,
+    last_adjusted DATE,
+    adjustment_reason TEXT
+);
+
+-- EOD sprint review snapshot — computed at 4:30 PM daily
 CREATE TABLE sprint_review_daily (
     id SERIAL PRIMARY KEY,
-    review_date DATE,
-    top_gainers JSONB,   -- [{symbol, open, close, pct_gain, kova_bucket, kova_pnl}]
-    top_losers  JSONB,   -- [{symbol, open, close, pct_loss, kova_bucket, kova_pnl}]
-    opportunity_capture_rate NUMERIC,  -- % of top gainers Kova caught
-    hypothetical_long_pnl NUMERIC,     -- if bought all top-10 gainers
-    hypothetical_short_pnl NUMERIC,    -- if shorted all top-10 losers
+    review_date DATE UNIQUE,
+    top_gainers JSONB,        -- [{symbol, pct_gain, kova_status, kova_pnl, sources}]
+    top_losers  JSONB,        -- [{symbol, pct_loss, kova_status, kova_pnl, sources}]
+    opportunity_capture_rate NUMERIC,   -- % of top 20 gainers Kova caught
+    hypothetical_long_pnl NUMERIC,      -- if bought top-10 gainers at open
+    hypothetical_short_pnl NUMERIC,     -- if shorted top-10 losers at open
     actual_kova_pnl NUMERIC,
-    missed_entirely_count INTEGER,     -- movers Kova never even looked at
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Weekly signal performance summary
-CREATE TABLE sprint_review_weekly (
-    id SERIAL PRIMARY KEY,
-    week_ending DATE,
-    signal_performance JSONB,  -- {options_flow: {wins:7, losses:3, avg_pnl:+2.1%}, ...}
-    regime_accuracy JSONB,     -- {bull: {called:5, correct:4}, bear: {...}, chop: {...}}
-    continue_signals TEXT[],   -- signals working well
-    review_signals TEXT[],     -- signals underperforming
-    summary_text TEXT,         -- auto-generated narrative
+    missed_entirely_count INTEGER,
+    missed_by_source JSONB,   -- {most_actives_would_catch:3, barchart_would_catch:2, no_source:6}
+    signal_win_rates JSONB,   -- {options_flow:0.71, barchart_short:0.25, earnings_surprise:0.75}
+    flagged_signals TEXT[],   -- signals below 40% win rate with ≥15 sample trades
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-**New endpoints:**
-- `GET /api/performance/sprint-review/daily?date=2026-06-07` — single day report
-- `GET /api/performance/sprint-review/weekly?week=2026-06-07` — week ending this date
-- `GET /api/performance/sprint-review/latest` — most recent daily + weekly
+---
+
+### Step 7 — Sprint Review EOD Job (4:30 PM daily, pure SQL — no AI)
+
+**Why no dedicated AI call:** Everything here is counting and arithmetic. SQL cannot hallucinate. Claude is NOT called separately for sprint review.
+
+**Where AI is used (free, existing):** The sprint review data is added as extra context to the **existing** `eod_analysis_service.py` EOD prompt that already runs daily. Claude sees the missed movers list naturally as part of its existing EOD write-up. No new API calls, no new cost.
+
+**New file: `backend/services/brain/sprint_review.py`**
+
+```python
+def run_daily_sprint_review() -> dict:
+    """
+    Runs at 4:30 PM ET. Pure SQL + Alpaca screener.
+    1. Fetch top 50 movers (Alpaca screener)
+    2. Classify each against daily_universe_log + trade_log
+    3. Compute signal win rates from signal_performance_log
+    4. Store to sprint_review_daily table
+    5. Return summary dict (injected into EOD Claude prompt)
+    """
+
+    # Step 1: EOD movers
+    movers = alpaca_screener.get_market_movers(top=50)
+    
+    # Step 2: Classify each mover (SQL joins, no AI)
+    for stock in movers.gainers + movers.losers:
+        was_traded    = db.query("SELECT * FROM trade_log WHERE symbol=? AND date=today")
+        was_in_univ   = db.query("SELECT sources FROM daily_universe_log WHERE symbol=? AND date=today")
+        
+        if was_traded and profitable:    status = "CAPTURED"
+        elif was_traded and loss:        status = "IN_UNIVERSE_WRONG"
+        elif was_in_univ:                status = "IN_UNIVERSE_SKIPPED"
+        else:                            status = "MISSED_ENTIRELY"
+        
+        # For MISSED_ENTIRELY: which source WOULD have caught it?
+        if status == "MISSED_ENTIRELY":
+            # Check yfinance: was volume high enough for most_actives?
+            # Check if it had unusual options on Barchart today?
+            # Check if it had earnings beat in last 21 days?
+            missed_by_source = diagnose_why_missed(stock.symbol)
+    
+    # Step 3: Signal win rates (pure SQL aggregation)
+    win_rates = db.query("""
+        SELECT signal_name,
+               COUNT(*) FILTER (WHERE trade_profitable) as wins,
+               COUNT(*) as total,
+               AVG(trade_pnl_pct) as avg_pnl
+        FROM signal_performance_log
+        WHERE trade_date >= NOW() - INTERVAL '30 days'
+        GROUP BY signal_name
+    """)
+    
+    # Step 4: Flag underperforming signals (rule-based, no AI)
+    flagged = [s for s in win_rates if s.wins/s.total < 0.40 and s.total >= 15]
+    
+    # Step 5: Store + return for EOD prompt injection
+    result = db.save_sprint_review(...)
+    return result
+```
+
+**How it runs automatically — check-then-run pattern (never missed even on restart):**
+
+```python
+# In trading_engine.py inside run_trading_cycle():
+now_et = datetime.now(ZoneInfo("America/New_York"))
+
+# Sprint review: fires at 4:30 PM, catches up if server was restarting at that time
+if now_et.hour == 16 and now_et.minute >= 30 and is_trading_day():
+    last_review = cache_get("sprint_review_last_run_date")
+    if last_review != now_et.date().isoformat():
+        asyncio.get_running_loop().run_in_executor(None, run_daily_sprint_review)
+        cache_set("sprint_review_last_run_date", now_et.date().isoformat(), ttl=86400)
+
+# Weekly weight adjustment: fires every Sunday
+if now_et.weekday() == 6:   # Sunday = 6
+    last_weekly = cache_get("weekly_weight_adjust_last_run")
+    if last_weekly != now_et.date().isoformat():
+        asyncio.get_running_loop().run_in_executor(None, run_weekly_weight_adjustment)
+        cache_set("weekly_weight_adjust_last_run", now_et.date().isoformat(), ttl=86400)
+```
+
+**Why this never gets missed:** Trading cycle runs every 10 minutes. If Railway restarts at 4:25 PM and recovers at 4:55 PM, the 4:55 cycle sees "past 4:30, hasn't run today → run now." The cache key with 24h TTL prevents double-runs. Same pattern as the existing `blocked_trades` price worker.
+
+**Extend `eod_analysis_service.py` — add sprint data to existing Claude prompt (free):**
+```python
+# In get_todays_activity(), append:
+result["sprint_review"] = get_todays_sprint_review()  # from DB or run inline
+
+# In the Claude prompt, add section:
+"""
+Today's sprint review:
+- Top market movers: {gainers} gainers, {losers} losers
+- Kova captured: {captured} of top 20 ({capture_rate}%)
+- Missed entirely (never in universe): {missed_entirely}
+  Why missed: {missed_by_source}
+- Flagged signals (below 40% win rate): {flagged_signals}
+"""
+# Claude naturally incorporates this into its existing EOD narrative.
+# No separate AI call. No extra cost. Insights appear in existing EOD report card on iOS.
+```
 
 ---
 
-**iOS UI — Sprint Review screen (new tab or section in AnalyticsView)**
+### Step 8 — Automatic Signal Weight Adjustment (Sunday 6 PM, pure rules)
 
-New card `H` in `AnalyticsView.swift`:
+**This is the actual model improvement loop** — the system tunes itself based on what's working.
+
+**New function: `run_weekly_weight_adjustment()` in `sprint_review.py`**
+
+```python
+def run_weekly_weight_adjustment():
+    """
+    Runs every Sunday. Pure arithmetic — no AI.
+    Reads 30-day signal win rates → adjusts weights in signal_weights table.
+    signals.py reads from this table instead of hardcoded constants.
+    """
+    
+    for signal in get_all_signal_win_rates(days=30):
+        current = get_signal_weight(signal.name)  # from DB
+        
+        if signal.sample_count < 15:
+            continue  # not enough data — don't adjust
+        
+        if signal.win_rate < 0.40:
+            new_weight = max(current - 2, current * 0.85)  # reduce by 15%, floor at 85%
+            reason = f"win_rate {signal.win_rate:.0%} over {signal.sample_count} trades"
+        
+        elif signal.win_rate > 0.70:
+            new_weight = min(current + 2, current * 1.15)  # increase by 15%, cap at 115%
+            reason = f"win_rate {signal.win_rate:.0%} over {signal.sample_count} trades"
+        
+        else:
+            continue  # 40–70% is acceptable, no change
+        
+        update_signal_weight(signal.name, new_weight, reason)
+        logger.info(f"Signal weight adjusted: {signal.name} {current} → {new_weight} ({reason})")
+```
+
+**Modify `signals.py` to read weights from DB:**
+
+```python
+# Replace hardcoded constants with DB-driven lookup:
+_WEIGHTS = {}  # populated once at startup, refreshed daily
+
+def _get_weight(signal_name: str, default: int) -> int:
+    """Read from signal_weights table, fall back to default if DB unavailable."""
+    if not _WEIGHTS:
+        _load_weights()
+    return _WEIGHTS.get(signal_name, default)
+
+# Usage (replacing hardcoded values):
+breakdown["options_flow"] = flow_boost * _get_weight("options_flow", default=1) / 18
+# Or simpler: just scale the boost directly:
+breakdown["options_flow"] = int(flow.get("conviction_boost", 0) * _get_weight("options_flow_mult", default=100) / 100)
+```
+
+**Initial values to seed `signal_weights` table:**
+```sql
+INSERT INTO signal_weights (signal_name, current_weight, default_weight) VALUES
+('barchart_very_unusual', 18, 18),
+('barchart_unusual', 10, 10),
+('barchart_short_override_rsi', 50, 50),  -- RSI threshold for short trigger
+('earnings_surprise_strong', 12, 12),
+('earnings_surprise_mild', 6, 6),
+('insider_buy_large', 15, 15),
+('insider_buy_small', 8, 8),
+('analyst_revision', 10, 10),
+('options_flow_fallback', 10, 10);
+```
+
+---
+
+### Step 9 — iOS Cards G + H
+
+**Card G — Near-Miss Tracker** (`NearMissCard` in `AnalyticsView.swift`)
+- Endpoint: `GET /api/performance/near-misses`
+- Shows: total near-misses, % that would have been profitable, which signal was the deciding factor
+- "Threshold verdict": if >60% of near-misses were profitable → suggest lowering threshold to 40
+
+**Card H — Sprint Review** (`SprintReviewCard` in `AnalyticsView.swift`)
+- Endpoint: `GET /api/performance/sprint-review/latest`
+- Daily view: capture rate, hypothetical ceiling vs actual, missed entirely count
+- Tap to weekly view: signal win rates, flagged signals, regime accuracy
 
 ```
+Card G — Near-Miss Tracker:
 ┌──────────────────────────────────────────┐
-│ 📊 Sprint Review — Today                 │
+│ 🎯 Near Misses (Score 35–54)             │
+│  47 near-misses · 59.6% profitable       │
 │                                          │
-│  Market top movers: 20 gainers, 20 losers│
-│  Kova captured:  4 of top 20 gainers ✅  │
-│  Missed entirely: 11 (never in universe) │
-│  In universe, skipped: 5                 │
+│  Deciding signal:                        │
+│  options_flow  12x  avg +4.8% ████████  │
+│  regime        8x   avg -1.2% ███       │
+│  insider_buy   4x   avg +6.1% ██████████│
 │                                          │
-│  Hypothetical ceiling:                   │
-│  Top-10 longs:  +6.8% today             │
-│  Top-10 shorts: +4.2% today             │
-│  Kova actual:   +1.3% today             │
-│                                          │
-│  [View weekly →]                         │
+│  Verdict: threshold (45) looks optimal   │
 └──────────────────────────────────────────┘
 
-Weekly view (tap "View weekly →"):
+Card H — Sprint Review:
 ┌──────────────────────────────────────────┐
-│ 📊 Sprint Review — Week of Jun 2–7       │
+│ 📊 Sprint Review — Today / Week          │
+│  Captured 4 of 20 movers (20%)           │
+│  Missed entirely: 11 stocks              │
+│  Ceiling: +6.8% · Kova actual: +1.3%    │
 │                                          │
-│  Signals working well ✅                 │
-│  options_flow    7/10 trades profitable  │
-│  insider_buy     2/2  trades profitable  │
-│  earnings_surp.  3/4  trades profitable  │
+│  Signals ✅ options_flow 7/10            │
+│  Signals ⚠️ barchart_short 1/4          │
+│  Auto-adjust Sunday: barchart_short -2pt │
 │                                          │
-│  Signals to review ⚠️                   │
-│  barchart_short  1/4  trades profitable  │
-│                                          │
-│  Regime accuracy: Bull 4/5 days correct  │
-│  Opportunity capture: 22% of top movers  │
+│  [Claude EOD analysis →]                 │
 └──────────────────────────────────────────┘
 ```
 
-**Swift files to create/modify:**
-- `SprintReview.swift` — new models: `DailySprintReview`, `WeeklySprintReview`, `SignalPerformance`
-- `APIService.swift` — add `getSprintReviewLatest()`, `getSprintReviewWeekly()`
-- `AnalyticsView.swift` — add Card H (`SprintReviewCard`)
-
-**Data source for top movers:** Alpaca Screener API (`get_market_movers`) — already used in `get_tradeable_universe()`. At EOD, re-run with `top=20` to get the day's actual biggest movers. No new API needed.
-
----
-
-### Step 7 — Google Finance
-**Don't implement.** No official API. Scraping violates ToS and breaks constantly. yfinance (already in use) provides equivalent data from Yahoo Finance reliably. Nothing Google Finance offers that we don't already have.
+**Swift files:**
+- `NearMiss.swift` — `NearMissSummary`, `NearMissSignalBreakdown`
+- `SprintReview.swift` — `DailySprintReview`, `WeeklySprintReview`, `SignalWeight`
+- `APIService.swift` — `getNearMisses()`, `getSprintReviewLatest()`
+- `AnalyticsView.swift` — add `NearMissCard`, `SprintReviewCard`
 
 ---
 
-### Step 7 — Medium term
+### Step 10 — Medium Term (after Day 60)
+
 **Phase 2 — Backtest 2020-2024** (once ~1 week of paper trading data exists)
 - Extend `backend/services/brain/backtest.py` to loop 2020-2024 using yfinance
 - Run ablation tests (toggle exit rules off one at a time)

@@ -178,7 +178,9 @@ def _refresh_cache() -> None:
         records = _fetch_unusual_flow()
     except Exception as e:
         logger.warning("Barchart unusual options: %s", e)
-        _cache_fetched_at = time.time()  # don't hammer on failure
+        # Do NOT update _cache_fetched_at on failure — allows retry next cycle.
+        # If we set it here, a Barchart outage would silently blackout the signal
+        # for 15 minutes with no data, rather than retrying every cycle.
         return
 
     # Aggregate per symbol — a stock may appear multiple times (different strikes/expiries)
