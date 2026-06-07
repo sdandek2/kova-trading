@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KOVA — Features & Rules Reference</title>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #161a22;
+    --border: #252c3a;
+    --accent: #4f8ef7;
+    --green: #2ecc71;
+    --red: #e74c3c;
+    --yellow: #f39c12;
+    --purple: #9b59b6;
+    --teal: #1abc9c;
+    --text: #d4dbe8;
+    --muted: #6b7a95;
+    --tag-bg: #1e2433;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  header {
+    background: linear-gradient(135deg, #0d1b3e 0%, #1a0d3e 100%);
+    border-bottom: 1px solid var(--accent);
+    padding: 32px 40px;
+  }
+  header h1 { font-size: 28px; color: #fff; letter-spacing: 2px; }
+  header p { color: var(--muted); margin-top: 6px; }
+  .toc {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 40px;
+    display: flex; flex-wrap: wrap; gap: 10px;
+  }
+  .toc a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+  .toc a:hover { background: var(--tag-bg); }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 40px 80px; }
+  section { margin-bottom: 48px; }
+  h2 {
+    font-size: 18px;
+    color: #fff;
+    border-left: 3px solid var(--accent);
+    padding-left: 12px;
+    margin-bottom: 20px;
+    scroll-margin-top: 20px;
+  }
+  h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin: 20px 0 10px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card p, .card li { color: var(--muted); font-size: 13px; }
+  .card ul { padding-left: 18px; }
+  .card li { margin-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  th {
+    background: var(--tag-bg);
+    color: var(--accent);
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--tag-bg); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-green  { background: rgba(46,204,113,.15); color: var(--green); }
+  .badge-red    { background: rgba(231,76,60,.15);  color: var(--red);   }
+  .badge-yellow { background: rgba(243,156,18,.15); color: var(--yellow);}
+  .badge-blue   { background: rgba(79,142,247,.15); color: var(--accent);}
+  .badge-purple { background: rgba(155,89,182,.15); color: var(--purple);}
+  .badge-teal   { background: rgba(26,188,156,.15); color: var(--teal);  }
+  code {
+    background: var(--tag-bg);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-family: monospace;
+  }
+  .rule-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .rule-row:last-child { border-bottom: none; }
+  .rule-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+  .rule-text { color: var(--text); font-size: 13px; }
+  .rule-text em { color: var(--muted); font-style: normal; font-size: 12px; display: block; margin-top: 2px; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ KOVA — Features &amp; Rules Reference</h1>
+  <p>Complete system rules, thresholds, and logic — auto-derived from codebase · June 2026</p>
+</header>
+
+<nav class="toc">
+  <a href="#signals">Signal Scoring</a>
+  <a href="#regime">Regime Detection</a>
+  <a href="#data-sources">Data Sources</a>
+  <a href="#position-sizing">Position Sizing</a>
+  <a href="#entries">Entry Rules</a>
+  <a href="#exits">Exit &amp; Scale-Out</a>
+  <a href="#risk">Risk Controls</a>
+  <a href="#shorts">Short Selling</a>
+  <a href="#pyramiding">Pyramiding</a>
+  <a href="#macro">Macro &amp; Calendar</a>
+  <a href="#automation">Automation</a>
+  <a href="#weights">Signal Weight Auto-Tuning</a>
+  <a href="#testing">Testing &amp; Health</a>
+</nav>
+
+<main>
+
+<!-- ═══════════════════════════════ SIGNAL SCORING ══════════════════════════════ -->
+<section id="signals">
+  <h2>📊 Signal Scoring Engine</h2>
+
+  <div class="card">
+    <div class="card-title">Score Architecture</div>
+    <p>Every candidate symbol gets a composite score <strong>0 – 100</strong> assembled from independently weighted components. Claude then reviews the top candidates and makes final buy/short/hold/skip decisions.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Component</th><th>Source</th><th>Max Impact</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>RS Rank</strong></td><td>Internal RS ranking vs universe</td><td>±20 pts</td><td>RS percentile mapped to score contribution</td></tr>
+      <tr><td><strong>MACD</strong></td><td>26/12/9 from closing prices</td><td>±15 pts</td><td>Histogram direction + magnitude</td></tr>
+      <tr><td><strong>Volume</strong></td><td>Relative volume vs 20-day avg</td><td>±10 pts</td><td>Projected to full-day during session</td></tr>
+      <tr><td><strong>RSI</strong></td><td>14-period</td><td>±10 pts</td><td>Oversold boost, overbought penalty</td></tr>
+      <tr><td><strong>MA20 Position</strong></td><td>Price vs 20-day MA</td><td>±10 pts</td><td>Above = positive, below = negative</td></tr>
+      <tr><td><strong>News Sentiment</strong></td><td>Finnhub news count</td><td>±8 pts</td><td>Positive headline momentum</td></tr>
+      <tr><td><strong>Options Flow</strong></td><td>Barchart unusual activity</td><td>Variable</td><td>Conviction boost from call/put flow</td></tr>
+      <tr><td><strong>Earnings Revision</strong></td><td>FMP analyst revisions</td><td>Variable</td><td>Upward revision = positive boost</td></tr>
+      <tr><td><strong>Dark Pool</strong></td><td>Barchart dark pool prints</td><td>Variable</td><td>Large block buying signal</td></tr>
+      <tr><td><strong>Earnings Surprise</strong></td><td>FMP historical EPS</td><td>Variable</td><td>Beat % using <code>abs(estimate)</code> for math correctness</td></tr>
+      <tr><td><strong>Insider Buy</strong></td><td>SEC EDGAR Form 4 (proactive)</td><td>Variable</td><td>Injection from daily background scan</td></tr>
+      <tr><td><strong>Analyst Revision</strong></td><td>Finnhub recommendations</td><td>Variable</td><td>Strong buy / upgrade = positive</td></tr>
+      <tr><td><strong>Regime Alignment</strong></td><td>Brain regime result</td><td>±10 pts</td><td>Bull+buy, bear+short = bonus; misalign = penalty</td></tr>
+      <tr><td><strong>Earnings Proximity</strong></td><td>FMP earnings calendar</td><td>Variable</td><td>Near earnings date adjustment</td></tr>
+      <tr><td><strong>Sector Rotation</strong></td><td>Sector momentum</td><td>±20%</td><td>Hot sectors +20% shares, cold −20%</td></tr>
+    </tbody>
+  </table>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">🎯 Action Thresholds</div>
+      <div class="rule-row"><span class="rule-icon">🟢</span><div class="rule-text"><code>score ≥ 60</code> → <span class="badge badge-green">BUY</span> signal (is_strong_buy)<em>High-conviction long entry</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><code>score ≥ 45</code> → <span class="badge badge-yellow">WATCHABLE</span> candidate<em>is_watchable (not skip) — potential entry</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟠</span><div class="rule-text"><code>score 35–44</code> → <span class="badge badge-yellow">NEAR MISS</span><em>Tracked for price follow-up; not traded</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text"><code>score &lt; 35</code> → <span class="badge badge-red">FILTERED</span><em>Excluded from Claude's candidate list</em></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">🏷️ Signal Types</div>
+      <div class="rule-row"><span class="rule-icon">📈</span><div class="rule-text"><code>buy</code> — Long entry, regime-aligned</div></div>
+      <div class="rule-row"><span class="rule-icon">📉</span><div class="rule-text"><code>short</code> — Short entry, regime-aligned</div></div>
+      <div class="rule-row"><span class="rule-icon">📉</span><div class="rule-text"><code>short_candidate</code> — Heavy put flow or injected short</div></div>
+      <div class="rule-row"><span class="rule-icon">⏸️</span><div class="rule-text"><code>hold</code> — No new action</div></div>
+      <div class="rule-row"><span class="rule-icon">⏭️</span><div class="rule-text"><code>skip</code> — Regime mismatch, pass this cycle</div></div>
+      <div class="rule-row"><span class="rule-icon">🚫</span><div class="rule-text"><code>avoid</code> — Hard block (ETF rules, etc.)</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📌 Score Injection (Insider / Options)</div>
+    <ul>
+      <li>When SEC insider scan finds a buy signal → <strong>+20 pts</strong> injected directly to score</li>
+      <li>Barchart unusual call flow on a candidate → <code>conviction_boost</code> added to <code>options_flow</code> component</li>
+      <li>Dark pool large print → <code>conviction_boost</code> added to <code>darkpool</code> component</li>
+      <li>Score is always clamped: <code>max(0, min(100, score))</code></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ REGIME ══════════════════════════════════════ -->
+<section id="regime">
+  <h2>🌡️ Market Regime Detection</h2>
+
+  <table>
+    <thead><tr><th>Regime</th><th>Conditions</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-green">BULL</span></td>
+        <td>SPY above MA20, VIX low/normal, breadth strong</td>
+        <td>Full entries; long-biased; leveraged ETFs allowed</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-yellow">CHOP</span></td>
+        <td>SPY near MA20, mixed signals</td>
+        <td>Reduced sizing; buys and shorts both possible</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-red">BEAR</span></td>
+        <td>SPY below MA20, VIX elevated, breadth weak</td>
+        <td>No new longs; shorts favored; leveraged ETFs blocked</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">VIX Levels</div>
+      <div class="rule-row"><span class="rule-icon">🟢</span><div class="rule-text"><code>low</code> — VIX &lt; 15 — risk-on</div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><code>normal</code> — VIX 15–25</div></div>
+      <div class="rule-row"><span class="rule-icon">🟠</span><div class="rule-text"><code>high</code> — VIX 25–35 — caution</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text"><code>extreme</code> — VIX &gt; 35 — leveraged ETFs blocked</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Regime Score (−3 to +3)</div>
+      <p>Internal score used to classify regime. Combines SPY trend, VIX level, and market breadth (% of universe above MA20).</p>
+      <ul style="margin-top:8px">
+        <li>Positive scores → bull</li>
+        <li>Near-zero → chop</li>
+        <li>Negative → bear</li>
+        <li>Confidence 0.0–1.0 output per regime</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🏦 Leveraged ETF Rules</div>
+    <ul>
+      <li>Allowed ONLY when <code>regime = bull</code> AND <code>vix ≠ high/extreme</code></li>
+      <li>In <strong>Aggressive mode</strong>: up to 2 correlated leveraged ETFs simultaneously</li>
+      <li>Long leveraged: <code>TQQQ SOXL TECL FNGU SPXL UPRO UDOW TNA</code></li>
+      <li>Short leveraged: <code>SQQQ SOXS TECS FNGS SPXS SPXU SDOW TZA</code></li>
+      <li>Pyramiding leveraged ETFs also blocked when regime ≠ bull</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ DATA SOURCES ═════════════════════════════════ -->
+<section id="data-sources">
+  <h2>🔌 Data Sources &amp; Connectors</h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="badge badge-blue">Alpaca</span> Market Data</div>
+      <ul>
+        <li>Real-time quotes, bars, positions, orders</li>
+        <li><code>get_market_snapshot_light()</code> — current price + 5-day change + relative volume</li>
+        <li><code>get_tradeable_universe()</code> — filtered universe for scoring</li>
+        <li>IEX feed (not SIP) to avoid data fees</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="badge badge-purple">Barchart</span> Options &amp; Dark Pool</div>
+      <ul>
+        <li>Unusual options activity (call/put flow)</li>
+        <li>Dark pool large prints</li>
+        <li>ETFs excluded from unusual activity scan</li>
+        <li><strong>Bug fix:</strong> failure does NOT update <code>_cache_fetched_at</code> — allows retry next cycle (was causing 15-min silent blackout)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="badge badge-green">FMP</span> Earnings &amp; Fundamentals</div>
+      <ul>
+        <li>Historical EPS beat/miss data</li>
+        <li>Earnings calendar (upcoming dates)</li>
+        <li>Analyst estimate revisions</li>
+        <li><strong>Bug fix:</strong> <code>eps_estimate == 0 → skip</code> (not &lt; 0). Beat % uses <code>abs(estimate)</code> so negative estimates work correctly</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="badge badge-yellow">SEC EDGAR</span> Insider Trading</div>
+      <ul>
+        <li>Form 4 filings parsed for buy signals</li>
+        <li>Proactive daily scan of 129 large/mid-cap symbols at startup</li>
+        <li>Background thread; 0.2s rate-limit between calls</li>
+        <li>Cache key: <code>sec_insider_scan_last_date</code> (prevents re-scan same day)</li>
+        <li>Injection candidates → <strong>+20 pts</strong> score boost</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="badge badge-teal">FRED</span> Macro Confidence</div>
+      <ul>
+        <li>Federal Reserve economic data</li>
+        <li>Returns macro score <code>−3 to +3</code></li>
+        <li>Confidence output wired to capital multiplier:</li>
+        <li><code>≥ 80% conf → +0.10 size (max 1.10)</code></li>
+        <li><code>≤ 50% conf → −0.10 size (floor 0.30)</code></li>
+        <li>Neutral (51–79%) → no change</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="badge badge-blue">Finnhub</span> News &amp; Analysts</div>
+      <ul>
+        <li>Real-time news headlines</li>
+        <li>Analyst recommendation signal (<code>get_recommendation_signal()</code>)</li>
+        <li>Injected into Claude's prompt as context</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ POSITION SIZING ══════════════════════════════ -->
+<section id="position-sizing">
+  <h2>💰 Position Sizing</h2>
+
+  <div class="card">
+    <div class="card-title">Sizing Formula Chain</div>
+    <p>Final position size is computed through a cascading multiplier chain:</p>
+    <table style="margin-top:12px">
+      <thead><tr><th>Layer</th><th>Multiplier</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Base strategy max %</td><td>Per strategy config</td><td>e.g. Conservative = smaller %, Aggressive = larger %</td></tr>
+        <tr><td>Regime capital mult</td><td>0.30 – 1.10</td><td>Bear → shrink, Bull + FRED → expand</td></tr>
+        <tr><td>FRED confidence</td><td>±0.10</td><td>≥80% → +10%, ≤50% → −10%</td></tr>
+        <tr><td>Macro event</td><td>FOMC: 0.50, CPI/Jobs: 0.70</td><td>Shrink all new opens on event days</td></tr>
+        <tr><td>Sector rotation</td><td>±20%</td><td>Hot sector +20% shares, cold −20%</td></tr>
+        <tr><td>VWAP premium</td><td>−25%</td><td>Price &gt;0.8% above intraday VWAP → reduce by 25%</td></tr>
+        <tr><td>Penny stock cap</td><td>≤ 3% portfolio</td><td>Stocks under $5 capped at <code>max_penny_position_pct</code> (default 3%)</td></tr>
+        <tr><td>Concentration hard cap</td><td>10% per stock</td><td>No single position &gt;10% of portfolio value</td></tr>
+        <tr><td>Kelly criterion</td><td>Derived from trade history</td><td>Applied when sufficient history exists</td></tr>
+        <tr><td>ATR sizing</td><td>risk_per_trade / ATR</td><td>Shares = (portfolio × risk_pct) / (1.5 × ATR)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">📌 Hard Limits</div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Max per stock: <strong>10% of portfolio</strong><em>Hard cap enforced after all multipliers</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Penny stocks (&lt;$5): <strong>3% max</strong><em>Prevents huge share counts on cheap stocks</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Per-cycle max: <strong>5 new trades</strong><em>Exits and trailing stops never blocked by this</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text">Pyramid spend: <strong>≤40% of cash</strong><em>Per pyramid add, never overcommit cash</em></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">📊 ATR Stop Sizing</div>
+      <ul>
+        <li>Regular stocks: stop = entry − <strong>1.5 × ATR</strong></li>
+        <li>Leveraged ETFs: stop = entry − <strong>2.0 × ATR</strong></li>
+        <li>Watermarks tracked in-memory and restored after Railway restart</li>
+        <li>Default trailing stop fallback: <strong>4%</strong> (Claude overrides per trade)</li>
+        <li>Default take profit fallback: <strong>20%</strong> (Claude overrides per trade)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ ENTRIES ══════════════════════════════════════ -->
+<section id="entries">
+  <h2>🚪 Entry Rules &amp; Guards</h2>
+
+  <div class="card">
+    <div class="card-title">Trading Window</div>
+    <table>
+      <thead><tr><th>Mode</th><th>Time (ET)</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-red">CLOSED</span></td><td>Before 9:30 / After 4:00</td><td>No actions taken at all</td></tr>
+        <tr><td><span class="badge badge-yellow">PARTIAL</span></td><td>9:30 – 9:45 (first 15 min)</td><td>Exits &amp; stops allowed; NO new entries</td></tr>
+        <tr><td><span class="badge badge-green">FULL</span></td><td>9:45 AM – market close</td><td>All actions permitted</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">🚫 Entry Block Conditions</div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Circuit breaker active (daily loss &gt;4%)</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">FOMC rate decision day: no entries after <strong>1:45 PM ET</strong></div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Market window = closed or partial</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Symbol on cooldown list (recently rejected or stopped out)</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Stop-out: <strong>2-hour re-entry block</strong> after position stopped out</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Leveraged ETF + regime ≠ bull</div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text">Score &lt; min_score (35) → never reaches Claude</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">📅 Macro Calendar Guards</div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>FOMC day</strong><em>Position size ×0.50; block after 1:45 PM</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>CPI / Jobs day</strong><em>Position size ×0.70</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>FDA binary event</strong><em>AI predicts direction; adjusts or blocks entry</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>Earnings proximity</strong><em>Score adjustment based on days-to-earnings</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>Afternoon pressure</strong><em>If &lt;3 trades by 1 PM ET, Claude gets pressure context</em></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Short Trigger Guards (11 Permutations)</div>
+    <p>A short is blocked unless ALL of these pass together:</p>
+    <table style="margin-top:10px">
+      <thead><tr><th>#</th><th>Guard</th><th>Requirement</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Regime allows shorts</td><td>bear or chop (NOT bull-only)</td></tr>
+        <tr><td>2</td><td>VIX not extreme</td><td>extreme VIX → unpredictable, no shorts</td></tr>
+        <tr><td>3</td><td>Not a leveraged ETF (unless inverse)</td><td>Leveraged longs cannot be shorted</td></tr>
+        <tr><td>4</td><td>Score qualifies</td><td>Short candidate signal from scoring engine</td></tr>
+        <tr><td>5</td><td>Not already in portfolio long</td><td>No same-symbol long+short</td></tr>
+        <tr><td>6</td><td>Short exposure cap</td><td>Total short &lt; <strong>15% of portfolio</strong></td></tr>
+        <tr><td>7</td><td>Per-symbol short cap</td><td>Max <strong>5% per short name</strong></td></tr>
+        <tr><td>8</td><td>Min quantity viable</td><td>≥1 share after 5% cap math</td></tr>
+        <tr><td>9</td><td>No entry-window block</td><td>First 15 min: no new shorts</td></tr>
+        <tr><td>10</td><td>Not on cooldown</td><td>Symbol not recently rejected</td></tr>
+        <tr><td>11</td><td>Circuit breaker clear</td><td>Daily loss &lt;4%</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ EXITS ════════════════════════════════════════ -->
+<section id="exits">
+  <h2>🚪 Exit, Scale-Out &amp; Cover Rules</h2>
+
+  <div class="card">
+    <div class="card-title">📈 Long Position Exit Ladder</div>
+    <table>
+      <thead><tr><th>Trigger</th><th>P&amp;L Level</th><th>Action</th><th>Trail %</th></tr></thead>
+      <tbody>
+        <tr><td>Trailing stop (tight)</td><td>≥ +25%</td><td>Protect gains</td><td><strong>2%</strong> trail</td></tr>
+        <tr><td>Trailing stop (medium)</td><td>+15% – +25%</td><td>Protect gains</td><td><strong>3%</strong> trail</td></tr>
+        <tr><td>Trailing stop (normal)</td><td>&lt; +15%</td><td>Default risk control</td><td><strong>4%</strong> trail (fallback)</td></tr>
+        <tr><td>Scale-out 1st trim</td><td>≥ +20%</td><td>Sell partial position</td><td>Next trim at +35%</td></tr>
+        <tr><td>Scale-out 2nd trim</td><td>≥ +35%</td><td>Sell partial position</td><td>Next trim at +50%</td></tr>
+        <tr><td>Scale-out Nth trim</td><td>+15pp increments</td><td>Sell partial</td><td>20%, 35%, 50%, 65%…</td></tr>
+        <tr><td>Re-entry after scale-out</td><td>Pulled back to MA20</td><td>Rebuild position</td><td>Requires 35% gain before next scale-out</td></tr>
+        <tr><td>Stop-loss</td><td>Claude-set per trade</td><td>Full exit</td><td>2h re-entry cooldown</td></tr>
+        <tr><td>RSI-based exit</td><td>Overbought</td><td>Partial or full exit</td><td>Bypasses scale-out check</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">📉 Short Cover Ladder</div>
+      <ul>
+        <li>1st cover: <strong>50% at +10% gain</strong></li>
+        <li>Remaining: trailing stop at +25%, +40%, +55% (10pp increments)</li>
+        <li>Trailing stop and stop-loss bypass cover check</li>
+        <li>RSI bypass: covers even mid-sequence if RSI signals</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">🛡️ Exit Override Rules</div>
+      <ul>
+        <li>Exits and scale-outs are <strong>never blocked</strong> by circuit breaker</li>
+        <li>Exits are <strong>never blocked</strong> by the max-trades-per-cycle limit</li>
+        <li>Trailing stops bypass scale-out count tracking</li>
+        <li>Hard stop-loss also bypasses all scale-out logic</li>
+        <li>Profit reserve: optional % of each realized profit moved to reserve (default 0%)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ RISK ═════════════════════════════════════════ -->
+<section id="risk">
+  <h2>🛡️ Risk Controls &amp; Circuit Breakers</h2>
+
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-title">🔴 Daily Loss Circuit Breaker</div>
+      <p>If portfolio P&amp;L drops more than <strong>4%</strong> in a single day:</p>
+      <ul style="margin-top:8px">
+        <li>All new BUY and SHORT entries blocked</li>
+        <li>Exits, covers, and trailing stops still execute</li>
+        <li>Logged to <code>circuit_breaker_log</code></li>
+        <li>Resets next trading day</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">⏱️ Cycle Interval</div>
+      <p>Default: <strong>600 seconds</strong> (10 min). Configurable.</p>
+      <ul style="margin-top:8px">
+        <li>300s = 5-min cycles</li>
+        <li>600s = 10-min cycles (default)</li>
+        <li>Changed via risk settings</li>
+        <li>Stops, exits, and trailing stop checks run every cycle regardless</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">🚨 Blocked Trade Tracking</div>
+      <p>When a trade is blocked (not risk-rejected, just guarded):</p>
+      <ul style="margin-top:8px">
+        <li>Logged to <code>blocked_trade_log</code></li>
+        <li>Price tracked at <strong>+15min, +1h, +EOD</strong></li>
+        <li>Used to evaluate what was missed</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📊 Near-Miss Tracking</div>
+    <ul>
+      <li>Candidates scoring <strong>35–44</strong> are logged to <code>near_miss_log</code></li>
+      <li>Price followed up at +15min, +1h, and EOD</li>
+      <li>Used in Sprint Review to evaluate if threshold is too high</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ SHORTS ═══════════════════════════════════════ -->
+<section id="shorts">
+  <h2>📉 Short Selling Rules</h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">Exposure Caps</div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Total short exposure: <strong>max 15% of portfolio</strong><em>Sum of all short position market values</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text">Per-symbol short: <strong>max 5% of portfolio</strong><em>Min 1 share required after cap math; otherwise blocked</em></div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text">Concentration doesn't fully block — just reduces size<em>Lets best shorts still go through at reduced qty</em></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Regime Alignment</div>
+      <div class="rule-row"><span class="rule-icon">🟢</span><div class="rule-text"><strong>Bear regime</strong> → shorts preferred, bonus score alignment</div></div>
+      <div class="rule-row"><span class="rule-icon">🟡</span><div class="rule-text"><strong>Chop regime</strong> → shorts allowed, neutral alignment</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text"><strong>Bull regime</strong> → shorts suppressed (suggested_action → skip)</div></div>
+      <div class="rule-row"><span class="rule-icon">🔴</span><div class="rule-text"><strong>Extreme VIX</strong> → shorts blocked (too unpredictable)</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ PYRAMIDING ════════════════════════════════════ -->
+<section id="pyramiding">
+  <h2>🔺 Pyramiding (Adding to Winners)</h2>
+
+  <div class="card">
+    <div class="card-title">Pyramid Tiers — Long Positions</div>
+    <table>
+      <thead><tr><th>Tier</th><th>P&amp;L Range</th><th>MACD Req</th><th>RSI Req</th><th>Add Qty</th></tr></thead>
+      <tbody>
+        <tr><td>Tier 1 (1st add)</td><td>+5% – +18%</td><td>&gt; 0.05</td><td>&lt; 72</td><td>+25% of current qty</td></tr>
+        <tr><td>Tier 2 (2nd add)</td><td>+22% – +40%</td><td>&gt; 0.03</td><td>&lt; 65</td><td>+15% of current qty</td></tr>
+        <tr><td>Max pyramids</td><td colspan="3">2 per position</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">Pyramid Guards</div>
+      <ul>
+        <li>Max <strong>2 pyramids</strong> per position</li>
+        <li>Never spend &gt;<strong>40% of cash</strong> on one pyramid add</li>
+        <li>Min add: <strong>1 share</strong> (floor for small positions)</li>
+        <li>Leveraged ETFs: blocked if regime ≠ bull</li>
+        <li>Scale-outs in progress → pyramid blocked on same symbol</li>
+        <li>Symbols pyramided this cycle skipped for re-entry check</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Re-entry After Scale-Out</div>
+      <ul>
+        <li>After 1st scale-out trim: position eligible for re-entry</li>
+        <li>Re-entry condition: price pulls back to <strong>MA20</strong></li>
+        <li>After re-entry: next scale-out threshold resets to <strong>+35%</strong></li>
+        <li>Scale-out count resets to 1 (not 0) to prevent infinite loop</li>
+        <li>Not available if symbol was pyramided same cycle</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ MACRO ════════════════════════════════════════ -->
+<section id="macro">
+  <h2>🌐 Macro &amp; Sector Rules</h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">FRED Macro Score → Capital Multiplier</div>
+      <table style="margin-top:10px">
+        <thead><tr><th>FRED Confidence</th><th>Effect on Multiplier</th><th>Cap / Floor</th></tr></thead>
+        <tbody>
+          <tr><td>≥ 80%</td><td>+ 0.10</td><td>Max 1.10</td></tr>
+          <tr><td>51–79% (neutral)</td><td>No change</td><td>—</td></tr>
+          <tr><td>≤ 50%</td><td>− 0.10</td><td>Floor 0.30</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">Sector Rotation</div>
+      <ul>
+        <li>Hot sectors (momentum score &gt;+2%): <strong>+20% shares</strong></li>
+        <li>Cold sectors (momentum score &lt;−1%): <strong>−20% shares</strong></li>
+        <li>Neutral sectors: no adjustment</li>
+        <li>Applied after all other sizing multipliers</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Macro Calendar Events</div>
+    <table>
+      <thead><tr><th>Event</th><th>Entry Rule</th><th>Size Rule</th></tr></thead>
+      <tbody>
+        <tr><td>FOMC Rate Decision</td><td>Blocked after 1:45 PM ET</td><td>×0.50 all new opens</td></tr>
+        <tr><td>CPI Release</td><td>No block</td><td>×0.70 all new opens</td></tr>
+        <tr><td>Jobs Report</td><td>No block</td><td>×0.70 all new opens</td></tr>
+        <tr><td>FDA Binary Event</td><td>AI predicts direction; may block/flip</td><td>AI-determined</td></tr>
+        <tr><td>Earnings (upcoming)</td><td>Proximity adjustment in score</td><td>Claude-set stop/TP</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ AUTOMATION ═══════════════════════════════════ -->
+<section id="automation">
+  <h2>🤖 Automation &amp; Daily Jobs</h2>
+
+  <div class="card">
+    <div class="card-title">What Runs Automatically — Zero Manual Input Required</div>
+    <table>
+      <thead><tr><th>Job</th><th>When</th><th>What It Does</th></tr></thead>
+      <tbody>
+        <tr><td>SEC Insider Scan</td><td>Daily at startup (background thread)</td><td>Scans 129 large/mid-caps for Form 4 buy signals; cached so it only runs once/day</td></tr>
+        <tr><td>Trading Cycle</td><td>Every 10 min (configurable)</td><td>Score universe → Claude decides → execute orders → update stops</td></tr>
+        <tr><td>EOD Claude Prompt</td><td>After market close daily</td><td>Summarizes trades, P&amp;L, decisions; stores in DB; generates iOS cards</td></tr>
+        <tr><td>Sprint Review</td><td>Every 10 trading days (EOD)</td><td>Win rate analysis, signal review, near-miss review, regime analysis, strategy assessment</td></tr>
+        <tr><td>Signal Weight Adjustment</td><td>Sundays (after 60+ days of data)</td><td>Auto-adjust weights based on signal performance — bidirectional</td></tr>
+        <tr><td>Near-miss Price Follow-up</td><td>+15min, +1h, EOD per blocked trade</td><td>Tracks where price went after block/near-miss for review</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ SIGNAL WEIGHTS ═══════════════════════════════ -->
+<section id="weights">
+  <h2>⚖️ Signal Weight Auto-Tuning</h2>
+
+  <div class="card">
+    <div class="card-title">Bidirectional Weight Adjustment (Sundays, after 60 days)</div>
+    <p>For each signal (options flow, insider, dark pool, etc.) with ≥ 15 trades in history:</p>
+    <table style="margin-top:12px">
+      <thead><tr><th>Win Rate</th><th>Direction</th><th>Adjustment</th><th>Limit</th></tr></thead>
+      <tbody>
+        <tr><td>&lt; 40%</td><td>Signal is underperforming</td><td><strong>−15%</strong> weight</td><td>Floor: 50% of default</td></tr>
+        <tr><td>40–70%</td><td>Normal performance</td><td>No change</td><td>—</td></tr>
+        <tr><td>&gt; 70%</td><td>Signal is outperforming</td><td><strong>+15%</strong> weight</td><td>Cap: 150% of default</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">Example: Barchart Call Flow</div>
+      <ul>
+        <li>Default weight: 100%</li>
+        <li>After 60 days: 35% win rate → weight drops to <strong>85%</strong></li>
+        <li>Continues drifting down if &lt;40%: 85% → 70% → <strong>floor 50%</strong></li>
+        <li>Rebounds if win rate recovers &gt;70%: floor → 65% → 80% → <strong>cap 150%</strong></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">What Gets Tracked</div>
+      <ul>
+        <li><code>signal_performance_log</code> table: signal type, symbol, outcome, P&amp;L</li>
+        <li>Win = trade was profitable at exit</li>
+        <li>Per-signal win rate computed over rolling window</li>
+        <li>Weights stored in <code>signal_weights</code> table</li>
+        <li>Applied to scoring on next cycle after update</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ TESTING ══════════════════════════════════════ -->
+<section id="testing">
+  <h2>🧪 Testing &amp; Health Monitoring</h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">rule_validation_test.py</div>
+      <p style="margin-bottom:8px"><span class="badge badge-green">177 checks</span> &nbsp; No AI, no real API calls, ~30 sec</p>
+      <ul>
+        <li>All 11 short trigger guard permutations</li>
+        <li>Score thresholds (buy/watchable/near-miss/filter)</li>
+        <li>Regime capital multiplier math</li>
+        <li>FRED confidence → size adjustment</li>
+        <li>Barchart ETF exclusion logic</li>
+        <li>Position sizing with ATR</li>
+        <li>Signal boosts (insider +20, sector ±20%)</li>
+        <li>Regime alignment score changes</li>
+        <li>Insider injection guards</li>
+        <li>Circuit breaker trigger</li>
+      </ul>
+      <p style="margin-top:10px"><code>cd backend &amp;&amp; python3 scripts/rule_validation_test.py</code></p>
+    </div>
+    <div class="card">
+      <div class="card-title">full_system_test.py</div>
+      <p style="margin-bottom:8px"><span class="badge badge-blue">104 checks</span> &nbsp; Real API calls, ~3–5 min, run on Railway</p>
+      <ul>
+        <li>Environment &amp; API keys (8 checks)</li>
+        <li>Alpaca connection + live snapshot</li>
+        <li>Regime detection with crafted price series</li>
+        <li>Signal engine end-to-end scoring (5 stocks)</li>
+        <li>Universe building</li>
+        <li>Risk management math</li>
+        <li>Technical indicators (RSI, MACD, MA20)</li>
+        <li>Position sizing chain</li>
+        <li>Macro &amp; sector rotation</li>
+        <li>Database read/write (TEST_MODE blocks writes)</li>
+        <li>News &amp; sentiment connectors</li>
+        <li>EOD analysis structure</li>
+      </ul>
+      <p style="margin-top:10px"><code>python3 scripts/full_system_test.py</code></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">health_check.py</div>
+    <p style="margin-bottom:8px"><span class="badge badge-yellow">6 sections</span> &nbsp; No AI, ~3 min, run Sunday nights</p>
+    <ul>
+      <li>Environment variables present</li>
+      <li>Barchart connector live call</li>
+      <li>FMP earnings connector live call</li>
+      <li>SEC insider on 3 symbols</li>
+      <li>Finnhub news &amp; analyst signal</li>
+      <li>FRED macro score</li>
+    </ul>
+    <p style="margin-top:10px"><code>cd backend &amp;&amp; python3 scripts/health_check.py</code></p>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🔒 TEST_MODE — No Database Writes</div>
+    <p><code>db.py</code> has a module-level <code>TEST_MODE: bool = False</code> flag. When set to <code>True</code> before any imports, all 17 write functions return early without touching Postgres. Covers:</p>
+    <p style="margin-top:8px; color: var(--muted); font-size:12px">cache_set · log_trade_decision · save_daily_summary · log_strategy_change · log_position_open · log_position_close · log_circuit_breaker · log_blocked_trade · update_blocked_trade_prices · log_bot_activity · log_slippage · log_daily_universe · log_near_miss · update_near_miss_prices · log_signal_performance · update_signal_weight · save_sprint_review</p>
+  </div>
+</section>
+
+</main>
+</body>
+</html>

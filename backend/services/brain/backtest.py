@@ -65,6 +65,7 @@ class SimTrade:
     shares: float = 0.0
     signal_type: str = ""
     regime_at_entry: str = ""
+    direction: str = "long"        # "long" | "short"
     exit_reason: str = ""          # "take_profit" | "stop_loss" | "time_stop" | "signal_exit" | "eod"
     pl_pct: float = 0.0
     pl_dollar: float = 0.0
@@ -223,8 +224,8 @@ def _try_open(
         return None
     if len(open_positions) >= _MAX_OPEN_POSITIONS:
         return None
-    if candidate.suggested_action not in ("buy",):
-        return None  # backtest only longs for simplicity
+    if candidate.suggested_action not in ("buy", "short"):
+        return None
 
     price = candidate.price
     if not price or price <= 0:
@@ -240,6 +241,7 @@ def _try_open(
         shares=shares,
         signal_type=candidate.signal_type,
         regime_at_entry=regime_result.regime if regime_result else "unknown",
+        direction="short" if candidate.suggested_action == "short" else "long",
     )
 
 
@@ -249,7 +251,10 @@ def _check_exit(trade: SimTrade, current_price: float, today: date) -> Optional[
         return None
 
     hold_days = (today - trade.entry_date).days
-    pct_change = (current_price - trade.entry_price) / trade.entry_price
+    if trade.direction == "short":
+        pct_change = (trade.entry_price - current_price) / trade.entry_price
+    else:
+        pct_change = (current_price - trade.entry_price) / trade.entry_price
 
     if pct_change <= -_STOP_LOSS_PCT:
         return "stop_loss"
@@ -264,8 +269,12 @@ def _close_trade(trade: SimTrade, exit_price: float, exit_date: date, reason: st
     trade.exit_date = exit_date
     trade.exit_price = exit_price
     trade.exit_reason = reason
-    trade.pl_pct = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
-    trade.pl_dollar = round((exit_price - trade.entry_price) * trade.shares, 4)
+    if trade.direction == "short":
+        trade.pl_pct = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
+        trade.pl_dollar = round((trade.entry_price - exit_price) * trade.shares, 4)
+    else:
+        trade.pl_pct = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
+        trade.pl_dollar = round((exit_price - trade.entry_price) * trade.shares, 4)
     return trade
 
 

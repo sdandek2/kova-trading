@@ -700,7 +700,9 @@ async def run_trading_cycle():
                 # Log signal performance for weekly weight adjustment
                 try:
                     _entry_p_sig = prev.get("avg_entry_price") or exit_price
-                    _pl_pct_sig = ((exit_price - _entry_p_sig) / _entry_p_sig * 100) if _entry_p_sig else 0.0
+                    _is_short_sig = prev.get("side", "long") == "short"
+                    _pl_pct_sig = ((_entry_p_sig - exit_price) / _entry_p_sig * 100 if _is_short_sig
+                                   else (exit_price - _entry_p_sig) / _entry_p_sig * 100) if _entry_p_sig else 0.0
                     _breakdown_sig = prev.get("score_breakdown") or {}
                     if _breakdown_sig:
                         log_signal_performance(
@@ -715,7 +717,9 @@ async def run_trading_cycle():
                 try:
                     from services.brain.learning import on_trade_closed
                     entry_p = prev.get("avg_entry_price") or exit_price
-                    pl_pct = ((exit_price - entry_p) / entry_p * 100) if entry_p else 0.0
+                    _is_short_lrn = prev.get("side", "long") == "short"
+                    pl_pct = ((entry_p - exit_price) / entry_p * 100 if _is_short_lrn
+                              else (exit_price - entry_p) / entry_p * 100) if entry_p else 0.0
                     on_trade_closed({
                         "symbol": sym,
                         "signal_type": prev.get("signal_type", "momentum"),
@@ -2482,7 +2486,9 @@ async def run_trading_cycle():
                     try:
                         from services.brain.learning import on_trade_closed
                         entry_p = prev.get("avg_entry_price") or fill_price
-                        pl_pct = ((fill_price - entry_p) / entry_p * 100) if entry_p else 0.0
+                        _is_short_ai = prev.get("side", "long") == "short"
+                        pl_pct = ((entry_p - fill_price) / entry_p * 100 if _is_short_ai
+                                  else (fill_price - entry_p) / entry_p * 100) if entry_p else 0.0
                         on_trade_closed({
                             "symbol": decision.symbol,
                             "signal_type": prev.get("signal_type", "momentum"),
