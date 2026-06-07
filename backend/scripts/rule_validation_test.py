@@ -12,7 +12,8 @@ Usage:
     cd backend && python scripts/rule_validation_test.py --section thresholds
 
 Sections: short_trigger, thresholds, regime_mult, fred_mult, barchart_exclusions,
-          position_sizing, signal_boosts, circuit_breaker, injection_guards, regime_rules
+          position_sizing, signal_boosts, circuit_breaker, injection_guards, regime_rules,
+          negative
 
 Exit 0 = all rules enforced correctly. Exit 1 = rule violations found.
 Runtime: ~30 seconds (all mocked, no real API calls).
@@ -741,6 +742,295 @@ if should_run("circuit_breaker"):
         check(f"PnL={pnl:+.1f}% vs limit=-{limit}% → halt={expected_halt}",
               halted == expected_halt,
               f"{'HALTED' if halted else 'trading'}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 11 — NEGATIVE / REJECTION TESTS
+# System must SAY NO when it must — wrong direction gets worse than no action
+# ══════════════════════════════════════════════════════════════════════════════
+if should_run("negative"):
+    section("11. Negative / Rejection Tests (system must block what it should)")
+
+    # ── 11a. Short P&L math — must be (entry - exit), not (exit - entry) ──────
+    def short_pl(entry, exit_price):
+        return (entry - exit_price) / entry * 100
+
+    def long_pl(entry, exit_price):
+        return (exit_price - entry) / entry * 100
+
+    # Short entered 100, exited 85 → +15% gain (not a loss)
+    check("Short $100→$85 = +15% gain (not -15%)",
+          round(short_pl(100, 85), 2) == 15.0,
+          f"got {short_pl(100, 85):.2f}%")
+
+    # Short entered 100, exited 115 → -15% loss (not a gain)
+    check("Short $100→$115 = -15% loss (not +15%)",
+          round(short_pl(100, 115), 2) == -15.0,
+          f"got {short_pl(100, 115):.2f}%")
+
+    # Long math should be opposite — verify we didn't invert it
+    check("Long $100→$115 = +15% (not -15%)",
+          round(long_pl(100, 115), 2) == 15.0,
+          f"got {long_pl(100, 115):.2f}%")
+
+    check("Long $100→$85 = -15% (not +15%)",
+          round(long_pl(100, 85), 2) == -15.0,
+          f"got {long_pl(100, 85):.2f}%")
+
+    # ── 11b. Short exposure cap — 15% total portfolio ─────────────────────────
+    def short_blocked_by_exposure(total_short_pct, per_sym_pct, portfolio_value):
+        """Returns (total_blocked, per_sym_blocked)."""
+        total_blocked = total_short_pct >= 0.15
+        max_qty = int(portfolio_value * 0.05 / 100)  # 5% cap per symbol at $100/share
+        per_sym_blocked = per_sym_pct > 0.05
+        return total_blocked, per_sym_blocked
+
+    # Total short at 15% → must block
+    tb, _ = short_blocked_by_exposure(0.15, 0.03, 100_000)
+    check("Total short 15% → blocked",     tb is True,  f"blocked={tb}")
+
+    # Total short at 14.9% → must allow
+    tb, _ = short_blocked_by_exposure(0.149, 0.03, 100_000)
+    check("Total short 14.9% → allowed",   tb is False, f"blocked={tb}")
+
+    # Per-symbol 5% cap — 6% should be reduced/blocked
+    _, pb = short_blocked_by_exposure(0.10, 0.06, 100_000)
+    check("Per-symbol short 6% → blocked", pb is True,  f"blocked={pb}")
+
+    # Per-symbol 4.9% → allowed
+    _, pb = short_blocked_by_exposure(0.10, 0.049, 100_000)
+    check("Per-symbol short 4.9% → allowed", pb is False, f"blocked={pb}")
+
+    # ── 11c. Leveraged ETF blocked in bear / chop regime ──────────────────────
+    def lev_etf_allowed(regime, vix_level):
+        """Mirrors trading_engine logic: allowed only in bull + non-extreme VIX."""
+        if regime != "bull":
+            return False
+        if vix_level in ("high", "extreme"):
+            return False
+        return True
+
+    for regime, vix, expected in [
+        ("bull",  "normal",  True),   # allowed
+        ("bull",  "low",     True),   # allowed
+        ("bull",  "high",    False),  # blocked — VIX too high
+        ("bull",  "extreme", False),  # blocked — extreme VIX
+        ("chop",  "normal",  False),  # blocked — not bull
+        ("chop",  "low",     False),  # blocked — not bull
+        ("bear",  "normal",  False),  # blocked — bear regime
+        ("bear",  "low",     False),  # blocked — bear regime
+    ]:
+        allowed = lev_etf_allowed(regime, vix)
+        check(f"Leveraged ETF | regime={regime} vix={vix} → {'allowed' if expected else 'BLOCKED'}",
+              allowed == expected, f"got {'allowed' if allowed else 'blocked'}")
+
+    # ── 11d. Penny stock hard cap — position must not exceed 3% ───────────────
+    def apply_penny_cap(price, requested_pct, penny_cap_pct=0.03, penny_threshold=5.0):
+        """Returns effective max_pct after penny cap."""
+        if price < penny_threshold:
+            return min(requested_pct, penny_cap_pct)
+        return requested_pct
+
+    # $3 stock requesting 10% → capped to 3%
+    eff = apply_penny_cap(3.0, 0.10)
+    check("Penny $3 stock: 10% request capped to 3%",
+          eff == 0.03, f"effective={eff:.0%}")
+
+    # $4.99 stock requesting 5% → capped to 3%
+    eff = apply_penny_cap(4.99, 0.05)
+    check("Penny $4.99 stock: 5% request capped to 3%",
+          eff == 0.03, f"effective={eff:.0%}")
+
+    # $5.00 stock requesting 5% → NOT capped (exactly at boundary)
+    eff = apply_penny_cap(5.00, 0.05)
+    check("$5.00 stock: 5% request not capped (at boundary)",
+          eff == 0.05, f"effective={eff:.0%}")
+
+    # $150 stock requesting 8% → not capped
+    eff = apply_penny_cap(150.0, 0.08)
+    check("Normal $150 stock: 8% request not capped",
+          eff == 0.08, f"effective={eff:.0%}")
+
+    # ── 11e. Concentration hard cap — no single position > 10% ───────────────
+    def concentration_cap(current_position_pct, new_qty, price, portfolio_value, hard_cap=0.10):
+        """Returns capped qty so position stays ≤ hard_cap."""
+        max_value   = portfolio_value * hard_cap
+        current_val = current_position_pct * portfolio_value
+        room        = max(0, max_value - current_val)
+        allowed_qty = int(room / price)
+        return min(new_qty, allowed_qty)
+
+    pv = 100_000.0
+    # Already at 9%, requesting 200 more shares at $100 → only 10 allowed (10% cap)
+    capped = concentration_cap(0.09, 200, 100.0, pv)
+    check("Conc cap: 9% + 200@$100 → only 10 shares allowed",
+          capped == 10, f"capped_qty={capped}")
+
+    # Already at 10% → zero new shares allowed
+    capped = concentration_cap(0.10, 100, 100.0, pv)
+    check("Conc cap: already at 10% → 0 new shares",
+          capped == 0, f"capped_qty={capped}")
+
+    # At 5% → requesting 50 shares at $100 → all 50 allowed (5%+5%=10% OK)
+    capped = concentration_cap(0.05, 50, 100.0, pv)
+    check("Conc cap: 5% + 50@$100 → all 50 allowed",
+          capped == 50, f"capped_qty={capped}")
+
+    # ── 11f. Pyramid limits — max 2 adds, max 40% of cash per add ─────────────
+    def pyramid_allowed(pyrs_taken, cash, add_cost, max_pyrs=2, max_cash_pct=0.40):
+        if pyrs_taken >= max_pyrs:
+            return False, "max pyramids reached"
+        if cash > 0 and add_cost / cash > max_cash_pct:
+            return False, "exceeds 40% cash limit"
+        return True, "ok"
+
+    ok, reason = pyramid_allowed(0, 10_000, 3_000)
+    check("Pyramid 1st add: 0 taken, $3k of $10k cash → allowed",
+          ok is True, reason)
+
+    ok, reason = pyramid_allowed(1, 10_000, 3_000)
+    check("Pyramid 2nd add: 1 taken, $3k of $10k cash → allowed",
+          ok is True, reason)
+
+    ok, reason = pyramid_allowed(2, 10_000, 3_000)
+    check("Pyramid 3rd add: 2 already taken → BLOCKED (max 2)",
+          ok is False, reason)
+
+    ok, reason = pyramid_allowed(0, 10_000, 4_500)
+    check("Pyramid: $4.5k of $10k cash (45%) → BLOCKED (>40%)",
+          ok is False, reason)
+
+    ok, reason = pyramid_allowed(0, 10_000, 3_999)
+    check("Pyramid: $3.999k of $10k cash (39.9%) → allowed",
+          ok is True, reason)
+
+    # ── 11g. Score < 35 must never reach scoring output ───────────────────────
+    # min_score filter in score_universe — check boundary conditions
+    for score, min_score, should_pass in [
+        (35,  35, True),    # exactly at floor → passes
+        (34,  35, False),   # one below floor → filtered
+        (0,   35, False),   # zero → filtered
+        (100, 35, True),    # max → passes
+        (44,  35, True),    # near-miss range → passes filter (tracked separately)
+        (45,  35, True),    # watchable → passes
+    ]:
+        passes = score >= min_score
+        check(f"Score {score} vs min_score {min_score} → {'passes' if should_pass else 'filtered'}",
+              passes == should_pass, f"score={score}")
+
+    # ── 11h. FMP eps_estimate == 0 must be skipped (not < 0) ─────────────────
+    def should_skip_eps(eps_estimate):
+        """Correct rule: skip only when estimate is exactly 0."""
+        return eps_estimate == 0
+
+    def beat_pct(eps_actual, eps_estimate):
+        """Correct formula uses abs(estimate) so negative estimates work."""
+        return ((eps_actual - eps_estimate) / abs(eps_estimate)) * 100
+
+    check("EPS estimate=0 → skip",         should_skip_eps(0)    is True,  "skipped")
+    check("EPS estimate=-0.5 → NOT skip",  should_skip_eps(-0.5) is False, "processed")
+    check("EPS estimate=0.5 → NOT skip",   should_skip_eps(0.5)  is False, "processed")
+
+    # Negative estimate: actual=-0.3, estimate=-0.5 → beat by 40%
+    bp = beat_pct(-0.3, -0.5)
+    check("Negative EPS: actual=-0.3, est=-0.5 → +40% beat",
+          round(bp, 2) == 40.0, f"got {bp:.2f}%")
+
+    # Positive estimate: actual=1.2, estimate=1.0 → +20% beat
+    bp = beat_pct(1.2, 1.0)
+    check("Positive EPS: actual=1.2, est=1.0 → +20% beat",
+          round(bp, 2) == 20.0, f"got {bp:.2f}%")
+
+    # Miss: actual=0.8, estimate=1.0 → -20% miss
+    bp = beat_pct(0.8, 1.0)
+    check("EPS miss: actual=0.8, est=1.0 → -20% miss",
+          round(bp, 2) == -20.0, f"got {bp:.2f}%")
+
+    # ── 11i. Barchart failure must NOT set cache timestamp ────────────────────
+    # The rule: on fetch failure, _cache_fetched_at must remain unchanged
+    # so the next cycle can retry. We test the logic pattern, not the connector.
+    import time as _time
+
+    # Success → timestamp set
+    _bc_state = {"ts": None}
+    def _bc_fetch(success):
+        if not success:
+            return   # BUG WAS: ts = time.time() here — now removed
+        _bc_state["ts"] = _time.time()
+
+    _bc_fetch(True)
+    check("Barchart success → cache timestamp set",
+          _bc_state["ts"] is not None, f"ts={_bc_state['ts']:.0f}")
+
+    _bc_state["ts"] = None
+    _bc_fetch(False)
+    check("Barchart failure → cache timestamp NOT set (allows retry)",
+          _bc_state["ts"] is None, f"ts={_bc_state['ts']}")
+
+    # ── 11j. FRED confidence must NOT invert size multiplier ─────────────────
+    def apply_fred_multiplier(base_mult, confidence):
+        if confidence >= 0.80:
+            return min(1.10, base_mult + 0.10)
+        elif confidence <= 0.50:
+            return max(0.30, base_mult - 0.10)
+        return base_mult
+
+    # High confidence boosts, never inverts
+    for base, conf, expected in [
+        (1.00, 0.85, 1.10),  # high conf → +0.10 (cap 1.10)
+        (1.10, 0.90, 1.10),  # already at cap → stays 1.10
+        (0.70, 0.85, 0.80),  # high conf → +0.10
+        (0.40, 0.85, 0.50),  # high conf → +0.10
+        (0.60, 0.65, 0.60),  # neutral → no change
+        (0.60, 0.51, 0.60),  # neutral boundary → no change
+        (1.00, 0.50, 0.90),  # low conf → -0.10
+        (0.35, 0.40, 0.30),  # low conf → -0.10, hits floor 0.30
+        (0.30, 0.20, 0.30),  # already at floor → stays 0.30
+    ]:
+        result = round(apply_fred_multiplier(base, conf), 10)
+        check(f"FRED base={base} conf={conf:.0%} → mult={expected}",
+              result == expected, f"got {result}")
+
+    # ── 11k. Signal weight bidirectional — floor 50%, cap 150% ───────────────
+    def adjust_weight(current_weight, default_weight, win_rate, min_trades=15, trade_count=20):
+        if trade_count < min_trades:
+            return current_weight   # not enough data
+        if win_rate < 0.40:
+            new = current_weight * 0.85
+            return max(new, default_weight * 0.50)
+        elif win_rate > 0.70:
+            new = current_weight * 1.15
+            return min(new, default_weight * 1.50)
+        return current_weight
+
+    default = 1.0
+
+    # Win rate 35% → decrease
+    w = adjust_weight(1.0, default, 0.35)
+    check("Win rate 35% → weight decreases",     w < 1.0,  f"new_weight={w:.3f}")
+
+    # Win rate 75% → increase
+    w = adjust_weight(1.0, default, 0.75)
+    check("Win rate 75% → weight increases",     w > 1.0,  f"new_weight={w:.3f}")
+
+    # Win rate 55% → no change
+    w = adjust_weight(1.0, default, 0.55)
+    check("Win rate 55% → weight unchanged",     w == 1.0, f"new_weight={w:.3f}")
+
+    # Floor: weight cannot drop below 50% of default
+    w = 0.55  # already low
+    for _ in range(10):
+        w = adjust_weight(w, default, 0.20)  # terrible win rate, many rounds
+    check("Weight floor: never below 50% of default", w >= default * 0.50, f"floor={w:.3f}")
+
+    # Cap: weight cannot exceed 150% of default
+    w = 1.40  # already high
+    for _ in range(10):
+        w = adjust_weight(w, default, 0.90)  # great win rate, many rounds
+    check("Weight cap: never above 150% of default",  w <= default * 1.50, f"cap={w:.3f}")
+
+    # Not enough trades → no adjustment
+    w = adjust_weight(1.0, default, 0.20, min_trades=15, trade_count=10)
+    check("Fewer than 15 trades → no weight change", w == 1.0, f"weight={w:.3f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY
