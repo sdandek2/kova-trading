@@ -14,6 +14,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Test mode flag ─────────────────────────────────────────────────────────────
+# Set to True by test scripts to prevent any writes to the real DB.
+# Reads still work normally (returns None / empty as if nothing was written).
+# Usage: import services.db as db; db.TEST_MODE = True
+TEST_MODE: bool = False
+
 # In-memory fallback (used when Postgres is unavailable)
 _memory_cache: dict[str, tuple[Any, datetime]] = {}
 
@@ -250,6 +256,8 @@ def cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     Store *value* under *key* with a TTL of *ttl_seconds*.
     Writes to Postgres if available, always writes to in-memory fallback.
     """
+    if TEST_MODE:
+        return
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=ttl_seconds)
 
@@ -332,9 +340,8 @@ def get_recent_trade_outcomes(limit: int = 10) -> list[dict]:
 
 def log_trade_decision(decision_data: dict) -> None:
     """
-    Insert a record of an AI trade decision into the trade_log table.
-    Never raises — if the DB is unavailable, logs a warning and continues.
-    """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -376,10 +383,8 @@ def log_trade_decision(decision_data: dict) -> None:
 
 def save_daily_summary(data: dict) -> None:
     """
-    Upsert an end-of-day performance snapshot into daily_summary.
-    Called once per day when the market closes.
-    Never raises.
-    """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -426,9 +431,8 @@ def save_daily_summary(data: dict) -> None:
 
 def log_strategy_change(strategy: str) -> None:
     """
-    Record a strategy change with a timestamp.
-    Never raises.
-    """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -508,6 +512,8 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 
 
 def log_position_open(symbol: str, entry_price: float, quantity: int,
+    if TEST_MODE:
+        return
                       strategy: str = None, claude_reasoning: str = None,
                       market_regime: str = None, side: str = "long",
                       setup_type: str = None, entry_hour_et: int = None) -> Optional[int]:
@@ -539,6 +545,8 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 
 
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
+    if TEST_MODE:
+        return
                        entry_price: float = None, quantity: int = None,
                        entry_time: datetime = None, side: str = "long") -> None:
     """
@@ -746,6 +754,8 @@ def get_trade_performance_summary() -> dict:
 
 
 def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
+    if TEST_MODE:
+        return
                         limit_pct: float) -> None:
     """Record a circuit breaker trigger. Never raises."""
     try:
@@ -768,6 +778,8 @@ def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
 
 
 def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
+    if TEST_MODE:
+        return
                       price_at_block: float = 0.0, cycle_id: str = None,
                       intended_side: str = "buy") -> int:
     """
@@ -797,6 +809,8 @@ def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
 
 def update_blocked_trade_prices(row_id: int, field: str, price: float) -> None:
     """Update a single price field on a blocked_trades row. field: price_15m|price_1h|price_eod|price_next_day"""
+    if TEST_MODE:
+        return
     if not row_id:
         return
     try:
@@ -884,6 +898,8 @@ def get_long_short_scorecard() -> dict:
 
 
 def log_bot_activity(event_type: str, message: str,
+    if TEST_MODE:
+        return
                      symbol: str = None, cycle_id: str = None) -> None:
     """
     Log a single bot activity event. Never raises.
@@ -1043,6 +1059,8 @@ def cleanup_expired_cache() -> None:
 
 
 def log_slippage(symbol: str, side: str, limit_price: float, fill_price: float,
+    if TEST_MODE:
+        return
                  quantity: int = None) -> None:
     """
     Record slippage for a completed fill.
@@ -1322,6 +1340,8 @@ def log_daily_universe(symbols_sources: dict[str, list[str]]) -> None:
     Log which symbols entered the universe today and via which sources.
     symbols_sources: {symbol: [source1, source2, ...]}
     """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -1342,6 +1362,8 @@ def log_daily_universe(symbols_sources: dict[str, list[str]]) -> None:
 
 
 def log_near_miss(symbol: str, score: int, breakdown: dict,
+    if TEST_MODE:
+        return
                   suggested_action: str, price: float) -> int:
     """Log a near-miss candidate (score 35–44). Returns row id for price followup."""
     row_id = 0
@@ -1363,6 +1385,8 @@ def log_near_miss(symbol: str, score: int, breakdown: dict,
 
 def update_near_miss_prices(row_id: int, field: str, price: float) -> None:
     """Update a price field on a near_miss_log row. field: price_1h|price_eod|price_next_day"""
+    if TEST_MODE:
+        return
     if not row_id:
         return
     allowed = {"price_1h", "price_eod", "price_next_day"}
@@ -1481,6 +1505,8 @@ def get_near_misses_report() -> dict:
 
 
 def log_signal_performance(trade_date, symbol: str, breakdown: dict,
+    if TEST_MODE:
+        return
                            trade_profitable: bool, trade_pnl_pct: float) -> None:
     """Log each signal's contribution to a closed trade for win-rate tracking."""
     try:
@@ -1516,6 +1542,8 @@ def get_signal_weights() -> dict[str, int]:
 
 def update_signal_weight(signal_name: str, new_weight: int, reason: str) -> None:
     """Update a signal's weight in the DB."""
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -1558,6 +1586,8 @@ def get_signal_win_rates(days: int = 30) -> list[dict]:
 
 def save_sprint_review(review: dict) -> None:
     """Upsert daily sprint review snapshot."""
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:

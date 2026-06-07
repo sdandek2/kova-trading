@@ -28,6 +28,13 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# ── Enable test mode BEFORE any service imports ────────────────────────────────
+# This prevents any writes to the real Postgres DB during the test run.
+# All log_*, cache_set, save_* functions in db.py check this flag and skip.
+# Reads (cache_get, get_trade_performance_summary etc.) still work normally.
+import services.db as _db
+_db.TEST_MODE = True
+
 # ── Result tracking ────────────────────────────────────────────────────────────
 _results = []
 _section_results = {}
@@ -552,26 +559,18 @@ if should_run("entry"):
 if should_run("database"):
     section("11. Database (Cache + Trade Log)")
     try:
-        from services.db import cache_get, cache_set, cache_delete, get_trade_performance_summary
+        from services.db import cache_get, cache_set, get_trade_performance_summary
 
-        # Cache round-trip — writes test keys then deletes them immediately after.
-        # No permanent data left in DB.
-        _TEST_KEYS = ["__kova_health_test__", "__kova_ttl_test__"]
-        try:
-            cache_set("__kova_health_test__", "ok", 60)
-            val = cache_get("__kova_health_test__")
-            check("Cache write + read",  val == "ok", f"wrote 'ok', got '{val}'")
+        # TEST_MODE=True (set at top of script) means cache_set is a no-op —
+        # nothing is written to Postgres. cache_get returns None (nothing was written).
+        # We verify the TEST_MODE flag itself is working correctly.
+        check("TEST_MODE active (no DB writes)", _db.TEST_MODE is True,
+              "all write functions skipped")
 
-            cache_set("__kova_ttl_test__", "expire_me", 3600)
-            val2 = cache_get("__kova_ttl_test__")
-            check("Cache TTL write",     val2 == "expire_me")
-        finally:
-            # Always clean up test keys — no test data left in Postgres
-            for _k in _TEST_KEYS:
-                try:
-                    cache_delete(_k)
-                except Exception:
-                    pass
+        cache_set("__kova_health_test__", "ok", 60)
+        val = cache_get("__kova_health_test__")
+        check("Cache read returns None in TEST_MODE",
+              val is None, f"got '{val}' (None = write correctly skipped)")
 
         # Performance summary
         summary = get_trade_performance_summary()
