@@ -584,11 +584,139 @@ All implemented in-session:
 
 ## Session 7 — What to Do Next ⬅️ START HERE
 
-### Immediate (before deploy):
-1. **Add Railway env var:** `FMP_API_KEY=KloIwZY8s1YC0qceIgM4D1Fm1Vot1Np5`
-2. **Test Finnhub** — sign up free at finnhub.io → get token → test `GET /api/v1/stock/price-target?symbol=AAPL&token=YOUR_KEY` → if returns real data, implement analyst revision signal in `connectors/fmp.py`
+### Step 0 — Before anything else (Railway dashboard, 2 minutes)
+Add these env vars or new signals silently return 0:
+- `FMP_API_KEY` = [check your FMP account dashboard]
+- `FINNHUB_API_KEY` = [check your Finnhub account dashboard]
+- **Remove the API key that was in this plan file** — it was committed to git. Rotate it in FMP dashboard and use the new one.
 
-### Medium term:
+---
+
+### Step 1 — Fix SEC insider proactive scan (HIGH — currently broken)
+
+**Bug:** `get_universe_additions()` in `sec_insider.py` returns `_inject_until` which is only populated inside `get_insider_signal()`. That means SEC insider injects 0 symbols unless a stock is already being scored — defeating the entire purpose.
+
+**Fix needed in `sec_insider.py`:** Add a daily batch scan that proactively fetches recent Form 4 filings for top 500 symbols, independent of the per-symbol signal path.
+
+```python
+# New function to add:
+def run_daily_insider_scan(symbols: list[str]) -> None:
+    """
+    Called once at market open. Scans top symbols for insider buys
+    and populates _inject_until so get_universe_additions() returns real data.
+    Rate limit: ~0.2s per symbol → 500 symbols = ~100 seconds. Run async or in thread.
+    """
+    for sym in symbols:
+        get_insider_signal(sym)  # populates _inject_until as side effect
+        time.sleep(0.2)         # EDGAR rate limit
+
+# Call this from trading_engine.py at startup / daily reset:
+# from services.brain.connectors.sec_insider import run_daily_insider_scan
+# threading.Thread(target=run_daily_insider_scan, args=(top_500_symbols,), daemon=True).start()
+```
+
+Top 500 symbols source: use the existing `get_tradeable_universe()` output from previous day, extended with S&P 500 list from `https://en.wikipedia.org/wiki/List_of_S%26P_500_companies` (free, no API).
+
+---
+
+### Step 2 — Wire FRED confidence to actual position sizing (MEDIUM)
+
+**Bug:** FRED adjusts `RegimeResult.confidence` but `_regime_capital_mult` in `trading_engine.py` is computed only from `regime` + `vix_level` — confidence is stored but not used for sizing.
+
+**Fix needed in `trading_engine.py`** (around line 530, after `_last_regime_confidence = _brain_regime.confidence`):
+
+```python
+# After computing _regime_capital_mult from regime/vix:
+# Apply FRED confidence modifier to actual capital multiplier
+if _brain_regime.confidence >= 0.80:   # FRED boosted confidence
+    _regime_capital_mult = min(1.0, _regime_capital_mult + 0.10)
+elif _brain_regime.confidence <= 0.50:  # FRED reduced confidence
+    _regime_capital_mult = max(0.20, _regime_capital_mult - 0.10)
+```
+
+This makes FRED actually affect trade sizing, not just logging.
+
+---
+
+### Step 3 — Fix FMP negative EPS estimate exclusion (MEDIUM)
+
+**Bug:** `fmp_earnings.py` line 109 skips `eps_estimate < 0`. Companies beating a loss estimate (e.g. -$0.50 est → -$0.10 actual = 80% beat) are excluded. These are often high-beta post-earnings drift candidates.
+
+**Fix in `fmp_earnings.py`:**
+```python
+# Replace:
+if eps_estimate == 0 or eps_estimate < 0:
+    continue
+
+# With:
+if eps_estimate == 0:
+    continue
+# For negative estimates, beat_pct still works because we use abs(eps_estimate)
+# A company going from -$0.50 loss to -$0.10 loss = 80% improvement = valid signal
+```
+
+---
+
+### Step 4 — Fix Barchart failure silent zero (MEDIUM)
+
+**Bug:** On fetch failure, `_cache_fetched_at = time.time()` marks empty cache as fresh — universe gets zero Barchart injections for 15 min silently. Scoring falls back to `unusual_whales.py` but universe expansion has no fallback.
+
+**Fix in `barchart_options.py`:**
+```python
+# In _refresh_cache(), on failure:
+except Exception as e:
+    logger.warning("Barchart unusual options: %s", e)
+    # Do NOT update _cache_fetched_at on failure — let next cycle retry
+    # _cache_fetched_at = time.time()  ← remove this line
+    return
+```
+
+Also add fallback in `alpaca_service.py` Barchart injection block:
+```python
+# If _bc_syms() returns empty AND _cache_fetched_at is stale → use previous cache
+```
+
+---
+
+### Step 5 — Missed Trades Tracker (NEW FEATURE)
+
+**What it does:** Tracks stocks that were close to trading but didn't (score 35-54), then checks their actual price movement 1h/EOD/next-day. Shows which signals were the marginal ones. Helps calibrate thresholds.
+
+**Already have:** `blocked_trades` table tracks trades blocked by circuit breaker/regime/other rules.
+**What's missing:** Near-miss tracking for stocks that scored 35-54 (just below threshold).
+
+**Implementation:**
+1. In `signals.py`, after scoring: if `35 <= score < 45`, log to new `near_miss_log` table:
+   - symbol, score, breakdown JSON, timestamp
+2. Background worker (like the existing blocked_trades worker) checks price at +1h, EOD, next day
+3. New endpoint `GET /api/performance/near-misses` — shows which near-misses were profitable
+4. Dashboard card: "Trades we almost took — were we right to skip?"
+
+**DB migration needed:**
+```sql
+CREATE TABLE near_miss_log (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(10),
+    score INTEGER,
+    breakdown JSONB,
+    suggested_action VARCHAR(10),
+    price_at_skip NUMERIC,
+    price_1h NUMERIC,
+    price_eod NUMERIC,
+    price_next_day NUMERIC,
+    hypothetical_pnl_pct NUMERIC,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### Step 6 — Google Finance
+**Don't implement.** No official API. Scraping violates ToS and breaks constantly. yfinance (already in use) provides equivalent data from Yahoo Finance reliably. Nothing Google Finance offers that we don't already have.
+
+---
+
+### Step 7 — Medium term
 **Phase 2 — Backtest 2020-2024** (once ~1 week of paper trading data exists)
 - Extend `backend/services/brain/backtest.py` to loop 2020-2024 using yfinance
 - Run ablation tests (toggle exit rules off one at a time)
