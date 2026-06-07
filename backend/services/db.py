@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ── Test mode flag ─────────────────────────────────────────────────────────────
 # Set to True by test scripts to prevent any writes to the real DB.
-# Reads still work normally (returns None / empty as if nothing was written).
-# Usage: import services.db as db; db.TEST_MODE = True
+# Reads still work normally. Usage: import services.db as db; db.TEST_MODE = True
 TEST_MODE: bool = False
 
 # In-memory fallback (used when Postgres is unavailable)
@@ -340,6 +339,9 @@ def get_recent_trade_outcomes(limit: int = 10) -> list[dict]:
 
 def log_trade_decision(decision_data: dict) -> None:
     """
+    Insert a record of an AI trade decision into the trade_log table.
+    Never raises — if the DB is unavailable, logs a warning and continues.
+    """
     if TEST_MODE:
         return
     try:
@@ -382,6 +384,10 @@ def log_trade_decision(decision_data: dict) -> None:
 
 
 def save_daily_summary(data: dict) -> None:
+    """
+    Upsert an end-of-day performance snapshot into daily_summary.
+    Called once per day when the market closes.
+    Never raises.
     """
     if TEST_MODE:
         return
@@ -430,6 +436,9 @@ def save_daily_summary(data: dict) -> None:
 
 
 def log_strategy_change(strategy: str) -> None:
+    """
+    Record a strategy change with a timestamp.
+    Never raises.
     """
     if TEST_MODE:
         return
@@ -512,8 +521,6 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 
 
 def log_position_open(symbol: str, entry_price: float, quantity: int,
-    if TEST_MODE:
-        return
                       strategy: str = None, claude_reasoning: str = None,
                       market_regime: str = None, side: str = "long",
                       setup_type: str = None, entry_hour_et: int = None) -> Optional[int]:
@@ -524,6 +531,8 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
     entry_hour_et: hour of entry in ET (9-15) for time-of-day analysis
     Returns the row id so the caller can update it on close, or None on failure.
     """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -545,8 +554,6 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 
 
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
-    if TEST_MODE:
-        return
                        entry_price: float = None, quantity: int = None,
                        entry_time: datetime = None, side: str = "long") -> None:
     """
@@ -555,6 +562,8 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
     side: "long" (profit = exit > entry) | "short" (profit = entry > exit)
     Never raises.
     """
+    if TEST_MODE:
+        return
     def _calc_pl(ep, xp, qty, side):
         """P&L is positive when trade is profitable regardless of direction."""
         if not ep or not qty:
@@ -754,10 +763,10 @@ def get_trade_performance_summary() -> dict:
 
 
 def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
-    if TEST_MODE:
-        return
                         limit_pct: float) -> None:
     """Record a circuit breaker trigger. Never raises."""
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -778,8 +787,6 @@ def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
 
 
 def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
-    if TEST_MODE:
-        return
                       price_at_block: float = 0.0, cycle_id: str = None,
                       intended_side: str = "buy") -> int:
     """
@@ -788,6 +795,8 @@ def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
                   'trade_cap' | 'earnings_block' | 'premarket_no_news' |
                   'afterhours_no_earnings' | 'window_closed'
     """
+    if TEST_MODE:
+        return
     row_id = None
     try:
         conn = _get_conn()
@@ -898,8 +907,6 @@ def get_long_short_scorecard() -> dict:
 
 
 def log_bot_activity(event_type: str, message: str,
-    if TEST_MODE:
-        return
                      symbol: str = None, cycle_id: str = None) -> None:
     """
     Log a single bot activity event. Never raises.
@@ -907,6 +914,8 @@ def log_bot_activity(event_type: str, message: str,
                 'circuit_breaker', 'trailing_stop', 'scale_out', 'entry_rejected',
                 'blocked_trade'
     """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -1059,14 +1068,14 @@ def cleanup_expired_cache() -> None:
 
 
 def log_slippage(symbol: str, side: str, limit_price: float, fill_price: float,
-    if TEST_MODE:
-        return
                  quantity: int = None) -> None:
     """
     Record slippage for a completed fill.
     slippage_dollars = fill_price - limit_price (positive = paid more than intended)
     slippage_pct = slippage_dollars / limit_price
     """
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
@@ -1362,10 +1371,10 @@ def log_daily_universe(symbols_sources: dict[str, list[str]]) -> None:
 
 
 def log_near_miss(symbol: str, score: int, breakdown: dict,
-    if TEST_MODE:
-        return
                   suggested_action: str, price: float) -> int:
     """Log a near-miss candidate (score 35–44). Returns row id for price followup."""
+    if TEST_MODE:
+        return
     row_id = 0
     try:
         conn = _get_conn()
@@ -1505,10 +1514,10 @@ def get_near_misses_report() -> dict:
 
 
 def log_signal_performance(trade_date, symbol: str, breakdown: dict,
-    if TEST_MODE:
-        return
                            trade_profitable: bool, trade_pnl_pct: float) -> None:
     """Log each signal's contribution to a closed trade for win-rate tracking."""
+    if TEST_MODE:
+        return
     try:
         conn = _get_conn()
         if not conn:
