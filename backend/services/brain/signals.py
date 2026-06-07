@@ -39,6 +39,9 @@ class ScoredCandidate:
     regime_aligned: bool
     score_breakdown: dict = field(default_factory=dict)
     notes: str = ""
+    closing_prices: list = field(default_factory=list)   # for ATR/Kelly sizing in ai_brain
+    high_prices: list = field(default_factory=list)
+    low_prices: list = field(default_factory=list)
 
     @property
     def is_strong(self) -> bool:
@@ -80,6 +83,8 @@ def _score_symbol(
     news_headlines: list,
 ) -> ScoredCandidate:
     prices = data.get("closing_prices", [])
+    high_prices = data.get("high_prices", [])
+    low_prices = data.get("low_prices", [])
     price = data.get("current_price") or (prices[-1] if prices else 0)
     rel_vol = data.get("relative_volume", 1.0)
     news_count = (sentiment or {}).get(symbol, 0)
@@ -260,6 +265,9 @@ def _score_symbol(
         regime_aligned=regime_aligned,
         score_breakdown=breakdown,
         notes=" | ".join(notes_parts),
+        closing_prices=prices,
+        high_prices=high_prices,
+        low_prices=low_prices,
     )
 
 

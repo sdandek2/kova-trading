@@ -86,6 +86,10 @@ def kelly_size(
     trade_history: list[dict],
     strategy_key: str = "aggressive",
     rs_percentile: float = 50.0,
+    regime: str = "chop",
+    rsi_at_entry: float = 50.0,
+    macd_at_entry: float = 0.0,
+    vix_level: str = "normal",
 ) -> KellyResult:
     """
     Calculate position size using Kelly Criterion when enough history exists,
@@ -100,6 +104,24 @@ def kelly_size(
     # RS bonus: top 20% of market outperformers get slightly larger positions
     rs_mult = 1.10 if rs_percentile >= 80 else 1.0
 
+    # ML conviction multiplier (activates after 50 closed trades)
+    ml_mult = 1.0
+    try:
+        from services.brain.learning import predict_win_prob
+        ml_pred = predict_win_prob({
+            "signal_type": signal_type or "momentum",
+            "regime": regime,
+            "vix_level": vix_level,
+            "rs_percentile": rs_percentile,
+            "rsi_at_entry": rsi_at_entry,
+            "macd_at_entry": macd_at_entry,
+        })
+        if ml_pred.ml_active:
+            ml_mult = ml_pred.conviction_mult
+            logger.info(f"ML mult {symbol}: {ml_pred.rationale}")
+    except Exception as _ml_err:
+        logger.debug(f"ML mult skipped for {symbol}: {_ml_err}")
+
     stats = _get_win_stats(trade_history, signal_type)
 
     if stats and stats["avg_win"] > 0:
@@ -111,8 +133,8 @@ def kelly_size(
         raw_kelly = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
         raw_kelly = max(0.0, raw_kelly)  # Kelly can be negative — floor at 0
 
-        # Half-Kelly + conviction + RS
-        applied_pct = raw_kelly * _HALF_KELLY * conviction_mult * rs_mult
+        # Half-Kelly + conviction + RS + ML
+        applied_pct = raw_kelly * _HALF_KELLY * conviction_mult * rs_mult * ml_mult
 
         # Apply hard caps
         applied_pct = max(_MIN_POSITION_PCT, min(applied_pct, max_pct))
@@ -124,7 +146,7 @@ def kelly_size(
             f"Kelly({stats['win_rate']:.0%}wr, {stats['avg_win']*100:.1f}%avgW, "
             f"{stats['avg_loss']*100:.1f}%avgL, n={stats['sample_size']}) "
             f"raw={raw_kelly*100:.1f}% → half={raw_kelly*_HALF_KELLY*100:.1f}% "
-            f"× {conviction}({conviction_mult:.2f}) × RS({rs_mult:.2f}) "
+            f"× {conviction}({conviction_mult:.2f}) × RS({rs_mult:.2f}) × ML({ml_mult:.2f}) "
             f"= {applied_pct*100:.1f}% = ${dollar_amount:,.0f}"
         )
         logger.info(f"Kelly size {symbol}: {rationale}")
@@ -140,7 +162,7 @@ def kelly_size(
 
     else:
         # Fallback: ATR-based sizing (risk 1.5% of portfolio per ATR unit)
-        risk_pct = 0.015 * conviction_mult * rs_mult
+        risk_pct = 0.015 * conviction_mult * rs_mult * ml_mult
         risk_amount = portfolio_value * risk_pct
 
         if atr > 0 and price > 0:

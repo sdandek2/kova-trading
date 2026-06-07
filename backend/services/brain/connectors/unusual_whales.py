@@ -51,19 +51,20 @@ def get_options_flow(symbol: str) -> dict:
 
 def _fetch_alpaca_options_flow(symbol: str) -> dict:
     try:
-        from services.alpaca_service import alpaca_get
-    except ImportError:
-        return _unavailable("alpaca_service not available")
-
-    # Fetch options chain contracts
-    resp = alpaca_get(
-        "/v2/options/contracts",
-        params={
+        from config import settings as _cfg
+        import httpx
+        url = "https://paper-api.alpaca.markets/v2/options/contracts"
+        headers = {
+            "APCA-API-KEY-ID": _cfg.alpaca_api_key,
+            "APCA-API-SECRET-KEY": _cfg.alpaca_secret_key,
+        }
+        resp = httpx.get(url, headers=headers, params={
             "underlying_symbols": symbol,
             "status": "active",
             "limit": 200,
-        },
-    )
+        }, timeout=10).json()
+    except Exception as e:
+        return _unavailable(f"alpaca options request failed: {e}")
 
     contracts = resp.get("option_contracts", []) if isinstance(resp, dict) else []
     if not contracts:

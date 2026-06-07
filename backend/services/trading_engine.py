@@ -1174,7 +1174,7 @@ async def run_trading_cycle():
                 _rsi_re = (compute_rsi(cp_re) or 50.0)
                 _price_re = sd.get("current_price") or position.current_price
                 # Must be near MA20 (pulled back properly) with resuming momentum
-                near_ma20 = _ma20_re and (_price_re <= _ma20_re * 1.10)
+                near_ma20 = _ma20_re and (_price_re <= _ma20_re * 1.04)
                 if not (near_ma20 and _mh_re > 0.0 and _rsi_re < 65):
                     continue
                 reentry_cost = reentry_qty * _price_re

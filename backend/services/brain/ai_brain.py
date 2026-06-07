@@ -254,11 +254,10 @@ Return valid JSON only — no markdown:
             try:
                 from services.brain.kelly import kelly_size
                 from services.indicators import compute_atr as _atr_fn
-                # Get price data for ATR
-                _sym_data = {}
-                _closes = _sym_data.get("closing_prices", [])
-                _highs = _sym_data.get("highs", _closes)
-                _lows = _sym_data.get("lows", _closes)
+                # Use closing prices from the scored candidate (available via universe_snapshot)
+                _closes = getattr(candidate, "closing_prices", []) or []
+                _highs  = getattr(candidate, "high_prices", _closes) or _closes
+                _lows   = getattr(candidate, "low_prices", _closes) or _closes
                 _atr = _atr_fn(_highs, _lows, _closes) if len(_closes) >= 15 else 0.0
                 signal_type = candidate.signal_type if candidate else None
                 _kelly = kelly_size(

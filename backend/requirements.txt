@@ -13,3 +13,4 @@ psycopg2-binary>=2.9.9
 # google-genai removed — using Gemini REST API directly via httpx to avoid websockets conflict with alpaca-py
 json-repair==0.30.3
 yfinance>=0.2.40
+scikit-learn>=1.4.0
