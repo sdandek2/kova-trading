@@ -24,6 +24,38 @@ _REJECTION_COOLDOWN: dict = {}
 _REJECTION_COOLDOWN_LOCK = threading.Lock()
 _REJECTION_COOLDOWN_MINUTES = 15  # aggressive: shorter cooldown so symbols re-enter sooner
 
+# ── Stop-out cooldown ──────────────────────────────────────────────────────
+# After a stop-loss exit, block re-entry for 2 hours so the bot doesn't
+# immediately re-buy a falling knife. Stock may recover after 2h — unlike
+# a full-day ban, this allows profitable afternoon re-entries.
+_STOPOUT_COOLDOWN: dict = {}   # symbol → datetime of stop-out
+_STOPOUT_COOLDOWN_LOCK = threading.Lock()
+_STOPOUT_COOLDOWN_HOURS = 2.0
+
+
+def record_stopout(symbol: str) -> None:
+    """Call this when a position is exited via stop-loss."""
+    with _STOPOUT_COOLDOWN_LOCK:
+        _STOPOUT_COOLDOWN[symbol] = datetime.now(timezone.utc)
+    logger.info(f"Stop-out recorded for {symbol} — re-entry blocked for {_STOPOUT_COOLDOWN_HOURS:.0f}h")
+
+
+def is_in_stopout_cooldown(symbol: str) -> tuple[bool, str]:
+    """Return (True, reason) if symbol was stopped out within the cooldown window."""
+    with _STOPOUT_COOLDOWN_LOCK:
+        last = _STOPOUT_COOLDOWN.get(symbol)
+        if last is None:
+            return False, ""
+        hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+        if hours < _STOPOUT_COOLDOWN_HOURS:
+            remaining = _STOPOUT_COOLDOWN_HOURS - hours
+            return True, (
+                f"{symbol} was stopped out {hours*60:.0f} min ago — "
+                f"re-entry blocked for {remaining*60:.0f} more min"
+            )
+        del _STOPOUT_COOLDOWN[symbol]
+        return False, ""
+
 
 def _is_in_rejection_cooldown(symbol: str) -> tuple[bool, str]:
     """Return (True, reason) if symbol was recently rejected."""
@@ -108,6 +140,12 @@ def should_confirm_entry(
     if in_cooldown and action == "buy":
         return False, cooldown_reason
 
+    # ── Stop-out cooldown: block re-entry for 2h after a loss exit ──
+    if action == "buy":
+        in_stopout, stopout_reason = is_in_stopout_cooldown(symbol)
+        if in_stopout:
+            return False, stopout_reason
+
     if not closing_prices or len(closing_prices) < 2:
         return True, "Insufficient data for confirmation, proceeding anyway"
 
@@ -174,18 +212,22 @@ def should_confirm_entry(
                 _record_rejection(symbol)
                 return False, reason
 
-            # Only block on strongly negative MACD — mild dips are fine in aggressive mode.
-            # Also skip this check for leveraged ETFs (momentum instruments often diverge).
-            # Exception: if MACD is improving (turning less negative), that IS the buy signal
-            # — don't block a recovery play just because histogram is still slightly negative.
-            if (macd_histogram is not None and macd_histogram < -0.25
-                    and rsi >= 45 and not needs_positions
-                    and symbol not in _LEVERAGED_ETFS):
-                reason = (
-                    f"{symbol} MACD histogram {macd_histogram:.3f} — momentum strongly negative, waiting for recovery"
-                )
-                _record_rejection(symbol)
-                return False, reason
+            # Require positive MACD for leveraged ETFs — entering a 3x instrument with
+            # negative momentum burns capital fast. For regular stocks, only block on
+            # strongly negative MACD to avoid filtering mild consolidation dips.
+            if macd_histogram is not None and not needs_positions:
+                if symbol in _LEVERAGED_ETFS and macd_histogram <= 0:
+                    reason = (
+                        f"{symbol} MACD histogram {macd_histogram:.3f} — leveraged ETF requires positive MACD to enter"
+                    )
+                    _record_rejection(symbol)
+                    return False, reason
+                elif symbol not in _LEVERAGED_ETFS and macd_histogram < -0.25 and rsi >= 45:
+                    reason = (
+                        f"{symbol} MACD histogram {macd_histogram:.3f} — momentum strongly negative, waiting for recovery"
+                    )
+                    _record_rejection(symbol)
+                    return False, reason
 
             return True, (
                 f"{symbol} approved [AGGRESSIVE]: RSI={rsi:.1f}, "
@@ -321,12 +363,12 @@ def should_scale_out(
 
     # ── Stop loss ──────────────────────────────────────────────────────────────
     if is_aggressive:
-        if position_unrealized_pl_percent <= -6.0:
+        if position_unrealized_pl_percent <= -4.0:
             return True, 1.0, (
                 f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses, redeploying cash"
             )
     else:
-        if position_unrealized_pl_percent <= -5.0:
+        if position_unrealized_pl_percent <= -3.0:
             return True, 1.0, (
                 f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
             )

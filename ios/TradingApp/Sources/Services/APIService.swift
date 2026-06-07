@@ -20,6 +20,14 @@ class APIService {
     static let shared = APIService()
     private let baseURL = Config.backendURL
 
+    private func makeRequest(_ path: String, method: String = "GET") -> URLRequest? {
+        guard let url = URL(string: baseURL + path) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.setValue(Config.apiKey, forHTTPHeaderField: "X-API-Key")
+        return req
+    }
+
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
         // Custom date strategy: handles multiple ISO 8601 variants from different RSS feeds
@@ -44,6 +52,7 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeout
+        request.setValue(Config.apiKey, forHTTPHeaderField: "X-API-Key")
 
         let (data, response): (Data, URLResponse)
         do {
@@ -173,9 +182,7 @@ class APIService {
     }
 
     func cancelOrder(id: String) async throws {
-        guard let url = URL(string: baseURL + "/api/orders/\(id)") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
+        guard var request = makeRequest("/api/orders/\(id)", method: "DELETE") else { throw APIError.invalidURL }
         request.timeoutInterval = 10
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -185,9 +192,7 @@ class APIService {
     }
 
     func placeManualOrder(symbol: String, side: String, qty: Int) async throws {
-        guard let url = URL(string: baseURL + "/api/orders/manual") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/orders/manual", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["symbol": symbol, "side": side, "qty": qty])
@@ -204,9 +209,7 @@ class APIService {
     }
 
     func setWatchlist(_ symbols: [String]) async throws {
-        guard let url = URL(string: baseURL + "/api/watchlist/") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/watchlist/", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["watchlist": symbols])
@@ -218,9 +221,7 @@ class APIService {
     }
 
     func setRiskSettings(_ settings: RiskSettings) async throws {
-        guard let url = URL(string: baseURL + "/api/risk/settings") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/risk/settings", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try? JSONEncoder().encode(settings)
@@ -261,9 +262,7 @@ class APIService {
     }
 
     func setTradingBudget(_ amount: Double?) async throws {
-        guard let url = URL(string: baseURL + "/api/risk/budget") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/risk/budget", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         if let amount = amount {
@@ -287,9 +286,7 @@ class APIService {
     }
 
     func setPromptOverride(_ text: String?) async throws {
-        guard let url = URL(string: baseURL + "/api/prompt/override") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/prompt/override", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         if let text = text, !text.isEmpty {
@@ -314,11 +311,9 @@ class APIService {
     }
 
     func resetReserve(amount: Double? = nil) async throws -> ReserveResetResponse {
-        guard let url = URL(string: baseURL + "/api/finance/reserve/reset") else { throw APIError.invalidURL }
+        guard var request = makeRequest("/api/finance/reserve/reset", method: "POST") else { throw APIError.invalidURL }
         var body: [String: Any] = ["confirm": true]
         if let amt = amount { body["amount"] = amt }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -335,9 +330,7 @@ class APIService {
     }
 
     func updateModelSettings(_ update: ModelSettingsUpdate) async throws {
-        guard let url = URL(string: baseURL + "/api/settings/models") else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        guard var request = makeRequest("/api/settings/models", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
         request.httpBody = try? JSONEncoder().encode(update)

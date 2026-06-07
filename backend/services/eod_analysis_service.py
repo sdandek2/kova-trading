@@ -143,7 +143,7 @@ def run_eod_analysis() -> dict:
     Main entry point. Queries today's activity, sends to Claude for analysis,
     saves the structured report to cache, and returns it.
     """
-    from services.ai_client import ask_ai_pro
+    from services.ai_client import ask_ai, ask_ai_pro
     from services.db import cache_set, cache_get
     from services.strategy import get_strategy
 
@@ -247,7 +247,7 @@ Respond with ONLY this JSON — no markdown, no explanation. Be concise — keep
 }}"""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=2500)
+        raw = ask_ai(prompt, max_tokens=2500)
         from services.ai_client import parse_ai_json
         try:
             analysis = parse_ai_json(raw)

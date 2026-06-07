@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     database_url: str = ""
 
+    # Phase 7 external data APIs (optional — connectors degrade gracefully without keys)
+    uw_api_key: str = ""        # Unusual Whales — options flow
+    fmp_api_key: str = ""       # Financial Modeling Prep — earnings revisions
+    quiver_api_key: str = ""    # Quiver Quantitative — dark pool data
+
     class Config:
         env_file = ".env"
 

@@ -11,6 +11,7 @@ backend/strategy_setting.txt
 backend/watchlist.json
 
 # iOS / Xcode
+ios/TradingApp/Sources/Config.swift
 ios/TradingApp/.build/
 ios/TradingApp/Kova.xcodeproj/xcuserdata/
 ios/TradingApp/Kova.xcworkspace/xcuserdata/

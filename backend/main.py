@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 from contextlib import asynccontextmanager
 
@@ -7,8 +8,10 @@ from contextlib import asynccontextmanager
 # to fields typed as enums in their internal models. Harmless but spams logs.
 warnings.filterwarnings("ignore", message=".*Expected `enum` but got `str`.*")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings
 from websocket.manager import manager
@@ -23,7 +26,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from services import trading_engine
+    from services.brain.connectors import log_connector_status
     logger.info("Trading app backend starting up...")
+    log_connector_status()
     trading_engine.start()
     logger.info("Trading bot auto-started on launch.")
     yield
@@ -33,12 +38,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Kova", version="1.0.0", lifespan=lifespan)
 
+# ── API key auth ───────────────────────────────────────────────────────────────
+# Set KOVA_API_KEY in Railway env vars. iOS app must send X-API-Key header.
+# /health is exempt so Railway health checks still work.
+_KOVA_API_KEY = os.getenv("KOVA_API_KEY", "")
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+        if _KOVA_API_KEY:
+            key = request.headers.get("X-API-Key", "")
+            if key != _KOVA_API_KEY:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
+
+app.add_middleware(APIKeyMiddleware)
+
+# ── CORS — restrict to your Railway domain only ───────────────────────────────
+_ALLOWED_ORIGINS = [
+    "https://kova-trading-production.up.railway.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 app.include_router(account.router)

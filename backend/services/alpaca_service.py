@@ -991,7 +991,18 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
             ).hexdigest()[:16]
         unique.append(article)
 
-    # Sort: symbol-tagged articles (Benzinga/Alpaca) first — most trading-relevant
+    # Merge in any articles from the real-time WebSocket news stream
+    try:
+        from services.news_stream import get_cached_news as _get_stream_news
+        stream_articles = _get_stream_news(symbols=symbols)
+        seen_in_rest = {a.get("headline", "") for a in unique}
+        for sa in stream_articles:
+            if sa.get("headline") not in seen_in_rest:
+                unique.append(sa)
+    except Exception:
+        pass
+
+    # Sort: symbol-tagged articles (Benzinga/Alpaca/stream) first — most trading-relevant
     # Within each group, sort by date newest-first
     def _sort_key(a):
         has_symbols = 1 if a.get("symbols") else 0

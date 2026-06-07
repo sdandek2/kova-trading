@@ -70,7 +70,7 @@ Return ONLY valid JSON, no markdown. direction must be one of: bullish, bearish,
 Only return bullish/bearish if there is CLEAR directional evidence. Default to uncertain if signals conflict."""
 
     try:
-        raw = ask_ai_pro(prompt, max_tokens=300)
+        raw = ask_ai(prompt, max_tokens=300)
         result = parse_ai_json(raw)
         direction = result.get("direction", "uncertain")
         confidence = result.get("confidence", "low")
@@ -97,12 +97,15 @@ def analyze_and_decide(
     trend_forecast: str = "",
     news_headlines: list = None,
     full_data_fetcher=None,
-    sector_context: dict = None,      # {symbol: {"sector": str, "sector_pct": float, "sector_signal": str}}
-    recent_trades: list = None,        # last 10 AI decisions from DB
-    earnings_plays: list = None,       # pre-earnings play candidates
-    afternoon_pressure: bool = False,  # True if < 2 trades by 2 PM — lower bar
-    rejected_symbols: list = None,     # symbols in rejection cooldown — Claude must not nominate these
-    prebreakout_candidates: list = None,  # pre-breakout setups from breakout_scanner — prioritise these
+    sector_context: dict = None,
+    recent_trades: list = None,
+    earnings_plays: list = None,
+    afternoon_pressure: bool = False,
+    rejected_symbols: list = None,
+    prebreakout_candidates: list = None,
+    brain_regime=None,       # RegimeResult from brain/regime.py
+    rs_map: dict = None,     # {symbol: RSScore} from brain/rs_ranking.py
+    kelly_history: list = None,  # closed trade history for Kelly sizing
 ) -> list:
     # ── Load prompt override (injected into both steps below) ───────────────
     _prompt_override = ""
@@ -318,12 +321,35 @@ Factor these into your trade approvals — confirm or override based on today's 
         logger.debug(f"EOD feedback load skipped (non-fatal): {_eod_exc}")
 
     # ── Macro context — informational only, no direction override ──
-    # Claude decides individually per stock based on its own signals (RSI, MACD, sector momentum).
-    # SPY trend is provided as context but does NOT force a long/short direction.
     regime = (macro or {}).get("market_regime", "")
-    is_bearish_day = False  # no longer used to block longs
     regime_direction_note = ""
     bearish_etf_note = ""
+
+    # ── Brain regime note — override macro with brain's more precise classification ──
+    brain_regime_note = ""
+    if brain_regime:
+        lev_status = "ALLOWED" if brain_regime.allows_leveraged_etfs else "BLOCKED (regime not bull or VIX elevated)"
+        brain_regime_note = f"""
+## Brain Regime Analysis (authoritative — use this, not macro regime)
+- Regime: {brain_regime.regime.upper()} (confidence={brain_regime.confidence:.0%}, score={brain_regime.score})
+- VIX: {brain_regime.vix_level.upper()} | SPY trend: {brain_regime.spy_trend} | Breadth: {brain_regime.breadth_pct:.0f}%
+- Leveraged ETFs (SOXL/TQQQ/SPXL): {lev_status}
+- {brain_regime.notes}
+"""
+
+    # ── RS ranking note — pre-filter the universe ──
+    rs_note = ""
+    if rs_map:
+        top_rs = sorted(rs_map.values(), key=lambda x: x.rs_score, reverse=True)[:5]
+        bottom_rs = sorted(rs_map.values(), key=lambda x: x.rs_score)[:3]
+        top_str = ", ".join(f"{r.symbol}({r.rs_score:+.1f},p{r.percentile:.0f})" for r in top_rs)
+        bot_str = ", ".join(f"{r.symbol}({r.rs_score:+.1f})" for r in bottom_rs)
+        rs_note = f"""
+## Relative Strength Rankings (vs SPY — only trade top 60th percentile)
+- Top RS stocks (outperforming market): {top_str}
+- Weak RS stocks (AVOID — underperforming market): {bot_str}
+- [RS:XX] tag below = percentile rank. Only nominate stocks with RS percentile ≥ 60.
+"""
 
     # Build rejected symbols note for Step 1
     rejected_note = ""
@@ -336,29 +362,45 @@ Factor these into your trade approvals — confirm or override based on today's 
         from services.breakout_scanner import format_for_prompt as _fmt_breakout
         prebreakout_note = "\n" + _fmt_breakout(prebreakout_candidates) + "\n"
 
+    # Annotate snapshot with RS percentile tags
+    if rs_map:
+        annotated_lines = []
+        for line in snapshot_lines:
+            sym = line.strip().lstrip("- ").split(" ")[0].rstrip(":")
+            rs = rs_map.get(sym)
+            if rs:
+                tag = f" [RS:{rs.percentile:.0f}]" if rs.is_tradeable else f" [RS:{rs.percentile:.0f}:WEAK]"
+                annotated_lines.append(line + tag)
+            else:
+                annotated_lines.append(line)
+        snapshot_text_final = "\n".join(annotated_lines)
+    else:
+        snapshot_text_final = snapshot_text
+
     step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
 
 {portfolio_context}
-{regime_direction_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
+{brain_regime_note}{rs_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
 ## Market Universe ({len(snapshot_lines)} stocks)
-{snapshot_text}
+{snapshot_text_final}
 
 ## Indicator guide
 - RSI > 70: overbought | RSI < 30: oversold (RSI 50-70 with upward MACD = strong buy zone)
 - MACD histogram positive+rising: bullish momentum | negative+falling: bearish
+- [RS:XX]: relative strength percentile vs SPY — ONLY nominate stocks with RS ≥ 60. [RS:XX:WEAK] = skip.
 - [PENNY]: stock under $5 — high risk/reward, size accordingly
 - [NEWS:N]: mentioned in N recent news articles — sentiment catalyst (higher = stronger signal)
 - [EARNINGS:today/tomorrow]: AVOID — binary risk around earnings reports
-- SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — suitable when market regime is bullish
-- SQQQ/SPXU/SOXS/SDOW/TZA are inverse ETFs — suitable when market regime is bearish
+- SOXL/TQQQ/SPXL/UPRO are 3x leveraged ETFs — only suitable when Brain Regime = BULL and VIX is low/normal
+- SQQQ/SPXU/SOXS/SDOW/TZA are inverse ETFs — suitable when Brain Regime = BEAR or CHOP
 - [SECTOR:signal:pct%]: sector momentum — BULLISH sector supports longs, BEARISH sector supports shorts
 - [VOL:Nx]: relative volume — 2x+ means unusual activity, strong confirmation signal
 
-Scan the stocks above. Identify the TOP 7 best opportunities based on technicals and macro context.
-- BULLISH regime: favor longs and leveraged ETFs
-- BEARISH regime: favor inverse ETFs and short candidates (RSI > 72 + bearish sector)
-- NEUTRAL: balanced mix
-- short_candidate: ONLY nominate when RSI > 65 AND MACD histogram < 0.5. RSI below 65 = not overbought, skip it. MACD above 0.5 = momentum too strong, skip it.
+Scan the stocks above. Identify the TOP 7 best opportunities based on technicals and Brain Regime.
+- BULL regime: favor longs and leveraged ETFs (only if VIX allowed)
+- BEAR regime: favor inverse ETFs and short candidates (RSI > 65 + bearish sector)
+- CHOP regime: favor mean reversion (oversold quality stocks) and inverse ETFs — avoid momentum longs
+- short_candidate: ONLY nominate when RSI > 65 AND MACD histogram < 0.5
 Signal types: "momentum", "breakout", "reversal", "short_candidate", "inverse_etf", "oversold"
 
 Return ONLY a JSON object with ONE key "opportunities". Each entry has exactly TWO fields: "symbol" and "signal". No thesis, no explanation, no extra fields, no markdown.
@@ -368,7 +410,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
         step1_prompt += f"\n\n## Operator Override Instructions (follow these today)\n{_prompt_override}"
 
     try:
-        step1_raw = ask_ai_pro(step1_prompt, max_tokens=1200)
+        step1_raw = ask_ai(step1_prompt, max_tokens=1200)
         step1_data = parse_ai_json(step1_raw)
         raw_opps = step1_data.get("opportunities", [])
         # Validate: only keep entries that have a string symbol — drop malformed entries
@@ -454,7 +496,7 @@ EXAMPLE (copy this structure exactly): {{"opportunities": [{{"symbol": "AAPL", "
     positions_count = len(positions)
     cash_pct = (effective_cash / effective_portfolio * 100) if effective_portfolio > 0 else 0
 
-    pressure_note = "\n⚠️ AFTERNOON PRESSURE: Fewer than 2 trades executed today. You MUST approve at least 1 trade now unless ALL signals are clearly negative. Idle cash by close = lost opportunity.\n" if afternoon_pressure else ""
+    pressure_note = "\n📊 AFTERNOON NOTE: Fewer than 2 trades executed today. Lower your bar slightly — consider medium-confidence setups you might otherwise skip, but only if the signal is genuinely present. Don't force a trade on a poor setup.\n" if afternoon_pressure else ""
 
     # ── Rotation context: assess each held position for momentum strength ──
     # SHORT positions are excluded — they cannot be closed via SELL action,
@@ -648,27 +690,51 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             price = (deep_data.get(sym) or market_snapshot.get(sym, {})).get("current_price") or 0
             if price <= 0:
                 continue
-            # Apply penny stock cap in Step 3 so cash reservation is correctly sized.
-            # trading_engine.py applies the same cap for final ATR-adjusted sizing.
+
+            # Penny stock cap
             if action == "buy" and price < 5.0:
                 from services import trading_engine as _te
                 _penny_pct = float(_te._risk_settings.get("max_penny_position_pct", 3.0)) / 100.0
                 effective_max_position = effective_portfolio * _penny_pct
             else:
                 effective_max_position = max_position
-            # Cap max_shares to what's actually affordable from remaining cash.
-            # Without this cap the bot computes max_shares from the strategy max_position
-            # (e.g. 20% of $30k = $6,000 → 78 TQQQ shares) and then skips the trade
-            # entirely when cash is only $1,000 — even though 13 affordable shares exist.
-            max_shares_by_strategy = int(effective_max_position / price)
-            max_shares_by_cash = int(remaining_cash / price) if action == "buy" else max_shares_by_strategy
-            max_shares = min(max_shares_by_strategy, max_shares_by_cash)
 
-            is_aggressive = current_strategy.get("key") == "aggressive"
-            if qty_suggestion:
-                final_qty = min(int(qty_suggestion), max_shares)
-            else:
-                size_pct = 1.0 if confidence == "high" else (0.75 if is_aggressive else 0.5)
+            # ── Kelly Criterion sizing (replaces flat % sizing) ──
+            _rs_score = (rs_map or {}).get(sym)
+            _rs_pct = _rs_score.percentile if _rs_score else 50.0
+            try:
+                from services.brain.kelly import kelly_size
+                from services.indicators import compute_atr as _atr_fn
+                _sym_data_k = deep_data.get(sym) or market_snapshot.get(sym, {})
+                _closes_k = _sym_data_k.get("closing_prices", [])
+                _highs_k = _sym_data_k.get("highs", _closes_k)
+                _lows_k = _sym_data_k.get("lows", _closes_k)
+                _atr_k = _atr_fn(_highs_k, _lows_k, _closes_k) if len(_closes_k) >= 15 else 0.0
+                _signal_type = next((o.get("signal") for o in opportunities if o.get("symbol") == sym), None)
+                _kelly = kelly_size(
+                    symbol=sym,
+                    signal_type=_signal_type,
+                    conviction=confidence,
+                    portfolio_value=effective_portfolio,
+                    price=price,
+                    atr=_atr_k,
+                    trade_history=kelly_history or [],
+                    strategy_key=current_strategy.get("key", "aggressive"),
+                    rs_percentile=_rs_pct,
+                )
+                # Kelly is the primary sizing; cap to what strategy and cash allow
+                max_shares_by_strategy = int(effective_max_position / price)
+                max_shares_by_cash = int(remaining_cash / price) if action == "buy" else max_shares_by_strategy
+                max_shares = min(max_shares_by_strategy, max_shares_by_cash)
+                final_qty = min(_kelly.shares, max_shares)
+                final_qty = max(1, final_qty)
+                logger.info(f"Kelly size {sym}: {_kelly.rationale} → capped to {final_qty} shares")
+            except Exception as _ke:
+                logger.warning(f"Kelly sizing failed for {sym} ({_ke}) — using flat sizing")
+                max_shares_by_strategy = int(effective_max_position / price)
+                max_shares_by_cash = int(remaining_cash / price) if action == "buy" else max_shares_by_strategy
+                max_shares = min(max_shares_by_strategy, max_shares_by_cash)
+                size_pct = 1.0 if confidence == "high" else 0.75
                 final_qty = max(1, int(max_shares * size_pct))
 
             cost = price * final_qty

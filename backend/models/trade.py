@@ -32,6 +32,8 @@ class TradeDecision(BaseModel):
     take_profit_pct: Optional[float] = None   # e.g. 0.15 = 15% — Claude sets dynamically
     stop_loss_pct: Optional[float] = None     # e.g. 0.05 = 5% trailing stop
     partial_exit: bool = False                # sell 50% at TP, let other 50% ride
+    holding_period: str = "intraday"          # "intraday" | "swing" — options routing
+    signal_type: str = "momentum"             # passed through from ScoredCandidate
 
 
 class TradingStatus(BaseModel):

@@ -26,8 +26,8 @@ TRADING_INTERVAL_SECONDS = 600  # 10 minutes
 
 _RISK_CACHE_KEY = "user_pref:risk_settings"
 _RISK_DEFAULTS = {
-    "daily_loss_limit_pct": 6.0,   # aggressive: tolerate up to 6% daily loss before halting buys
-    "stop_loss_pct": 0.05,          # 5% trailing stop fallback (Claude overrides per trade)
+    "daily_loss_limit_pct": 4.0,   # halt new buys after 4% daily drawdown (was 6%)
+    "stop_loss_pct": 0.04,          # 4% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
     "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM ET
@@ -79,6 +79,26 @@ _last_analysis_at: Optional[datetime] = None
 _next_run_at: Optional[datetime] = None
 _latest_analysis: Optional[AIAnalysis] = None
 _task: Optional[asyncio.Task] = None
+
+# ── News-triggered urgent cycle ───────────────────────────────────────────────
+_wake_event: asyncio.Event = asyncio.Event()
+_urgent_news_context: list[dict] = []   # injected into next ai_brain prompt
+_urgent_trading_window: str = "regular" # "premarket" | "regular" | "afterhours"
+
+
+def request_urgent_cycle(symbols: list[str], reason: str, trading_window: str = "regular") -> None:
+    """
+    Called by news_stream when high-impact news is detected.
+    Wakes the trading loop immediately — next cycle fires within seconds.
+    trading_window tells the engine what order type to use.
+    """
+    global _urgent_news_context, _urgent_trading_window
+    _urgent_news_context.append({"symbols": symbols, "reason": reason, "ts": datetime.now(timezone.utc).isoformat()})
+    # Keep only the most recent 5 news events to avoid prompt bloat
+    _urgent_news_context = _urgent_news_context[-5:]
+    _urgent_trading_window = trading_window
+    _wake_event.set()
+    logger.info("Urgent cycle requested [%s]: %s", trading_window, reason)
 def _load_watermarks() -> dict:
     """Restore long-position high watermarks from persistent cache after a server restart."""
     cached = cache_get("position_watermarks")
@@ -389,6 +409,42 @@ async def run_trading_cycle():
         except Exception as e:
             logger.warning(f"get_sector_context_for_symbols failed (non-fatal): {e}")
 
+        # ── Phase 1 Brain: Regime detection + RS ranking ──────────────────────
+        from services.brain import detect_regime, rank_universe, get_rs_map, filter_by_rs
+        from services.brain.kelly import get_trade_history_for_kelly
+
+        _brain_regime = None
+        _rs_map = {}
+        _kelly_history = []
+        try:
+            _spy_data = snapshot_light.get("SPY", {})
+            _spy_prices = _spy_data.get("closing_prices", [])
+            _vix_raw = macro.get("vix_value")  # numeric VIX if available
+            _brain_regime = detect_regime(_spy_prices, _vix_raw, snapshot_light)
+            logger.info(f"Brain regime: {_brain_regime.regime.upper()} (score={_brain_regime.score}, confidence={_brain_regime.confidence:.0%})")
+
+            # Block leveraged ETF buys when regime is not bull or VIX is high
+            if not _brain_regime.allows_leveraged_etfs:
+                logger.info(f"Brain: leveraged ETF entries BLOCKED (regime={_brain_regime.regime}, vix={_brain_regime.vix_level})")
+        except Exception as _re:
+            logger.warning(f"Brain regime detection failed (non-fatal): {_re}")
+
+        try:
+            _spy_prices_rs = (snapshot_light.get("SPY") or {}).get("closing_prices", [])
+            _rs_ranks = rank_universe(snapshot_light, _spy_prices_rs)
+            _rs_map = get_rs_map(_rs_ranks)
+            # Filter universe to top 60% RS stocks — only trade outperformers
+            _rs_filtered_universe = filter_by_rs(universe[:50], _rs_map, min_percentile=60)
+            logger.info(f"RS filter: {len(universe)} → {len(_rs_filtered_universe)} stocks (top 60th percentile)")
+        except Exception as _re:
+            logger.warning(f"Brain RS ranking failed (non-fatal): {_re}")
+            _rs_filtered_universe = universe
+
+        try:
+            _kelly_history = await loop.run_in_executor(None, get_trade_history_for_kelly)
+        except Exception as _re:
+            logger.warning(f"Kelly history load failed (non-fatal): {_re}")
+
         # Recent trade outcomes — fed back to Claude so it learns from past decisions
         from services.db import get_recent_trade_outcomes
         recent_trades = []
@@ -479,6 +535,20 @@ async def run_trading_cycle():
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
                 )
+                try:
+                    from services.brain.learning import on_trade_closed
+                    entry_p = prev.get("avg_entry_price") or exit_price
+                    pl_pct = ((exit_price - entry_p) / entry_p * 100) if entry_p else 0.0
+                    on_trade_closed({
+                        "symbol": sym,
+                        "signal_type": prev.get("signal_type", "momentum"),
+                        "regime": getattr(_brain_regime, "regime", "chop") if "_brain_regime" in dir() else "chop",
+                        "vix_level": getattr(_brain_regime, "vix_level", "normal") if "_brain_regime" in dir() else "normal",
+                        "rs_percentile": (_rs_map or {}).get(sym, type("x", (), {"percentile": 50})()).percentile if "_rs_map" in dir() else 50,
+                        "pl_pct": pl_pct,
+                    })
+                except Exception as _le:
+                    logger.debug("learning on_trade_closed failed (non-fatal): %s", _le)
                 # ── Profit reserve: take % of realized gain before it re-enters trading pool ──
                 try:
                     reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
@@ -620,6 +690,11 @@ async def run_trading_cycle():
             for position in positions:
                 if position.side == "short":
                     continue
+                # Brain: block pyramiding leveraged ETFs when regime is not bull
+                from services.entry_timing import _LEVERAGED_ETFS as _lev_etfs_pyramid
+                if position.symbol in _lev_etfs_pyramid and _brain_regime and not _brain_regime.allows_leveraged_etfs:
+                    logger.info(f"Pyramid blocked: {position.symbol} is leveraged ETF but regime={_brain_regime.regime}/vix={_brain_regime.vix_level}")
+                    continue
                 pnl = position.unrealized_pl_percent
                 pyrs_taken = _pyramid_counts.get(position.symbol, 0)
                 # Max 2 pyramid adds per position
@@ -641,8 +716,8 @@ async def run_trading_cycle():
                 _rsi_p = (compute_rsi(cp) or 50.0)
                 p_price = sym_data_p.get("current_price") or position.current_price
 
-                # Tier 1: sweet spot — clearly working, not yet overbought
-                tier1 = (5.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 75 and pyrs_taken == 0
+                # Tier 1: confirmed winner — wait for 10% before adding to avoid buying false breakouts
+                tier1 = (10.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 75 and pyrs_taken == 0
                 # Tier 2: extended winner — add smaller on continued strength
                 # Bug fix: was 22.0 leaving an 18-22% dead zone. Now 19.0 closes the gap.
                 tier2 = (19.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
@@ -985,13 +1060,18 @@ async def run_trading_cycle():
                 action_label = "cover_short" if is_short else "scale_out"
                 order_side = "buy" if is_short else "sell"
                 logger.info(f"{action_label.upper()} triggered: {reason} — {'covering' if is_short else 'selling'} {exit_qty} shares")
+                _exit_reason_label = (
+                    "trailing_stop" if "trailing stop" in reason.lower()
+                    else "take_profit" if "profit" in reason.lower()
+                    else "short_cover" if is_short
+                    else "loss_cut"
+                )
                 if position.symbol in _previous_positions:
-                    _previous_positions[position.symbol]["exit_reason"] = (
-                        "trailing_stop" if "trailing stop" in reason.lower()
-                        else "take_profit" if "profit" in reason.lower()
-                        else "short_cover" if is_short
-                        else "loss_cut"
-                    )
+                    _previous_positions[position.symbol]["exit_reason"] = _exit_reason_label
+                # Record stop-out so re-entry is blocked for 2h
+                if _exit_reason_label == "loss_cut":
+                    from services.entry_timing import record_stopout
+                    record_stopout(position.symbol)
                 log_bot_activity(
                     action_label, reason,
                     symbol=position.symbol, cycle_id=_current_cycle_id
@@ -1151,30 +1231,134 @@ async def run_trading_cycle():
         if _cooldown_syms:
             logger.info(f"Rejection cooldown symbols (excluded from Step 1): {_cooldown_syms}")
 
-        decisions = await loop.run_in_executor(
-            None,
-            functools.partial(
-                claude_service.analyze_and_decide,
-                market_snapshot=snapshot_light,
-                positions=positions,
-                account_cash=_tradeable_cash,
-                portfolio_value=account.portfolio_value,
-                sentiment=sentiment,
-                macro=macro,
-                sector_info=sector_info,
-                earnings_map=earnings_map,
-                geo_context=geo,
-                trend_forecast=trend_forecast,
-                news_headlines=news_headlines,
-                full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
-                sector_context=sector_context,
-                recent_trades=recent_trades,
-                earnings_plays=earnings_plays,
-                afternoon_pressure=afternoon_pressure,
-                rejected_symbols=_cooldown_syms,
-                prebreakout_candidates=_prebreakout_candidates,
+        # ── Phase 2 Brain: score universe → AI Brain decide ───────────────────
+        # signals.py scores every symbol 0-100 before Claude sees them.
+        # ai_brain.py gives Claude only the top candidates + regime context.
+        # Falls back to claude_service if brain fails (non-fatal).
+        _use_brain = True
+        _brain_decisions = None
+        try:
+            from services.brain.signals import score_universe
+            from services.brain.ai_brain import decide as _brain_decide
+
+            _scored = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    score_universe,
+                    universe_snapshot=snapshot_light,
+                    regime_result=_brain_regime,
+                    rs_map=_rs_map,
+                    sentiment=sentiment,
+                    news_headlines=news_headlines,
+                    top_n=12,
+                    min_score=35,
+                )
             )
-        )
+
+            # Build rotation context for brain
+            _rotation_lines = []
+            for p in positions:
+                if getattr(p, "side", "long") == "short":
+                    continue
+                _pdata = snapshot_light.get(p.symbol, {})
+                _pprices = _pdata.get("closing_prices", [])
+                from services.indicators import compute_macd as _cm, compute_rsi as _cr
+                _ph = (_cm(_pprices) or {}).get("histogram", 0) if _pprices else 0
+                _pr = (_cr(_pprices) or 50) if _pprices else 50
+                _pnl = p.unrealized_pl_percent
+                _mom = "STRONG" if _pnl > 5 and _ph > 0 else ("WEAK" if _pnl < -2 or (_pr > 70 and _ph < 0) else "MODERATE")
+                _rotation_lines.append(f"  {p.symbol}: P&L={_pnl:+.1f}% MACD={_ph:.3f} RSI={_pr:.0f} → {_mom}")
+            _rotation_ctx = (
+                f"## Rotation Opportunities\nCash: ${_tradeable_cash:,.0f}\n"
+                + ("\n".join(_rotation_lines) if _rotation_lines else "  None")
+                + "\nOnly rotate WEAK positions to fund clearly better setups.\n"
+            )
+
+            # EOD context
+            _eod_ctx = ""
+            try:
+                from services.eod_analysis_service import get_latest_eod_report as _geod
+                _eod = _geod()
+                if _eod and isinstance(_eod, dict) and _eod.get("analysis"):
+                    _a = _eod["analysis"]
+                    _ki = (_a.get("key_insight") or "")[:200]
+                    _rn = (_a.get("risk_note") or "")[:150]
+                    if _ki or _rn:
+                        _eod_ctx = f"## Yesterday's Learning\n- Insight: {_ki}\n- Risk: {_rn}\n"
+            except Exception:
+                pass
+
+            # Prompt override
+            _pov = ""
+            try:
+                from services.db import get_setting as _gs
+                _pov = (_gs("prompt_override") or "").strip()
+            except Exception:
+                pass
+
+            # Grab and clear urgent news context for this cycle
+            _urgent_ctx = list(_urgent_news_context)
+            _urgent_news_context.clear()
+            _urgent_window = _urgent_trading_window if _urgent_ctx else "regular"
+
+            _brain_decisions = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    _brain_decide,
+                    scored_candidates=_scored,
+                    positions=positions,
+                    account_cash=_tradeable_cash,
+                    portfolio_value=float(account.portfolio_value),
+                    regime_result=_brain_regime,
+                    rs_map=_rs_map,
+                    kelly_history=_kelly_history,
+                    strategy=strat,
+                    earnings_map=earnings_map,
+                    news_headlines=news_headlines,
+                    afternoon_pressure=afternoon_pressure,
+                    eod_context=_eod_ctx,
+                    rotation_context=_rotation_ctx,
+                    prompt_override=_pov,
+                    urgent_news_context=_urgent_ctx,
+                    trading_window=_urgent_window,
+                )
+            )
+            logger.info(f"Phase 2 Brain produced {len(_brain_decisions)} decisions")
+        except Exception as _brain_err:
+            logger.warning(f"Phase 2 Brain failed (falling back to claude_service): {_brain_err}")
+            _use_brain = False
+
+        if _use_brain and _brain_decisions:
+            decisions = _brain_decisions
+        else:
+            # Fallback to original claude_service
+            decisions = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    claude_service.analyze_and_decide,
+                    market_snapshot=snapshot_light,
+                    positions=positions,
+                    account_cash=_tradeable_cash,
+                    portfolio_value=account.portfolio_value,
+                    sentiment=sentiment,
+                    macro=macro,
+                    sector_info=sector_info,
+                    earnings_map=earnings_map,
+                    geo_context=geo,
+                    trend_forecast=trend_forecast,
+                    news_headlines=news_headlines,
+                    full_data_fetcher=lambda symbols: alpaca_service.get_market_snapshot(symbols),
+                    sector_context=sector_context,
+                    recent_trades=recent_trades,
+                    earnings_plays=earnings_plays,
+                    afternoon_pressure=afternoon_pressure,
+                    rejected_symbols=_cooldown_syms,
+                    prebreakout_candidates=_prebreakout_candidates,
+                    brain_regime=_brain_regime,
+                    rs_map=_rs_map,
+                    kelly_history=_kelly_history,
+                )
+            )
 
         _last_analysis_at = datetime.now(timezone.utc)
 
@@ -1705,8 +1889,47 @@ async def run_trading_cycle():
                 except Exception as ce:
                     logger.warning(f"Pre-sell cancel failed for {decision.symbol} (non-fatal): {ce}")
 
+            # ── Options routing (swing trades with high conviction) ────────────
+            # Long calls/puts replace stock buys for high-conviction swing setups.
+            # Falls back to stock if no liquid contract is found.
+            _options_handled = False
+            if decision.action == "buy" and getattr(decision, "holding_period", "intraday") == "swing":
+                try:
+                    from services.brain.options_engine import decide_and_place
+                    _regime_str = getattr(_brain_regime, "regime", "bull") if "_brain_regime" in dir() else "bull"
+                    _opt_result = decide_and_place(
+                        symbol=decision.symbol,
+                        signal_type=getattr(decision, "signal_type", "momentum"),
+                        holding_period="swing",
+                        regime=_regime_str,
+                        conviction=100 if "[HIGH]" in (decision.reasoning or "").upper() else 65,
+                        suggested_action="buy",
+                        qty=max(1, decision.quantity // 10),  # 1 contract ≈ 100 shares
+                    )
+                    if _opt_result.get("status") not in ("delegate_to_alpaca_service", "fallback_no_chain", "error"):
+                        logger.info(
+                            "Options order placed: %s %s — %s",
+                            decision.symbol, _opt_result.get("instrument"), _opt_result.get("rationale", "")
+                        )
+                        log_bot_activity(
+                            "options_order",
+                            f"Options: {decision.symbol} {_opt_result.get('instrument')} — {_opt_result.get('rationale','')}",
+                            symbol=decision.symbol, cycle_id=_current_cycle_id,
+                        )
+                        _options_handled = True
+                    else:
+                        logger.info(
+                            "Options engine: %s — falling back to stock for %s",
+                            _opt_result.get("status"), decision.symbol,
+                        )
+                except Exception as _oe:
+                    logger.warning("Options routing failed (non-fatal), using stock: %s", _oe)
+
+            if _options_handled:
+                order = None  # options_engine placed the order directly; skip stock order below
+
             # Route to correct order executor
-            if decision.action == "short":
+            elif decision.action == "short":
                 order = alpaca_service.submit_short_order(
                     symbol=decision.symbol,
                     qty=decision.quantity,
@@ -1721,6 +1944,13 @@ async def run_trading_cycle():
                     stop_loss_pct=decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
                     take_profit_pct=decision.take_profit_pct or _risk_settings["take_profit_pct"],
                     partial_exit=decision.partial_exit,
+                )
+            if _options_handled:
+                today = datetime.now(timezone.utc).date()
+                _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
+                logger.info(
+                    f"✅ Options order placed: {decision.symbol} (swing) "
+                    f"| trades today: {_daily_trade_count[today]}"
                 )
             if order:
                 # Track daily trade count (_cycle_open_count already incremented above)
@@ -1825,6 +2055,20 @@ async def run_trading_cycle():
                         entry_time=prev.get("entry_time"),
                         side=prev.get("side", "long"),
                     )
+                    try:
+                        from services.brain.learning import on_trade_closed
+                        entry_p = prev.get("avg_entry_price") or fill_price
+                        pl_pct = ((fill_price - entry_p) / entry_p * 100) if entry_p else 0.0
+                        on_trade_closed({
+                            "symbol": decision.symbol,
+                            "signal_type": prev.get("signal_type", "momentum"),
+                            "regime": getattr(_brain_regime, "regime", "chop") if "_brain_regime" in dir() else "chop",
+                            "vix_level": getattr(_brain_regime, "vix_level", "normal") if "_brain_regime" in dir() else "normal",
+                            "rs_percentile": (_rs_map or {}).get(decision.symbol, type("x", (), {"percentile": 50})()).percentile if "_rs_map" in dir() else 50,
+                            "pl_pct": pl_pct,
+                        })
+                    except Exception as _le:
+                        logger.debug("learning on_trade_closed (ai_sell) failed (non-fatal): %s", _le)
                     # ── Profit reserve on AI-initiated sells ──
                     _ai_sold_symbols.add(decision.symbol)  # guard cycle-detect from double-counting
                     try:
@@ -1938,6 +2182,14 @@ async def _trading_loop():
     from datetime import timedelta
     _cleanup_counter = 0
     _premarket_scanned_date = None  # track which date we last ran the pre-market scan
+
+    # Start real-time news stream (non-fatal if it fails)
+    try:
+        from services.news_stream import start as _start_news_stream
+        await _start_news_stream()
+        logger.info("News stream started alongside trading loop.")
+    except Exception as _nw_err:
+        logger.warning("Could not start news stream (non-fatal): %s", _nw_err)
     # Restore _eod_saved_date from cache so multiple deploys on the same day
     # don't re-run the EOD report (cache_get returns None if key missing/expired)
     _eod_saved_date_str = cache_get("eod_saved_date")
@@ -2029,7 +2281,17 @@ async def _trading_loop():
             logger.info("Market closed — checking again in 15 minutes")
 
         _next_run_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_seconds)
-        await asyncio.sleep(sleep_seconds)
+
+        # ── Sleep — wakes early if news_stream fires request_urgent_cycle() ──
+        # asyncio.wait_for raises TimeoutError when the full interval elapses normally.
+        # If _wake_event is set (breaking news), we skip straight to the next cycle.
+        _wake_event.clear()
+        try:
+            await asyncio.wait_for(_wake_event.wait(), timeout=sleep_seconds)
+            if market_open_now:
+                logger.info("Trading loop woken by news trigger — running urgent cycle now")
+        except asyncio.TimeoutError:
+            pass  # normal path — full interval elapsed
 
 
 def start():

@@ -33,28 +33,25 @@ STRATEGIES = {
     "aggressive": {
         "key": "aggressive",
         "name": "Aggressive",
-        "max_position_pct": 0.30,
-        "min_confidence": "low",
-        "risk_per_trade_pct": 0.02,        # 2% of portfolio risked per trade (vs 1% default)
+        "max_position_pct": 0.15,
+        "min_confidence": "medium",
+        "risk_per_trade_pct": 0.015,       # 1.5% of portfolio risked per trade
         "sector_cap": 2,                   # allow 2 positions per sector
         "default_take_profit_pct": 0.20,   # 20% TP — let winners run far
-        "default_stop_loss_pct": 0.05,     # 5% trailing stop — wide enough to breathe
+        "default_stop_loss_pct": 0.04,     # 4% trailing stop — tight enough to protect capital
         "prompt_modifier": (
-            "MAXIMUM AGGRESSION — your sole objective is to generate the highest possible return. "
-            "Deploy capital at every opportunity. Idle cash is a failure. "
-            "Trade on ANY signal, including low-confidence — a speculative bet beats doing nothing. "
-            "Aggressively use 3x leveraged ETFs (SOXL, TQQQ, SPXL, UPRO, FNGU) on ANY bullish signal. "
-            "Take FULL-SIZE positions (30% of portfolio) on high-confidence. "
-            "75% size on medium-confidence. 50% on low-confidence — still trade, don't skip. "
-            "Enter early on breakouts and momentum — before the crowd, not after confirmation. "
-            "Stack positions in the same hot sector if momentum is strong — don't diversify away gains. "
+            "AGGRESSIVE GROWTH — your objective is strong risk-adjusted returns. "
+            "Prioritise medium-to-high confidence trades. Low-confidence signals require a clear catalyst. "
+            "Use 3x leveraged ETFs (SOXL, TQQQ, SPXL, UPRO, FNGU) only when market regime is bullish and VIX is low/normal. "
+            "Take FULL-SIZE positions (15% of portfolio) on high-confidence. "
+            "75% size on medium-confidence. Only trade low-confidence if there is a strong news catalyst. "
+            "Enter on confirmed breakouts — wait for price to close above resistance, not just touch it. "
             "Set take_profit_pct: 0.20-0.30 for high-conviction, 0.15-0.20 for medium, "
             "0.25-0.40 for 3x leveraged ETFs on strong trend days. "
-            "Set stop_loss_pct at 0.05-0.07 — wide stops let momentum plays develop fully. "
+            "Set stop_loss_pct at 0.03-0.05 — protect capital, cut losers quickly. "
             "Set partial_exit=true on any trade with 20%+ upside target — bank half, let rest compound. "
-            "Re-enter immediately after a stop-out if the setup still looks valid. "
-            "Never hedge. Never hold bonds or defensive assets. Never wait for 'better entry'. "
-            "The goal is 20-50% monthly returns — act accordingly."
+            "Never hold a loser hoping for recovery — exit and redeploy. "
+            "The goal is consistent profitable trades, not maximum trade count."
         ),
     },
 }

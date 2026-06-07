@@ -1,0 +1,88 @@
+"""
+Phase 7I — Institutional positioning via yfinance (FREE, no API key needed).
+
+Uses yfinance institutional holders to approximate dark pool accumulation.
+Real dark pool data is delayed/expensive; institutional holder changes are a
+reasonable free proxy — large funds disclose positions quarterly via 13F.
+
+Signal: top 10 institutional holders as % of float
+  inst_pct >= 70%  → strong institutional backing +15 pts
+  inst_pct >= 50%  → moderate institutional backing +8 pts
+  inst_pct <  20%  → low institutional interest (retail-driven) 0 pts
+
+Note: this data is quarterly (SEC 13F), not real-time. Lower conviction than
+real dark pool data, but still useful for filtering out thinly-held stocks.
+Cache: 24 hours per symbol.
+"""
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+_CACHE_TTL = 86_400  # 24 hours (quarterly data doesn't need frequent refresh)
+_cache: dict[str, tuple[dict, float]] = {}
+
+
+def _unavailable(reason: str) -> dict:
+    return {"signal": "unavailable", "conviction_boost": 0, "details": reason}
+
+
+def get_darkpool_signal(symbol: str) -> dict:
+    """
+    Return institutional positioning signal for a symbol using yfinance.
+
+    Returns:
+        {
+          "signal": "accumulating" | "neutral" | "unavailable",
+          "conviction_boost": int,
+          "details": str
+        }
+    """
+    cached = _cache.get(symbol)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
+    try:
+        result = _fetch_institutional_data(symbol)
+    except Exception as e:
+        logger.debug("yfinance institutional %s: %s", symbol, e)
+        result = _unavailable(str(e))
+
+    _cache[symbol] = (result, time.time() + _CACHE_TTL)
+    return result
+
+
+def _fetch_institutional_data(symbol: str) -> dict:
+    try:
+        import yfinance as yf
+    except ImportError:
+        return _unavailable("yfinance not installed — run: pip install yfinance")
+
+    ticker = yf.Ticker(symbol)
+    info = ticker.info or {}
+
+    # institutionsPercentHeld is 0.0-1.0
+    inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100
+
+    if inst_pct == 0:
+        # Fallback: try to derive from institutional holders DataFrame
+        try:
+            holders = ticker.institutional_holders
+            if holders is not None and not holders.empty and "% Out" in holders.columns:
+                inst_pct = float(holders["% Out"].sum()) * 100
+        except Exception:
+            pass
+
+    if inst_pct == 0:
+        return _unavailable("institutional data not available")
+
+    if inst_pct >= 70:
+        return {"signal": "accumulating", "conviction_boost": 15,
+                "details": f"institutions hold {inst_pct:.0f}% of float (strong backing)"}
+
+    if inst_pct >= 50:
+        return {"signal": "accumulating", "conviction_boost": 8,
+                "details": f"institutions hold {inst_pct:.0f}% of float"}
+
+    return {"signal": "neutral", "conviction_boost": 0,
+            "details": f"institutions hold {inst_pct:.0f}% of float (below 50% threshold)"}

@@ -18,12 +18,11 @@ router = APIRouter(prefix="/api/settings", tags=["model_settings"])
 # ── Available models — same list for all slots, user can freely mix providers ──
 
 ALL_MODELS = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-3-pro",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
-    "claude-opus-4-6",
+    "claude-opus-4-8",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
 ]
 
 # Aliases for backwards compatibility
@@ -35,9 +34,9 @@ STANDARD_FALLBACK_OPTIONS = ALL_MODELS
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "pro_primary":        "claude-sonnet-4-6",
-    "pro_fallback":       "gemini-2.5-flash",
-    "standard_primary":   "claude-haiku-4-5-20251001",
+    "pro_primary":        "claude-sonnet-4-6",    # trade decisions
+    "pro_fallback":       "gemini-2.5-flash",     # fallback (thinking OFF)
+    "standard_primary":   "claude-haiku-4-5-20251001",  # non-critical
     "standard_fallback":  "gemini-2.5-flash",
 }
 
