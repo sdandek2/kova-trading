@@ -23,11 +23,20 @@ warnings.filterwarnings("ignore")
 # ── Universe ──────────────────────────────────────────────────────────────────
 
 UNIVERSE = [
+    # Large-cap tech
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AVGO",
+    # AI stocks
+    "PLTR",
+    # Chips / Memory — includes stress tests (INTC collapse, SMCI boom+bust)
+    "AMD", "MU", "TSM", "ARM", "QCOM", "INTC", "WDC", "SMCI",
+    # Financials / industrials
     "JPM", "GS", "BAC", "CAT", "DE",
+    # Healthcare / consumer
     "UNH", "LLY", "JNJ", "COST", "HD",
+    # Sector ETFs
     "XLK", "XLF", "XLE", "XLV", "XLY", "XLI",
-    "SPY", "QQQ", "IWM",
+    # Benchmarks + leveraged
+    "SPY", "QQQ", "IWM", "TQQQ", "SOXL",
 ]
 
 # ── Exit rule flags (all True = full strategy) ────────────────────────────────
@@ -39,16 +48,25 @@ class ExitRules:
     use_scale_out: bool = True        # partial exit at SCALE_OUT_PCT profit
     use_cooldown: bool = True         # skip symbol for COOLDOWN_DAYS after a stop-out
     use_circuit_breaker: bool = True  # halt new entries if daily drawdown > CB_LIMIT
+    # negative test flags
+    random_entries: bool = False      # ignore signals, enter randomly
+    long_only: bool = False           # skip all short candidates
+    no_regime_filter: bool = False    # ignore regime, take all signals regardless
 
 FULL_RULES = ExitRules()
 
 ABLATION_CONFIGS = [
+    # ── Exit rule ablations ───────────────────────────────────────────────────
     ("Full strategy (baseline)",          ExitRules()),
     ("No stale exit (time stop off)",     ExitRules(use_time_stop=False)),
     ("No MACD decay exit",                ExitRules(use_macd_decay=False)),
     ("No scale-out",                      ExitRules(use_scale_out=False)),
     ("No cooldown after stop-out",        ExitRules(use_cooldown=False)),
     ("No circuit breaker",                ExitRules(use_circuit_breaker=False)),
+    # ── Negative / baseline tests ─────────────────────────────────────────────
+    ("NEGATIVE: random entries",          ExitRules(random_entries=True)),
+    ("NEGATIVE: long-only (no shorts)",   ExitRules(long_only=True)),
+    ("NEGATIVE: no regime filter",        ExitRules(no_regime_filter=True)),
 ]
 
 # ── Trade parameters ──────────────────────────────────────────────────────────
@@ -500,7 +518,10 @@ def run_year(year: int, all_data: dict[str, dict], brain, rules: ExitRules,
                     pct = (price - trade.entry_price) / trade.entry_price
                 if pct >= SCALE_OUT_PCT:
                     half_shares = trade.shares / 2
-                    pl = (price - trade.entry_price) * half_shares
+                    if trade.direction == "short":
+                        pl = (trade.entry_price - price) * half_shares
+                    else:
+                        pl = (price - trade.entry_price) * half_shares
                     equity += pl
                     trade.shares -= half_shares
                     trade.scaled_out = True
@@ -520,23 +541,40 @@ def run_year(year: int, all_data: dict[str, dict], brain, rules: ExitRules,
 
         # ── Signal scoring ─────────────────────────────────────────────────────
         if not circuit_broken:
-            if score_universe_fn and regime_result:
-                try:
-                    rs_list = rank_universe_fn(snapshot, spy_closes)
-                    rs_map  = {r.symbol: r for r in rs_list}
-                    candidates = score_universe_fn(snapshot, regime_result, rs_map, {}, [], top_n=5, min_score=MIN_SCORE)
-                    candidates = [c for c in candidates if c.suggested_action in ("buy", "short")]
-                except Exception:
-                    candidates = _simple_candidates(snapshot, spy_closes, regime_str)
+            if rules.random_entries:
+                # Negative test: pick up to MAX_OPEN random symbols, ignore all signals
+                import random
+                available = [s for s in snapshot if s not in open_positions and s != "SPY"]
+                random.shuffle(available)
+                candidates = [
+                    {"symbol": s, "score": 50, "signal_type": "random",
+                     "suggested_action": "buy", "price": snapshot[s]["current_price"],
+                     "macd_hist": 0.0, "rsi": 50.0}
+                    for s in available[:MAX_OPEN]
+                ]
             else:
-                candidates = _simple_candidates(snapshot, spy_closes, regime_str)
+                # Use regime-aware scoring or no-regime variant
+                effective_regime_str = regime_str if not rules.no_regime_filter else "chop"
+                effective_regime_result = regime_result if not rules.no_regime_filter else None
+
+                if score_universe_fn and effective_regime_result:
+                    try:
+                        rs_list = rank_universe_fn(snapshot, spy_closes)
+                        rs_map  = {r.symbol: r for r in rs_list}
+                        candidates = score_universe_fn(snapshot, effective_regime_result, rs_map, {}, [], top_n=5, min_score=MIN_SCORE)
+                        candidates = [c for c in candidates if c.suggested_action in ("buy", "short")]
+                    except Exception:
+                        candidates = _simple_candidates(snapshot, spy_closes, effective_regime_str)
+                else:
+                    candidates = _simple_candidates(snapshot, spy_closes, effective_regime_str)
 
             # ── Open new positions ─────────────────────────────────────────────
             for c in candidates:
                 sym = c["symbol"] if isinstance(c, dict) else c.symbol
-                action = c["signal_type"] if isinstance(c, dict) else c.suggested_action
                 suggested = c.get("suggested_action", "buy") if isinstance(c, dict) else c.suggested_action
                 if suggested not in ("buy", "short"):
+                    continue
+                if rules.long_only and suggested == "short":
                     continue
                 if sym in open_positions or len(open_positions) >= MAX_OPEN:
                     continue
@@ -593,7 +631,7 @@ def _simple_candidates(snapshot: dict, spy_closes: list[float], regime: str) -> 
 
 def print_year_table(results: list[tuple[int, dict]]) -> None:
     print(f"\n{'='*80}")
-    print("  KOVA BACKTEST — 2020-2024  (yfinance, no AI calls)")
+    print("  KOVA BACKTEST — 2020-2026  (yfinance, no AI calls)")
     print(f"{'='*80}")
     print(f"  {'Year':<6} {'Trades':>7} {'Win%':>7} {'AvgWin':>8} {'AvgLoss':>9} {'Sharpe':>8} {'MaxDD':>8} {'Return':>8}")
     print(f"  {'-'*74}")
@@ -607,14 +645,43 @@ def print_year_table(results: list[tuple[int, dict]]) -> None:
 
 def print_ablation_table(results: list[tuple[str, dict]]) -> None:
     print(f"\n{'='*90}")
-    print("  ABLATION TESTS — 2020-2024 combined  (which exit rule adds value?)")
+    print("  ABLATION + NEGATIVE TESTS — 2020-2026 combined")
     print(f"{'='*90}")
-    print(f"  {'Config':<38} {'Trades':>7} {'Win%':>7} {'Sharpe':>8} {'MaxDD':>8} {'Return':>8}")
-    print(f"  {'-'*84}")
-    for label, m in results:
-        print(f"  {label:<38} {m['trades']:>7} {m['win_pct']:>6.1f}%"
+    print(f"  {'Config':<40} {'Trades':>7} {'Win%':>7} {'Sharpe':>8} {'MaxDD':>8} {'Return':>8}")
+    print(f"  {'-'*86}")
+    for i, (label, m) in enumerate(results):
+        if i == 6:  # separator before negative tests
+            print(f"  {'-'*86}")
+        print(f"  {label:<40} {m['trades']:>7} {m['win_pct']:>6.1f}%"
               f"  {m['sharpe']:>6.2f}  {m['max_dd']:>6.1f}%  {m['total_return']:>+6.1f}%")
     print(f"{'='*90}\n")
+
+
+# ── Parallel ablation worker ──────────────────────────────────────────────────
+
+def _run_ablation_config(args) -> tuple[str, dict]:
+    """Worker function for parallel ablation runs — must be top-level for pickling."""
+    label, rules, all_data, brain, years = args
+    start_eq = 100_000.0
+    equity = start_eq
+    all_equity = []
+    for year in years:
+        m = run_year(year, all_data, brain, rules, start_equity=equity)
+        all_equity.append(m)
+        equity *= (1 + m["total_return"] / 100)
+
+    total_trades = sum(m["trades"] for m in all_equity)
+    years_with_trades = [m for m in all_equity if m["trades"] > 0]
+    avg_win_pct  = sum(m["avg_win"] for m in years_with_trades) / max(1, len(years_with_trades))
+    avg_loss_pct = sum(m["avg_loss"] for m in years_with_trades) / max(1, len(years_with_trades))
+    avg_sharpe   = sum(m["sharpe"] for m in all_equity) / len(all_equity)
+    max_dd       = max(m["max_dd"] for m in all_equity)
+    total_return = round((equity / start_eq - 1) * 100, 1)
+    win_pct      = (sum(m["win_pct"] * m["trades"] for m in years_with_trades) / max(1, total_trades))
+    combined = dict(trades=total_trades, win_pct=round(win_pct, 1), avg_win=round(avg_win_pct, 2),
+                    avg_loss=round(avg_loss_pct, 2), sharpe=round(avg_sharpe, 2),
+                    max_dd=round(max_dd, 1), total_return=total_return)
+    return label, combined
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -623,7 +690,7 @@ def main():
     import logging
     logging.basicConfig(level=logging.WARNING)
 
-    years = [2020, 2021, 2022, 2023, 2024]
+    years = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
     # Fetch data once — need warmup before 2020 so start from 2019-01-01
     import json, os
@@ -652,7 +719,7 @@ def main():
         print(f"  {len(all_data)} symbols loaded  |  simulation logic runs fresh every time")
     else:
         print("\nFetching data …")
-        all_data = fetch_data(UNIVERSE, start="2019-01-01", end="2025-01-01")
+        all_data = fetch_data(UNIVERSE, start="2019-01-01", end="2026-06-01")
         if all_data:
             cache_out = {"__universe_hash__": universe_hash}
             for sym, d in all_data.items():
@@ -679,39 +746,106 @@ def main():
 
     print_year_table(year_results)
 
-    # ── Ablation tests (2020-2024 combined) ───────────────────────────────────
-    print("Running ablation tests (combined 2020-2024) …")
-    ablation_results = []
-    for label, rules in ABLATION_CONFIGS:
-        print(f"  {label} …", end="", flush=True)
-        combined = dict(trades=0, win_pct=0, avg_win=0, avg_loss=0, sharpe=0, max_dd=0, total_return=0)
-        all_trades = []
-        all_equity = []
-        start_eq = 100_000.0
-        equity = start_eq
-        for year in years:
-            m = run_year(year, all_data, brain, rules, start_equity=equity)
-            all_trades.append(m["trades"])
-            all_equity.append(m)
-            equity *= (1 + m["total_return"] / 100)
-        # Summarise across years
-        total_trades = sum(m["trades"] for m in all_equity)
-        avg_win_pct  = sum(m["avg_win"] for m in all_equity if m["trades"] > 0) / max(1, sum(1 for m in all_equity if m["trades"] > 0))
-        avg_loss_pct = sum(m["avg_loss"] for m in all_equity if m["trades"] > 0) / max(1, sum(1 for m in all_equity if m["trades"] > 0))
-        avg_sharpe   = sum(m["sharpe"] for m in all_equity) / len(all_equity)
-        max_dd       = max(m["max_dd"] for m in all_equity)
-        total_return = round((equity / start_eq - 1) * 100, 1)
-        win_pct      = sum(m["win_pct"] * m["trades"] for m in all_equity if m["trades"] > 0) / max(1, total_trades)
-        combined = dict(trades=total_trades, win_pct=round(win_pct, 1), avg_win=round(avg_win_pct, 2),
-                        avg_loss=round(avg_loss_pct, 2), sharpe=round(avg_sharpe, 2),
-                        max_dd=round(max_dd, 1), total_return=total_return)
-        ablation_results.append((label, combined))
-        print(f" done — return {combined['total_return']:+.1f}%")
+    # ── Ablation + negative tests (parallelised) ──────────────────────────────
+    import multiprocessing
+    n_cores = min(len(ABLATION_CONFIGS), multiprocessing.cpu_count())
+    print(f"\nRunning {len(ABLATION_CONFIGS)} ablation/negative configs in parallel ({n_cores} cores) …")
+
+    worker_args = [(label, rules, all_data, brain, years) for label, rules in ABLATION_CONFIGS]
+
+    # Preserve original order after parallel execution
+    order = {label: i for i, (label, _) in enumerate(ABLATION_CONFIGS)}
+    with multiprocessing.Pool(processes=n_cores) as pool:
+        raw_results = pool.map(_run_ablation_config, worker_args)
+
+    ablation_results = sorted(raw_results, key=lambda x: order[x[0]])
+    for label, m in ablation_results:
+        print(f"  {label:<40} return {m['total_return']:+.1f}%  Sharpe {m['sharpe']:.2f}")
 
     print_ablation_table(ablation_results)
 
     print("Phase 2 backtest complete. Review the tables above.")
     print("Key check: 2022 should survive with Sharpe > 0 and MaxDD < 25%.\n")
+
+    # ── Save results + print diff vs last run ─────────────────────────────────
+    _save_and_diff(year_results, ablation_results)
+
+
+def _save_and_diff(year_results: list, ablation_results: list) -> None:
+    import json, os, subprocess
+    from datetime import datetime
+
+    history_file = os.path.join(os.path.dirname(__file__), "backtest_history.json")
+
+    # Get current git commit hash (best-effort)
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(__file__),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        commit = "unknown"
+
+    # Build this run's record
+    baseline = next((m for label, m in ablation_results if "baseline" in label), {})
+    current = {
+        "timestamp": datetime.now().isoformat(),
+        "commit": commit,
+        "years": {str(year): m for year, m in year_results},
+        "baseline": baseline,
+        "ablations": {label: m for label, m in ablation_results},
+    }
+
+    # Load history
+    history = []
+    if os.path.exists(history_file):
+        with open(history_file) as f:
+            history = json.load(f)
+
+    # ── Diff vs last run ──────────────────────────────────────────────────────
+    if history:
+        prev = history[-1]
+        print(f"\n{'='*70}")
+        print(f"  DIFF vs last run  ({prev['timestamp'][:16]}  commit {prev['commit']})")
+        print(f"{'='*70}")
+
+        # Year-by-year diff
+        print(f"  {'Year':<6} {'Sharpe':>12} {'Return':>14} {'MaxDD':>12}")
+        print(f"  {'-'*50}")
+        for year, m in year_results:
+            prev_y = prev["years"].get(str(year), {})
+            if not prev_y:
+                continue
+            sharpe_diff = m["sharpe"] - prev_y["sharpe"]
+            ret_diff    = m["total_return"] - prev_y["total_return"]
+            dd_diff     = m["max_dd"] - prev_y["max_dd"]
+            sharpe_icon = "↑" if sharpe_diff > 0.05 else ("↓" if sharpe_diff < -0.05 else "→")
+            ret_icon    = "↑" if ret_diff > 0.5 else ("↓" if ret_diff < -0.5 else "→")
+            dd_icon     = "↓" if dd_diff < -0.5 else ("↑" if dd_diff > 0.5 else "→")  # lower DD is better
+            print(f"  {year:<6} {sharpe_icon} {m['sharpe']:>5.2f} ({sharpe_diff:>+.2f})"
+                  f"  {ret_icon} {m['total_return']:>+5.1f}% ({ret_diff:>+.1f}%)"
+                  f"  {dd_icon} {m['max_dd']:>4.1f}% ({dd_diff:>+.1f}%)")
+
+        # Baseline summary diff
+        pb = prev.get("baseline", {})
+        if pb and baseline:
+            print(f"\n  Overall baseline:")
+            for key in ["sharpe", "total_return", "win_pct", "max_dd"]:
+                diff = baseline.get(key, 0) - pb.get(key, 0)
+                icon = "↑" if diff > 0 else ("↓" if diff < 0 else "→")
+                if key == "max_dd":
+                    icon = "↓" if diff < 0 else ("↑" if diff > 0 else "→")
+                print(f"    {key:<16} {icon}  {baseline.get(key):>+.2f}  (was {pb.get(key):>+.2f}, Δ {diff:>+.2f})")
+        print(f"{'='*70}\n")
+    else:
+        print("\n  (No previous run to diff against — this is the baseline.)\n")
+
+    # Append and save
+    history.append(current)
+    with open(history_file, "w") as f:
+        json.dump(history, f, indent=2)
+    print(f"  Results saved to {history_file}  (run #{len(history)} total)\n")
 
 
 if __name__ == "__main__":

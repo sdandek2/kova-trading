@@ -10,6 +10,10 @@ backend/.env
 backend/strategy_setting.txt
 backend/watchlist.json
 
+# Backtest artifacts (large, regeneratable — delete to force re-fetch)
+backend/backtest_cache.json
+backend/backtest_history.json
+
 # iOS / Xcode
 ios/TradingApp/Sources/Config.swift
 ios/TradingApp/.build/
