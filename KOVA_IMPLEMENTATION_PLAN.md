@@ -180,7 +180,9 @@ All 6 cards built in `AnalyticsView.swift`. New models in `Performance.swift`, n
 **E. Portfolio VaR card** ✅ Built in Session 5
 **F. Time-of-Day win rate chart** ✅ Built in Session 5 — horizontal bar chart with color-coded win rate
 
-**G. Near-Miss Tracker card** ⏳ Session 7 — "Did we miss good trades?"
+**G. Near-Miss Tracker card** ⏳ Session 7 — "Did we miss good trades?" (scores 35–54 only)
+
+**H. Sprint Review card** ⏳ Session 7 — "What did the whole market do vs what Kova captured?"
 - Shows stocks that scored 35–54 (just below trade threshold) and what they did next
 - Counts how often we were right to skip vs. missed a profitable trade
 - Breaks down which signal was the deciding factor (e.g. "options_flow blocked 12 trades, avg +4.8%")
@@ -202,6 +204,9 @@ All 6 cards built in `AnalyticsView.swift`. New models in `Performance.swift`, n
 | `GET /api/performance/by-hour` | ✅ Done |
 | `GET /api/trading/status` → regime fields | ✅ Done (`brain_regime`, `vix_level`, `regime_confidence`, `regime_capital_mult`) |
 | `GET /api/performance/near-misses` | ⏳ Session 7 — near-miss tracker (scores 35–54) |
+| `GET /api/performance/sprint-review/latest` | ⏳ Session 7 — most recent daily + weekly sprint review |
+| `GET /api/performance/sprint-review/daily` | ⏳ Session 7 — single day movers vs Kova capture rate |
+| `GET /api/performance/sprint-review/weekly` | ⏳ Session 7 — weekly signal performance + what's working |
 
 ---
 
@@ -771,7 +776,150 @@ New card `G` in `AnalyticsView.swift` (after the existing 6 cards A–F):
 
 ---
 
-### Step 6 — Google Finance
+### Step 6 — Sprint Review Tracker (NEW FEATURE — Daily + Weekly)
+
+**Concept:** End-of-day and end-of-week automated report that answers:
+- "What were the biggest market moves today — did Kova capture them?"
+- "What did Kova trade well this week — which signals are working?"
+- "If Kova had bought every top-10 gainer at open, how much more would the portfolio be worth?"
+
+This is **different from Near-Miss Tracker (Step 5)**:
+
+| Near-Miss Tracker | Sprint Review |
+|---|---|
+| Stocks scoring 35–54 (almost traded) | ALL significant market movers — regardless of whether Kova ever looked at them |
+| "Were we right to skip?" | "What did the whole market do vs what we captured?" |
+| Signal calibration tool | Strategy validation + opportunity cost measurement |
+| Real-time, logged during trading | Runs once at 4:30 PM ET daily, once on Friday EOD |
+
+---
+
+**Three sections of the Sprint Review:**
+
+**Section 1 — Market Opportunity Map (daily)**
+- Pull top 20 gainers + top 20 losers at EOD via Alpaca screener
+- For each: classify into one of four buckets:
+  - `CAPTURED` — Kova traded it and made money ✅
+  - `IN_UNIVERSE_SKIPPED` — was in our universe, scored below 45, skipped
+  - `IN_UNIVERSE_WRONG` — was in our universe, we shorted when it went up (or vice versa)
+  - `MISSED_ENTIRELY` — never entered our universe at all
+- Calculate: "opportunity capture rate" = CAPTURED / total top-20 gainers
+
+**Section 2 — Hypothetical Portfolio (daily)**
+- Simulate: if Kova had bought top 10 gainers at 9:35 AM open and sold at 3:55 PM close
+- Simulate: if Kova had shorted top 10 losers at 9:35 AM and covered at 3:55 PM
+- Compare actual Kova P&L vs this hypothetical — gives "ceiling" for what was available
+- NOT a benchmark we try to beat — it's a sanity check ("market was up 3%, Kova made 0.8% — was anything available?")
+
+**Section 3 — What's Working (weekly, Friday EOD)**
+- Which signals triggered the most profitable completed trades this week?
+- Signal win rate this week: `{options_flow: 7/10 profitable, earnings_surprise: 3/3, insider_buy: 2/2}`
+- "Continue" list: signals with >60% win rate on trades they influenced
+- "Review" list: signals with <40% win rate (maybe tuning needed)
+- Regime accuracy: "Bull regime called correctly X/Y days (regime said bull, market was up)"
+
+---
+
+**Backend implementation:**
+
+**New file: `backend/services/brain/sprint_review.py`**
+```python
+# Runs at 4:30 PM ET daily via APScheduler (already used for other EOD tasks)
+# Also runs full weekly summary on Fridays
+
+def run_daily_sprint_review():
+    """Fetch EOD movers, classify against our universe + trades, store to DB."""
+    pass
+
+def run_weekly_sprint_review():
+    """Aggregate daily reviews into weekly signal performance summary."""
+    pass
+```
+
+**DB tables needed:**
+```sql
+-- Daily snapshot of market movers vs Kova's activity
+CREATE TABLE sprint_review_daily (
+    id SERIAL PRIMARY KEY,
+    review_date DATE,
+    top_gainers JSONB,   -- [{symbol, open, close, pct_gain, kova_bucket, kova_pnl}]
+    top_losers  JSONB,   -- [{symbol, open, close, pct_loss, kova_bucket, kova_pnl}]
+    opportunity_capture_rate NUMERIC,  -- % of top gainers Kova caught
+    hypothetical_long_pnl NUMERIC,     -- if bought all top-10 gainers
+    hypothetical_short_pnl NUMERIC,    -- if shorted all top-10 losers
+    actual_kova_pnl NUMERIC,
+    missed_entirely_count INTEGER,     -- movers Kova never even looked at
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Weekly signal performance summary
+CREATE TABLE sprint_review_weekly (
+    id SERIAL PRIMARY KEY,
+    week_ending DATE,
+    signal_performance JSONB,  -- {options_flow: {wins:7, losses:3, avg_pnl:+2.1%}, ...}
+    regime_accuracy JSONB,     -- {bull: {called:5, correct:4}, bear: {...}, chop: {...}}
+    continue_signals TEXT[],   -- signals working well
+    review_signals TEXT[],     -- signals underperforming
+    summary_text TEXT,         -- auto-generated narrative
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**New endpoints:**
+- `GET /api/performance/sprint-review/daily?date=2026-06-07` — single day report
+- `GET /api/performance/sprint-review/weekly?week=2026-06-07` — week ending this date
+- `GET /api/performance/sprint-review/latest` — most recent daily + weekly
+
+---
+
+**iOS UI — Sprint Review screen (new tab or section in AnalyticsView)**
+
+New card `H` in `AnalyticsView.swift`:
+
+```
+┌──────────────────────────────────────────┐
+│ 📊 Sprint Review — Today                 │
+│                                          │
+│  Market top movers: 20 gainers, 20 losers│
+│  Kova captured:  4 of top 20 gainers ✅  │
+│  Missed entirely: 11 (never in universe) │
+│  In universe, skipped: 5                 │
+│                                          │
+│  Hypothetical ceiling:                   │
+│  Top-10 longs:  +6.8% today             │
+│  Top-10 shorts: +4.2% today             │
+│  Kova actual:   +1.3% today             │
+│                                          │
+│  [View weekly →]                         │
+└──────────────────────────────────────────┘
+
+Weekly view (tap "View weekly →"):
+┌──────────────────────────────────────────┐
+│ 📊 Sprint Review — Week of Jun 2–7       │
+│                                          │
+│  Signals working well ✅                 │
+│  options_flow    7/10 trades profitable  │
+│  insider_buy     2/2  trades profitable  │
+│  earnings_surp.  3/4  trades profitable  │
+│                                          │
+│  Signals to review ⚠️                   │
+│  barchart_short  1/4  trades profitable  │
+│                                          │
+│  Regime accuracy: Bull 4/5 days correct  │
+│  Opportunity capture: 22% of top movers  │
+└──────────────────────────────────────────┘
+```
+
+**Swift files to create/modify:**
+- `SprintReview.swift` — new models: `DailySprintReview`, `WeeklySprintReview`, `SignalPerformance`
+- `APIService.swift` — add `getSprintReviewLatest()`, `getSprintReviewWeekly()`
+- `AnalyticsView.swift` — add Card H (`SprintReviewCard`)
+
+**Data source for top movers:** Alpaca Screener API (`get_market_movers`) — already used in `get_tradeable_universe()`. At EOD, re-run with `top=20` to get the day's actual biggest movers. No new API needed.
+
+---
+
+### Step 7 — Google Finance
 **Don't implement.** No official API. Scraping violates ToS and breaks constantly. yfinance (already in use) provides equivalent data from Yahoo Finance reliably. Nothing Google Finance offers that we don't already have.
 
 ---
