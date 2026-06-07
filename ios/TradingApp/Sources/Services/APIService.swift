@@ -357,6 +357,15 @@ class APIService {
         try await fetch("/api/settings/models")
     }
 
+    // ── Session 7: Near-Miss Tracker + Sprint Review ──
+    func getNearMisses() async throws -> NearMissReport {
+        try await fetch("/api/performance/near-misses")
+    }
+
+    func getSprintReviewLatest() async throws -> DailySprintReview {
+        try await fetch("/api/performance/sprint-review/latest")
+    }
+
     func updateModelSettings(_ update: ModelSettingsUpdate) async throws {
         guard var request = makeRequest("/api/settings/models", method: "POST") else { throw APIError.invalidURL }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

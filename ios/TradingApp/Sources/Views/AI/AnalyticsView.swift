@@ -9,6 +9,8 @@ struct AnalyticsView: View {
     @State private var slippage: SlippageSummary? = nil
     @State private var hourData: [HourPerformance] = []
     @State private var tradingStatus: TradingStatus? = nil
+    @State private var nearMisses: NearMissReport? = nil
+    @State private var sprintReview: DailySprintReview? = nil
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -28,6 +30,8 @@ struct AnalyticsView: View {
                         aiBaselineSection
                         slippageSection
                         timeOfDaySection
+                        nearMissSection
+                        sprintReviewSection
                         blockedTradesSection
                     }
                     .padding()
@@ -307,6 +311,141 @@ struct AnalyticsView: View {
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
     }
 
+    // MARK: - G. Near-Miss Tracker
+
+    private var nearMissSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Near Misses (Score 35–44)")
+                .font(.headline)
+            Text("Stocks just below trade threshold — did we miss good trades?")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if let nm = nearMisses {
+                let s = nm.summary
+                HStack(spacing: 16) {
+                    VStack {
+                        Text("\(s.totalNearMisses)")
+                            .font(.title2).bold()
+                        Text("near-misses").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    VStack {
+                        Text(s.accuracyIfTraded)
+                            .font(.title2).bold()
+                            .foregroundStyle(nm.summary.wouldHaveBeenProfitable > s.totalNearMisses / 2 ? .orange : .green)
+                        Text("profitable").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    VStack {
+                        Text(s.avgHypotheticalPnl)
+                            .font(.title2).bold()
+                        Text("avg P&L").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                if !nm.topMissedSignals.isEmpty {
+                    Text("Deciding signals:").font(.caption).foregroundStyle(.secondary)
+                    ForEach(nm.topMissedSignals.prefix(4)) { sig in
+                        HStack {
+                            Text(sig.signal).font(.caption)
+                            Spacer()
+                            Text("\(sig.timesWasDecidingFactor)x").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Text(s.thresholdVerdict)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            } else {
+                Text("No near-miss data yet — accumulates after first trading day.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center).padding()
+            }
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
+    }
+
+    // MARK: - H. Sprint Review
+
+    private var sprintReviewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sprint Review")
+                .font(.headline)
+            Text("What did the market do vs what Kova captured?")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if let sr = sprintReview, let date = sr.reviewDate {
+                Text(date).font(.caption2).foregroundStyle(.secondary)
+
+                HStack(spacing: 16) {
+                    VStack {
+                        Text(String(format: "%.1f%%", sr.opportunityCaptureRate ?? 0))
+                            .font(.title2).bold()
+                            .foregroundStyle((sr.opportunityCaptureRate ?? 0) > 30 ? .green : .orange)
+                        Text("capture rate").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    VStack {
+                        Text("\(sr.missedEntirelyCount ?? 0)")
+                            .font(.title2).bold()
+                        Text("missed entirely").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    VStack {
+                        Text(String(format: "+%.1f%%", sr.hypotheticalLongPnl ?? 0))
+                            .font(.title2).bold().foregroundStyle(.green)
+                        Text("ceiling").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                if let actual = sr.actualKovaPnl {
+                    HStack {
+                        Text("Kova actual:").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(String(format: "%+.1f%%", actual))
+                            .font(.caption).bold()
+                            .foregroundStyle(actual >= 0 ? .green : .red)
+                    }
+                }
+
+                if let flagged = sr.flaggedSignals, !flagged.isEmpty {
+                    HStack(alignment: .top) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption)
+                        Text("Flagged signals (< 40% win rate): \(flagged.joined(separator: ", "))")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    .padding(.top, 2)
+                }
+
+                if let winRates = sr.signalWinRates, !winRates.isEmpty {
+                    Text("Signal win rates (30d):").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                    let sorted = winRates.sorted { $0.value > $1.value }
+                    ForEach(sorted.prefix(5), id: \.key) { sig, rate in
+                        HStack {
+                            Circle()
+                                .fill(rate > 0.6 ? Color.green : (rate < 0.4 ? Color.red : Color.orange))
+                                .frame(width: 6, height: 6)
+                            Text(sig).font(.caption)
+                            Spacer()
+                            Text(String(format: "%.0f%%", rate * 100)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text("Sprint review runs at 4:30 PM ET daily — check back after market close.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center).padding()
+            }
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
+    }
+
     // MARK: - Blocked Trades
 
     private var blockedTradesSection: some View {
@@ -343,6 +482,8 @@ struct AnalyticsView: View {
         async let sl   = try? APIService.shared.getSlippageSummary()
         async let hr   = try? APIService.shared.getPerformanceByHour()
         async let st   = try? APIService.shared.getTradingStatus()
+        async let nm   = try? APIService.shared.getNearMisses()
+        async let sr   = try? APIService.shared.getSprintReviewLatest()
         scorecard    = await sc ?? [:]
         blockedTrades = await bt ?? []
         varData      = await vr
@@ -351,6 +492,8 @@ struct AnalyticsView: View {
         slippage     = await sl
         hourData     = await hr ?? []
         tradingStatus = await st
+        nearMisses   = await nm
+        sprintReview = await sr
         isLoading    = false
     }
 

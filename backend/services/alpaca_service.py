@@ -458,18 +458,28 @@ def get_tradeable_universe() -> list[str]:
     - Biggest movers today (price action is happening)
     - Most mentioned in today's news (sentiment catalyst)
     - Leading sector ETFs (macro rotation signal)
+
+    Also logs each symbol + its source(s) to daily_universe_log for
+    the Sprint Review "why did we miss X?" analysis.
     """
     from collections import Counter
     seen = set()
     universe = []
+    # Track which sources put each symbol in the universe
+    symbol_sources: dict[str, list[str]] = {}
 
-    def add(symbols: list[str]):
+    def add(symbols: list[str], source: str):
         for s in symbols:
             # Filter out non-US symbols (e.g. TSX:IMO, LSE:XXXX) — Alpaca US equity
             # API rejects them with "invalid symbol" and pollutes the snapshot fetch.
-            if s and s not in seen and ":" not in s:
-                seen.add(s)
-                universe.append(s)
+            if s and ":" not in s:
+                if s not in symbol_sources:
+                    symbol_sources[s] = []
+                if source not in symbol_sources[s]:
+                    symbol_sources[s].append(source)
+                if s not in seen:
+                    seen.add(s)
+                    universe.append(s)
 
     # ── Real-time: most active by volume ──
     # These are whatever the market is focused on TODAY
@@ -478,7 +488,7 @@ def get_tradeable_universe() -> list[str]:
         from alpaca.data.requests import MostActivesRequest
         sc = ScreenerClient(settings.alpaca_api_key, settings.alpaca_secret_key)
         actives = sc.get_most_actives(MostActivesRequest(top=50))
-        add([i.symbol for i in actives.most_actives])
+        add([i.symbol for i in actives.most_actives], "most_actives")
         logger.info(f"Most actives: {[i.symbol for i in actives.most_actives]}")
     except Exception as e:
         logger.warning(f"Could not fetch most actives: {e}")
@@ -490,8 +500,8 @@ def get_tradeable_universe() -> list[str]:
         from alpaca.data.requests import MarketMoversRequest
         sc = ScreenerClient(settings.alpaca_api_key, settings.alpaca_secret_key)
         movers = sc.get_market_movers(MarketMoversRequest(top=30))
-        add([i.symbol for i in movers.gainers])
-        add([i.symbol for i in movers.losers])
+        add([i.symbol for i in movers.gainers], "movers_gainers")
+        add([i.symbol for i in movers.losers], "movers_losers")
         logger.info(f"Gainers: {[i.symbol for i in movers.gainers[:5]]} | Losers: {[i.symbol for i in movers.losers[:5]]}")
     except Exception as e:
         logger.warning(f"Could not fetch movers: {e}")
@@ -507,7 +517,7 @@ def get_tradeable_universe() -> list[str]:
         for article in news.news:
             news_symbols.extend(article.symbols or [])
         top_news = [sym for sym, _ in Counter(news_symbols).most_common(50)]
-        add(top_news)
+        add(top_news, "news")
         logger.info(f"Top news symbols: {top_news[:10]}")
     except Exception as e:
         logger.warning(f"Could not fetch news symbols: {e}")
@@ -525,7 +535,7 @@ def get_tradeable_universe() -> list[str]:
         "SOXS", "SQQQ", "SPXS",               # inverse (bear plays)
         "ARKK", "ARKG", "ARKW",               # innovation
     ]
-    add(sector_etfs)
+    add(sector_etfs, "sector_etf")
 
     # ── Session 6: FMP Earnings Surprise injection ────────────────────────────
     # Stocks with >10% EPS beat in the last 21 days — captures post-earnings drift
@@ -533,7 +543,7 @@ def get_tradeable_universe() -> list[str]:
     try:
         from services.brain.connectors.fmp_earnings import get_universe_additions as _fmp_adds
         earnings_syms = _fmp_adds()
-        add(earnings_syms)
+        add(earnings_syms, "fmp_earnings")
         if earnings_syms:
             logger.info(f"FMP earnings surprise injection: {earnings_syms}")
     except Exception as e:
@@ -545,7 +555,7 @@ def get_tradeable_universe() -> list[str]:
     try:
         from services.brain.connectors.sec_insider import get_universe_additions as _sec_adds
         insider_syms = _sec_adds()
-        add(insider_syms)
+        add(insider_syms, "sec_insider")
         if insider_syms:
             logger.info(f"SEC insider buy injection: {insider_syms}")
     except Exception as e:
@@ -578,7 +588,7 @@ def get_tradeable_universe() -> list[str]:
         _bc_candidates = _bc_syms()
         bc_syms = [s for s in _bc_candidates
                    if _re.match(r'^[A-Z]{1,5}$', s) and _bc_price_ok(s)]
-        add(bc_syms)
+        add(bc_syms, "barchart_options")
         if bc_syms:
             logger.info(f"Barchart unusual options injection (all flow): {bc_syms}")
 
@@ -589,12 +599,19 @@ def get_tradeable_universe() -> list[str]:
         _bc_short_map = _bc_shorts()
         bc_short_syms = [s for s in _bc_short_map
                          if _re.match(r'^[A-Z]{1,5}$', s) and _bc_price_ok(s)]
-        add(bc_short_syms)
+        add(bc_short_syms, "barchart_put_flow")
         if bc_short_syms:
             logger.info(f"Barchart heavy put flow → short injection: {bc_short_syms}")
 
     except Exception as e:
         logger.debug(f"Barchart options universe injection skipped: {e}")
+
+    # ── Log universe sources to DB for Sprint Review ──────────────────────────
+    try:
+        from services.db import log_daily_universe
+        log_daily_universe(symbol_sources)
+    except Exception as e:
+        logger.debug(f"log_daily_universe failed (non-fatal): {e}")
 
     logger.info(f"Total universe: {len(universe)} stocks — 100% real-time, zero hardcoded individual stocks")
     return universe

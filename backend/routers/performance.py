@@ -189,3 +189,55 @@ def get_performance_by_hour():
     """Win rate and avg P&L by entry hour (ET) for time-of-day analysis."""
     from services.db import get_performance_by_hour as _fn
     return _fn()
+
+
+@router.get("/near-misses")
+def get_near_misses():
+    """Near-miss tracker: stocks that scored 35–44 and what they did next."""
+    from services.db import get_near_misses_report as _fn
+    return _fn()
+
+
+@router.get("/sprint-review/latest")
+def get_sprint_review_latest():
+    """Most recent daily sprint review snapshot."""
+    from services.db import get_latest_sprint_review as _fn
+    return _fn()
+
+
+@router.get("/sprint-review/weekly")
+def get_sprint_review_weekly():
+    """Last 7 days of sprint reviews + signal win rates."""
+    from services.db import get_sprint_review_history, get_signal_win_rates
+    history = get_sprint_review_history(days=7)
+    win_rates = get_signal_win_rates(days=30)
+    return {"daily_reviews": history, "signal_win_rates": win_rates}
+
+
+@router.get("/signal-weights")
+def get_signal_weights_endpoint():
+    """Current signal weights — updated each Sunday by weight adjustment job."""
+    from services.db import get_signal_weights, get_signal_win_rates, _get_conn
+    weights = get_signal_weights()
+    win_rates = {r["signal_name"]: r for r in get_signal_win_rates(days=30)}
+    result = []
+    conn = _get_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT signal_name, current_weight, default_weight,
+                           win_rate_30d, sample_count_30d, last_adjusted, adjustment_reason
+                    FROM signal_weights ORDER BY signal_name
+                """)
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    d = dict(zip(cols, row))
+                    d["last_adjusted"] = d["last_adjusted"].isoformat() if d["last_adjusted"] else None
+                    wr = win_rates.get(d["signal_name"], {})
+                    d["current_win_rate"] = float(wr.get("win_rate") or 0)
+                    d["sample_count"] = int(wr.get("sample_count") or 0)
+                    result.append(d)
+        except Exception:
+            pass
+    return result

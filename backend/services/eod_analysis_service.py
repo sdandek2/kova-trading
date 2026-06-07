@@ -210,6 +210,28 @@ def run_eod_analysis() -> dict:
 
     strat = get_strategy()
 
+    # ── Sprint review: inject into EOD prompt (free — no extra API call) ──────
+    sprint_text = ""
+    try:
+        from services.db import get_latest_sprint_review as _get_sr
+        sr = _get_sr()
+        if sr and sr.get("review_date"):
+            capture_rate = sr.get("opportunity_capture_rate") or 0
+            missed = sr.get("missed_entirely_count") or 0
+            hyp_pnl = sr.get("hypothetical_long_pnl") or 0
+            actual_pnl_sr = sr.get("actual_kova_pnl") or 0
+            flagged = sr.get("flagged_signals") or []
+            sprint_text = (
+                f"\n## Sprint Review (today's market movers vs Kova)\n"
+                f"- Capture rate: {capture_rate:.1f}% of top movers Kova caught\n"
+                f"- Missed entirely (never in universe): {missed} stocks\n"
+                f"- Hypothetical ceiling: +{hyp_pnl:.1f}% (equal-weight top-10 gainers)\n"
+                f"- Kova actual: {actual_pnl_sr:+.1f}%\n"
+                + (f"- Flagged signals (below 40% win rate): {', '.join(flagged)}\n" if flagged else "")
+            )
+    except Exception:
+        pass
+
     prompt = f"""You are reviewing the performance of Kova, an AI-powered paper trading bot, for today {today_str}.
 Analyze the day objectively and provide actionable insights for tomorrow.
 
@@ -228,7 +250,7 @@ Strategy: {strat['name']}
 {open_text}
 
 ## Entries Rejected by Risk Filters
-{rejection_text}
+{rejection_text}{sprint_text}
 
 Important: In tomorrow_watchlist, do NOT add symbols currently held as SHORT positions with action "buy". If a symbol in open positions is marked [short], only include it with action "short" or "watch".
 

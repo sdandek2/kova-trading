@@ -1222,3 +1222,432 @@ def get_performance_by_hour() -> list[dict]:
     except Exception as e:
         logger.warning(f"get_performance_by_hour failed ({e})")
         return []
+
+
+# ── Session 7: Daily Universe Log ─────────────────────────────────────────────
+
+
+def ensure_session7_tables() -> None:
+    """Create Session 7 tables if they don't already exist. Safe to call repeatedly."""
+    ddl = """
+        CREATE TABLE IF NOT EXISTS daily_universe_log (
+            id SERIAL PRIMARY KEY,
+            log_date DATE NOT NULL,
+            symbol VARCHAR(10) NOT NULL,
+            sources TEXT[] NOT NULL DEFAULT '{}',
+            first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (log_date, symbol)
+        );
+
+        CREATE TABLE IF NOT EXISTS near_miss_log (
+            id SERIAL PRIMARY KEY,
+            symbol VARCHAR(10) NOT NULL,
+            score INTEGER NOT NULL,
+            breakdown JSONB,
+            suggested_action VARCHAR(10),
+            price_at_skip NUMERIC,
+            price_1h NUMERIC,
+            price_eod NUMERIC,
+            price_next_day NUMERIC,
+            hypothetical_pnl_pct NUMERIC,
+            timestamp TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS signal_performance_log (
+            id SERIAL PRIMARY KEY,
+            trade_date DATE NOT NULL,
+            symbol VARCHAR(10) NOT NULL,
+            signal_name VARCHAR(50) NOT NULL,
+            signal_boost INTEGER NOT NULL,
+            trade_profitable BOOLEAN,
+            trade_pnl_pct NUMERIC,
+            timestamp TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS signal_weights (
+            signal_name VARCHAR(50) PRIMARY KEY,
+            current_weight INTEGER NOT NULL,
+            default_weight INTEGER NOT NULL,
+            win_rate_30d NUMERIC,
+            sample_count_30d INTEGER,
+            last_adjusted DATE,
+            adjustment_reason TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS sprint_review_daily (
+            id SERIAL PRIMARY KEY,
+            review_date DATE UNIQUE NOT NULL,
+            top_gainers JSONB,
+            top_losers JSONB,
+            opportunity_capture_rate NUMERIC,
+            hypothetical_long_pnl NUMERIC,
+            hypothetical_short_pnl NUMERIC,
+            actual_kova_pnl NUMERIC,
+            missed_entirely_count INTEGER,
+            missed_by_source JSONB,
+            signal_win_rates JSONB,
+            flagged_signals TEXT[],
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+        # Seed default signal weights if table is empty
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM signal_weights")
+            if cur.fetchone()[0] == 0:
+                cur.execute("""
+                    INSERT INTO signal_weights (signal_name, current_weight, default_weight) VALUES
+                    ('barchart_very_unusual', 18, 18),
+                    ('barchart_unusual', 10, 10),
+                    ('earnings_surprise_strong', 12, 12),
+                    ('earnings_surprise_mild', 6, 6),
+                    ('insider_buy_large', 15, 15),
+                    ('insider_buy_small', 8, 8),
+                    ('analyst_revision', 10, 10),
+                    ('options_flow_fallback', 10, 10)
+                    ON CONFLICT DO NOTHING
+                """)
+        logger.info("Session 7 tables ensured.")
+    except Exception as e:
+        logger.warning(f"ensure_session7_tables failed ({e})")
+
+
+def log_daily_universe(symbols_sources: dict[str, list[str]]) -> None:
+    """
+    Log which symbols entered the universe today and via which sources.
+    symbols_sources: {symbol: [source1, source2, ...]}
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        today = datetime.now(timezone.utc).date()
+        with conn.cursor() as cur:
+            for symbol, sources in symbols_sources.items():
+                cur.execute("""
+                    INSERT INTO daily_universe_log (log_date, symbol, sources)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (log_date, symbol) DO UPDATE
+                        SET sources = ARRAY(
+                            SELECT DISTINCT unnest(daily_universe_log.sources || EXCLUDED.sources)
+                        )
+                """, (today, symbol, sources))
+    except Exception as e:
+        logger.debug(f"log_daily_universe failed (non-fatal): {e}")
+
+
+def log_near_miss(symbol: str, score: int, breakdown: dict,
+                  suggested_action: str, price: float) -> int:
+    """Log a near-miss candidate (score 35–44). Returns row id for price followup."""
+    row_id = 0
+    try:
+        conn = _get_conn()
+        if not conn:
+            return 0
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO near_miss_log (symbol, score, breakdown, suggested_action, price_at_skip)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (symbol, score, json.dumps(breakdown), suggested_action, price))
+            row_id = cur.fetchone()[0]
+    except Exception as e:
+        logger.debug(f"log_near_miss failed (non-fatal): {e}")
+    return row_id
+
+
+def update_near_miss_prices(row_id: int, field: str, price: float) -> None:
+    """Update a price field on a near_miss_log row. field: price_1h|price_eod|price_next_day"""
+    if not row_id:
+        return
+    allowed = {"price_1h", "price_eod", "price_next_day"}
+    if field not in allowed:
+        return
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE near_miss_log SET {field} = %s WHERE id = %s", (price, row_id))
+            cur.execute("""
+                UPDATE near_miss_log SET
+                    hypothetical_pnl_pct = CASE
+                        WHEN price_at_skip > 0 AND price_eod IS NOT NULL
+                        THEN (price_eod - price_at_skip) / price_at_skip * 100
+                        ELSE NULL END
+                WHERE id = %s
+            """, (row_id,))
+    except Exception as e:
+        logger.debug(f"update_near_miss_prices failed (non-fatal): {e}")
+
+
+def get_near_misses_report() -> dict:
+    """Near-miss tracker: what happened to stocks that scored 35-44."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            # Summary stats
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE hypothetical_pnl_pct > 0) AS would_have_won,
+                    ROUND(AVG(hypothetical_pnl_pct)::numeric, 2) AS avg_pnl,
+                    ROUND(AVG(score)::numeric, 1) AS avg_score
+                FROM near_miss_log
+                WHERE timestamp > NOW() - INTERVAL '30 days'
+                  AND hypothetical_pnl_pct IS NOT NULL
+            """)
+            row = cur.fetchone()
+            total, won, avg_pnl, avg_score = row if row else (0, 0, None, None)
+
+            accuracy = round(won / total * 100, 1) if total else 0.0
+
+            # Which signals were most often the deciding factor (lowest score contributor)
+            # We look at which signal had the most negative contribution in near-misses
+            cur.execute("""
+                SELECT breakdown
+                FROM near_miss_log
+                WHERE timestamp > NOW() - INTERVAL '30 days'
+                  AND hypothetical_pnl_pct IS NOT NULL
+            """)
+            breakdowns = [r[0] for r in cur.fetchall() if r[0]]
+
+            signal_stats: dict = {}
+            for bd in breakdowns:
+                if not isinstance(bd, dict):
+                    continue
+                for sig, val in bd.items():
+                    if sig not in signal_stats:
+                        signal_stats[sig] = {"count": 0, "total_pnl": 0.0}
+                    signal_stats[sig]["count"] += 1
+
+            top_signals = sorted(
+                [{"signal": k, "times_was_deciding_factor": v["count"]} for k, v in signal_stats.items()],
+                key=lambda x: x["times_was_deciding_factor"], reverse=True
+            )[:5]
+
+            # Threshold verdict
+            verdict = "Not enough data yet (need 20+ near-misses with price followup)"
+            if total >= 20:
+                if accuracy > 60:
+                    verdict = f"Threshold (45) may be too high — {accuracy:.0f}% of near-misses were profitable. Consider lowering to 40."
+                elif accuracy < 40:
+                    verdict = f"Threshold (45) looks correct — only {accuracy:.0f}% of near-misses would have been profitable."
+                else:
+                    verdict = f"Threshold (45) looks optimal — {accuracy:.0f}% accuracy on near-misses."
+
+            # Recent near-misses
+            cur.execute("""
+                SELECT symbol, score, suggested_action, price_at_skip, price_eod, hypothetical_pnl_pct, timestamp
+                FROM near_miss_log
+                WHERE timestamp > NOW() - INTERVAL '7 days'
+                ORDER BY timestamp DESC
+                LIMIT 20
+            """)
+            recent = []
+            for r in cur.fetchall():
+                sym, sc, action, p_skip, p_eod, pnl, ts = r
+                recent.append({
+                    "symbol": sym, "score": sc, "suggested_action": action,
+                    "price_at_skip": float(p_skip) if p_skip else None,
+                    "price_eod": float(p_eod) if p_eod else None,
+                    "hypothetical_pnl_pct": float(pnl) if pnl else None,
+                    "was_right_to_skip": (pnl is not None and pnl < 0),
+                    "timestamp": ts.isoformat() if ts else None,
+                })
+
+            return {
+                "summary": {
+                    "total_near_misses": total or 0,
+                    "would_have_been_profitable": won or 0,
+                    "accuracy_if_traded": f"{accuracy:.1f}%",
+                    "avg_hypothetical_pnl": f"{avg_pnl:+.2f}%" if avg_pnl is not None else "N/A",
+                    "avg_score": float(avg_score) if avg_score else None,
+                    "threshold_verdict": verdict,
+                },
+                "top_missed_signals": top_signals,
+                "recent": recent,
+            }
+    except Exception as e:
+        logger.warning(f"get_near_misses_report failed ({e})")
+        return {}
+
+
+def log_signal_performance(trade_date, symbol: str, breakdown: dict,
+                           trade_profitable: bool, trade_pnl_pct: float) -> None:
+    """Log each signal's contribution to a closed trade for win-rate tracking."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            for signal_name, boost in (breakdown or {}).items():
+                if boost == 0:
+                    continue
+                cur.execute("""
+                    INSERT INTO signal_performance_log
+                        (trade_date, symbol, signal_name, signal_boost, trade_profitable, trade_pnl_pct)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (trade_date, symbol, signal_name, int(boost), trade_profitable, trade_pnl_pct))
+    except Exception as e:
+        logger.debug(f"log_signal_performance failed (non-fatal): {e}")
+
+
+def get_signal_weights() -> dict[str, int]:
+    """Read current signal weights from DB. Returns {signal_name: weight}."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("SELECT signal_name, current_weight FROM signal_weights")
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        logger.debug(f"get_signal_weights failed (non-fatal): {e}")
+        return {}
+
+
+def update_signal_weight(signal_name: str, new_weight: int, reason: str) -> None:
+    """Update a signal's weight in the DB."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE signal_weights
+                SET current_weight = %s, last_adjusted = CURRENT_DATE, adjustment_reason = %s
+                WHERE signal_name = %s
+            """, (new_weight, reason, signal_name))
+    except Exception as e:
+        logger.debug(f"update_signal_weight failed (non-fatal): {e}")
+
+
+def get_signal_win_rates(days: int = 30) -> list[dict]:
+    """Win rate per signal over last N days, for weekly weight adjustment."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    signal_name,
+                    COUNT(*) AS sample_count,
+                    COUNT(*) FILTER (WHERE trade_profitable) AS wins,
+                    ROUND(AVG(CASE WHEN trade_profitable THEN 1.0 ELSE 0 END)::numeric, 3) AS win_rate,
+                    ROUND(AVG(trade_pnl_pct)::numeric, 2) AS avg_pnl_pct
+                FROM signal_performance_log
+                WHERE trade_date >= CURRENT_DATE - %s
+                GROUP BY signal_name
+                ORDER BY sample_count DESC
+            """, (days,))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.warning(f"get_signal_win_rates failed ({e})")
+        return []
+
+
+def save_sprint_review(review: dict) -> None:
+    """Upsert daily sprint review snapshot."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO sprint_review_daily
+                    (review_date, top_gainers, top_losers, opportunity_capture_rate,
+                     hypothetical_long_pnl, hypothetical_short_pnl, actual_kova_pnl,
+                     missed_entirely_count, missed_by_source, signal_win_rates, flagged_signals)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (review_date) DO UPDATE SET
+                    top_gainers = EXCLUDED.top_gainers,
+                    top_losers = EXCLUDED.top_losers,
+                    opportunity_capture_rate = EXCLUDED.opportunity_capture_rate,
+                    hypothetical_long_pnl = EXCLUDED.hypothetical_long_pnl,
+                    hypothetical_short_pnl = EXCLUDED.hypothetical_short_pnl,
+                    actual_kova_pnl = EXCLUDED.actual_kova_pnl,
+                    missed_entirely_count = EXCLUDED.missed_entirely_count,
+                    missed_by_source = EXCLUDED.missed_by_source,
+                    signal_win_rates = EXCLUDED.signal_win_rates,
+                    flagged_signals = EXCLUDED.flagged_signals
+            """, (
+                review["review_date"],
+                json.dumps(review.get("top_gainers", [])),
+                json.dumps(review.get("top_losers", [])),
+                review.get("opportunity_capture_rate"),
+                review.get("hypothetical_long_pnl"),
+                review.get("hypothetical_short_pnl"),
+                review.get("actual_kova_pnl"),
+                review.get("missed_entirely_count"),
+                json.dumps(review.get("missed_by_source", {})),
+                json.dumps(review.get("signal_win_rates", {})),
+                review.get("flagged_signals", []),
+            ))
+    except Exception as e:
+        logger.warning(f"save_sprint_review failed ({e})")
+
+
+def get_latest_sprint_review() -> dict:
+    """Get the most recent daily sprint review."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT review_date, top_gainers, top_losers, opportunity_capture_rate,
+                       hypothetical_long_pnl, hypothetical_short_pnl, actual_kova_pnl,
+                       missed_entirely_count, missed_by_source, signal_win_rates, flagged_signals,
+                       created_at
+                FROM sprint_review_daily
+                ORDER BY review_date DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if not row:
+                return {}
+            cols = [d[0] for d in cur.description]
+            result = dict(zip(cols, row))
+            result["review_date"] = result["review_date"].isoformat() if result["review_date"] else None
+            result["created_at"] = result["created_at"].isoformat() if result["created_at"] else None
+            return result
+    except Exception as e:
+        logger.warning(f"get_latest_sprint_review failed ({e})")
+        return {}
+
+
+def get_sprint_review_history(days: int = 7) -> list[dict]:
+    """Get recent daily sprint reviews for weekly summary."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT review_date, opportunity_capture_rate, actual_kova_pnl,
+                       hypothetical_long_pnl, missed_entirely_count, flagged_signals,
+                       signal_win_rates
+                FROM sprint_review_daily
+                WHERE review_date >= CURRENT_DATE - %s
+                ORDER BY review_date DESC
+            """, (days,))
+            cols = [d[0] for d in cur.description]
+            rows = []
+            for row in cur.fetchall():
+                d = dict(zip(cols, row))
+                d["review_date"] = d["review_date"].isoformat() if d["review_date"] else None
+                rows.append(d)
+            return rows
+    except Exception as e:
+        logger.warning(f"get_sprint_review_history failed ({e})")
+        return []

@@ -144,3 +144,112 @@ struct PerformanceStats: Codable {
         case alpha
     }
 }
+
+// MARK: - Near-Miss Tracker (Session 7)
+
+struct NearMissSignal: Codable, Identifiable {
+    var id: String { signal }
+    let signal: String
+    let timesWasDecidingFactor: Int
+
+    enum CodingKeys: String, CodingKey {
+        case signal
+        case timesWasDecidingFactor = "times_was_deciding_factor"
+    }
+}
+
+struct NearMissEntry: Codable, Identifiable {
+    var id: String { "\(symbol)-\(timestamp ?? "")" }
+    let symbol: String
+    let score: Int
+    let suggestedAction: String?
+    let priceAtSkip: Double?
+    let priceEod: Double?
+    let hypotheticalPnlPct: Double?
+    let wasRightToSkip: Bool?
+    let timestamp: String?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol, score, timestamp
+        case suggestedAction = "suggested_action"
+        case priceAtSkip = "price_at_skip"
+        case priceEod = "price_eod"
+        case hypotheticalPnlPct = "hypothetical_pnl_pct"
+        case wasRightToSkip = "was_right_to_skip"
+    }
+}
+
+struct NearMissSummaryData: Codable {
+    let totalNearMisses: Int
+    let wouldHaveBeenProfitable: Int
+    let accuracyIfTraded: String
+    let avgHypotheticalPnl: String
+    let avgScore: Double?
+    let thresholdVerdict: String
+
+    enum CodingKeys: String, CodingKey {
+        case totalNearMisses = "total_near_misses"
+        case wouldHaveBeenProfitable = "would_have_been_profitable"
+        case accuracyIfTraded = "accuracy_if_traded"
+        case avgHypotheticalPnl = "avg_hypothetical_pnl"
+        case avgScore = "avg_score"
+        case thresholdVerdict = "threshold_verdict"
+    }
+}
+
+struct NearMissReport: Codable {
+    let summary: NearMissSummaryData
+    let topMissedSignals: [NearMissSignal]
+    let recent: [NearMissEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case summary
+        case topMissedSignals = "top_missed_signals"
+        case recent
+    }
+}
+
+// MARK: - Sprint Review (Session 7)
+
+struct SprintMover: Codable, Identifiable {
+    var id: String { symbol }
+    let symbol: String
+    let pctChange: Double
+    let kovaStatus: String   // CAPTURED | IN_UNIVERSE_SKIPPED | IN_UNIVERSE_WRONG | MISSED_ENTIRELY
+    let kovaPnl: Double?
+    let sources: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case pctChange = "pct_change"
+        case kovaStatus = "kova_status"
+        case kovaPnl = "kova_pnl"
+        case sources
+    }
+}
+
+struct DailySprintReview: Codable {
+    let reviewDate: String?
+    let topGainers: [SprintMover]
+    let topLosers: [SprintMover]
+    let opportunityCaptureRate: Double?
+    let hypotheticalLongPnl: Double?
+    let hypotheticalShortPnl: Double?
+    let actualKovaPnl: Double?
+    let missedEntirelyCount: Int?
+    let signalWinRates: [String: Double]?
+    let flaggedSignals: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case reviewDate = "review_date"
+        case topGainers = "top_gainers"
+        case topLosers = "top_losers"
+        case opportunityCaptureRate = "opportunity_capture_rate"
+        case hypotheticalLongPnl = "hypothetical_long_pnl"
+        case hypotheticalShortPnl = "hypothetical_short_pnl"
+        case actualKovaPnl = "actual_kova_pnl"
+        case missedEntirelyCount = "missed_entirely_count"
+        case signalWinRates = "signal_win_rates"
+        case flaggedSignals = "flagged_signals"
+    }
+}

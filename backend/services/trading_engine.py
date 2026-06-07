@@ -11,6 +11,7 @@ from services.db import (
     log_position_open, log_position_close,
     log_circuit_breaker, log_bot_activity,
     get_trade_performance_summary,
+    update_near_miss_prices, log_signal_performance,
 )
 from services.indicators import compute_atr, compute_rsi, volatility_adjusted_quantity
 from services.entry_timing import should_confirm_entry, get_scale_in_quantity, should_scale_out, should_cover_short, get_cooldown_symbols
@@ -133,6 +134,8 @@ _pending_fill_orders: dict = {}  # order_id → {symbol, side, stop_loss_pct, ta
 _atr_stops: dict = {}            # symbol → atr_stop_price (entry_price - 1.5×ATR; 2×ATR for leveraged ETFs)
 # Blocked trade price followup: row_id → {symbol, blocked_at, fields_needed}
 _pending_block_price_checks: dict = {}  # row_id → {symbol, blocked_at, pending: set}
+# Near-miss price followup: row_id → {symbol, skipped_at, pending: set}
+_pending_near_miss_price_checks: dict = {}  # row_id → {symbol, skipped_at, pending: set}
 # Regime state: updated each cycle, read by get_status() for iOS dashboard
 _last_regime: Optional[str] = None        # bull | bear | chop
 _last_vix_level: Optional[str] = None     # low | normal | high | extreme
@@ -351,6 +354,32 @@ async def run_trading_cycle():
                         del _pending_block_price_checks[_bid]
                 except Exception as _bpe:
                     logger.debug(f"Block price followup failed for {_sym}: {_bpe}")
+
+        # ── Near-miss price followup: update where-did-it-go prices for score 35–44 ──
+        if _pending_near_miss_price_checks:
+            from zoneinfo import ZoneInfo as _ZI_nm
+            _now_et_nm = datetime.now(_ZI_nm("America/New_York"))
+            _now_utc_nm = datetime.now(timezone.utc)
+            for _nmid in list(_pending_near_miss_price_checks.keys()):
+                _nm = _pending_near_miss_price_checks[_nmid]
+                _elapsed_nm = (_now_utc_nm - _nm["skipped_at"]).total_seconds() / 60
+                _sym_nm = _nm["symbol"]
+                try:
+                    _snap_nm = alpaca_service.get_market_snapshot([_sym_nm])
+                    _price_nm = (_snap_nm.get(_sym_nm) or {}).get("current_price") or 0
+                    if _price_nm <= 0:
+                        continue
+                    _pnd_nm = _nm["pending"]
+                    if "price_1h" in _pnd_nm and _elapsed_nm >= 60:
+                        update_near_miss_prices(_nmid, "price_1h", _price_nm)
+                        _pnd_nm.discard("price_1h")
+                    if "price_eod" in _pnd_nm and _now_et_nm.hour >= 16:
+                        update_near_miss_prices(_nmid, "price_eod", _price_nm)
+                        _pnd_nm.discard("price_eod")
+                    if not _pnd_nm:
+                        del _pending_near_miss_price_checks[_nmid]
+                except Exception as _nme:
+                    logger.debug(f"Near-miss price followup failed for {_sym_nm}: {_nme}")
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
@@ -668,6 +697,21 @@ async def run_trading_cycle():
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
                 )
+                # Log signal performance for weekly weight adjustment
+                try:
+                    _entry_p_sig = prev.get("avg_entry_price") or exit_price
+                    _pl_pct_sig = ((exit_price - _entry_p_sig) / _entry_p_sig * 100) if _entry_p_sig else 0.0
+                    _breakdown_sig = prev.get("score_breakdown") or {}
+                    if _breakdown_sig:
+                        log_signal_performance(
+                            trade_date=datetime.now(timezone.utc).date(),
+                            symbol=sym,
+                            breakdown=_breakdown_sig,
+                            trade_profitable=_pl_pct_sig > 0,
+                            trade_pnl_pct=_pl_pct_sig,
+                        )
+                except Exception as _sig_perf_err:
+                    logger.debug(f"log_signal_performance failed (non-fatal): {_sig_perf_err}")
                 try:
                     from services.brain.learning import on_trade_closed
                     entry_p = prev.get("avg_entry_price") or exit_price
@@ -1422,6 +1466,28 @@ async def run_trading_cycle():
                     min_score=35,
                 )
             )
+
+            # Register near-miss candidates for price followup (score 35–44)
+            try:
+                from services.db import log_near_miss as _log_nm_inline
+                _now_utc_nm_reg = datetime.now(timezone.utc)
+                for _nm_c in (_scored or []):
+                    if 35 <= _nm_c.score < 45 and _nm_c.suggested_action != "skip":
+                        _nm_id = _log_nm_inline(
+                            symbol=_nm_c.symbol,
+                            score=_nm_c.score,
+                            breakdown=_nm_c.score_breakdown,
+                            suggested_action=_nm_c.suggested_action,
+                            price=_nm_c.price,
+                        )
+                        if _nm_id:
+                            _pending_near_miss_price_checks[_nm_id] = {
+                                "symbol": _nm_c.symbol,
+                                "skipped_at": _now_utc_nm_reg,
+                                "pending": {"price_1h", "price_eod"},
+                            }
+            except Exception as _nm_reg_err:
+                logger.debug(f"Near-miss registration failed (non-fatal): {_nm_reg_err}")
 
             # Build rotation context for brain
             _rotation_lines = []
@@ -2366,12 +2432,14 @@ async def run_trading_cycle():
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
                     _save_watermarks()
+                    _prev_scored_short = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     _previous_positions[decision.symbol] = {
                         "qty": decision.quantity,
                         "avg_entry_price": fill_price,
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "short",
+                        "score_breakdown": getattr(_prev_scored_short, "score_breakdown", {}) if _prev_scored_short else {},
                     }
                 elif decision.action == "buy" and fill_price > 0:
                     log_position_open(
@@ -2389,12 +2457,14 @@ async def run_trading_cycle():
                     _position_high_watermarks[decision.symbol] = fill_price
                     _save_watermarks()
                     # Tag in previous_positions so close detection knows entry price
+                    _prev_scored = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     _previous_positions[decision.symbol] = {
                         "qty": decision.quantity,
                         "avg_entry_price": fill_price,
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "long",
+                        "score_breakdown": getattr(_prev_scored, "score_breakdown", {}) if _prev_scored else {},
                     }
                 elif decision.action == "sell" and fill_price:
                     prev = _previous_positions.get(decision.symbol, {})
@@ -2537,6 +2607,13 @@ async def _trading_loop():
     _cleanup_counter = 0
     _premarket_scanned_date = None  # track which date we last ran the pre-market scan
 
+    # Ensure Session 7 DB tables exist (idempotent, safe to call every startup)
+    try:
+        from services.db import ensure_session7_tables as _ensure_s7
+        _ensure_s7()
+    except Exception as _s7_err:
+        logger.warning(f"ensure_session7_tables (non-fatal): {_s7_err}")
+
     # Start real-time news stream (non-fatal if it fails)
     try:
         from services.news_stream import start as _start_news_stream
@@ -2650,6 +2727,40 @@ async def _trading_loop():
             except Exception as _eod_err:
                 logger.warning(f"Could not trigger EOD analysis: {_eod_err}")
         _market_was_open = market_open_now
+
+        # ── Sprint review: check-then-run at 4:30 PM ET ──────────────────────
+        # Never missed even on restart — cycle detects past-4:30 and runs if not done today.
+        try:
+            from zoneinfo import ZoneInfo as _ZI_sr
+            _now_et_sr = datetime.now(_ZI_sr("America/New_York"))
+            if _now_et_sr.hour > 16 or (_now_et_sr.hour == 16 and _now_et_sr.minute >= 30):
+                _sr_date_key = "sprint_review_last_run_date"
+                _sr_today = _now_et_sr.date().isoformat()
+                if cache_get(_sr_date_key) != _sr_today:
+                    cache_set(_sr_date_key, _sr_today, 86400)
+                    from services.brain.sprint_review import run_daily_sprint_review as _run_sr
+                    _sr_future = asyncio.get_running_loop().run_in_executor(None, _run_sr)
+                    _sr_future.add_done_callback(
+                        lambda f: logger.warning(f"Sprint review failed: {f.exception()}") if f.exception() else None
+                    )
+                    logger.info("Daily sprint review triggered at 4:30 PM ET.")
+        except Exception as _sr_err:
+            logger.debug(f"Sprint review trigger (non-fatal): {_sr_err}")
+
+        # ── Weekly signal weight adjustment: every Sunday ─────────────────────
+        try:
+            from zoneinfo import ZoneInfo as _ZI_wa
+            _now_et_wa = datetime.now(_ZI_wa("America/New_York"))
+            if _now_et_wa.weekday() == 6:  # Sunday
+                _wa_date_key = "weekly_weight_adjust_last_run"
+                _wa_today = _now_et_wa.date().isoformat()
+                if cache_get(_wa_date_key) != _wa_today:
+                    cache_set(_wa_date_key, _wa_today, 86400)
+                    from services.brain.sprint_review import run_weekly_weight_adjustment as _run_wa
+                    asyncio.get_running_loop().run_in_executor(None, _run_wa)
+                    logger.info("Weekly signal weight adjustment triggered (Sunday).")
+        except Exception as _wa_err:
+            logger.debug(f"Weekly weight adjustment trigger (non-fatal): {_wa_err}")
 
         # Run DB cleanup once every ~144 cycles (~24 hours at 10-min intervals)
         _cleanup_counter += 1
