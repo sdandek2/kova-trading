@@ -684,19 +684,67 @@ def _run_ablation_config(args) -> tuple[str, dict]:
     return label, combined
 
 
+# ── Fast ablation universe (diversified 23-symbol subset) ─────────────────────
+
+FAST_UNIVERSE = [
+    # Benchmarks
+    "SPY", "QQQ", "IWM",
+    # Tech / AI
+    "NVDA", "MSFT", "GOOGL", "PLTR",
+    # Chips / Memory (stress test)
+    "AMD", "MU", "INTC",
+    # Financials
+    "JPM", "GS",
+    # Healthcare / Biotech
+    "LLY", "UNH", "MRNA",
+    # Consumer
+    "COST",
+    # Sector ETFs
+    "XLK", "XLE", "XLV", "XBI",
+    # Leveraged
+    "TQQQ", "SOXL",
+]
+
+
+# ── Year worker for parallel year runs ───────────────────────────────────────
+
+def _run_year_parallel(args) -> tuple[int, dict]:
+    """Worker for parallel year runs — each year starts fresh at $100k."""
+    year, all_data, brain, rules = args
+    return year, run_year(year, all_data, brain, rules, start_equity=100_000.0)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    import logging
+    import argparse, logging, json, os, hashlib, multiprocessing
     logging.basicConfig(level=logging.WARNING)
+
+    parser = argparse.ArgumentParser(description="Kova Phase 2 Backtest")
+    parser.add_argument("--parallel", action="store_true",
+                        help="Run years in parallel (each starts fresh at $100k — faster)")
+    parser.add_argument("--fast", action="store_true",
+                        help="Use smaller 23-symbol ablation universe for quicker ablation runs")
+    parser.add_argument("--sequential", action="store_true",
+                        help="Run years sequentially with compounding equity (default)")
+    args = parser.parse_args()
+
+    use_parallel = args.parallel and not args.sequential
+    use_fast     = args.fast
 
     years = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
-    # Fetch data once — need warmup before 2020 so start from 2019-01-01
-    import json, os
-    cache_file = os.path.join(os.path.dirname(__file__), "backtest_cache.json")
+    mode_str = []
+    if use_parallel: mode_str.append("parallel years (fresh $100k each)")
+    else:            mode_str.append("sequential years (compounding)")
+    if use_fast:     mode_str.append(f"fast ablation ({len(FAST_UNIVERSE)} symbols)")
+    else:            mode_str.append(f"full ablation ({len(UNIVERSE)} symbols)")
+    print(f"\nMode: {' | '.join(mode_str)}")
+    print("Usage: python3 backtest_phase2.py [--parallel] [--fast] [--sequential]\n")
 
-    import hashlib
+    # Fetch data once — need warmup before 2020 so start from 2019-01-01
+    # ── Load / fetch data ─────────────────────────────────────────────────────
+    cache_file = os.path.join(os.path.dirname(__file__), "backtest_cache.json")
     universe_hash = hashlib.md5(",".join(sorted(UNIVERSE)).encode()).hexdigest()[:8]
 
     cache_valid = False
@@ -706,10 +754,10 @@ def main():
         if raw_cache.get("__universe_hash__") == universe_hash:
             cache_valid = True
         else:
-            print(f"\nUniverse changed — ignoring stale cache, re-fetching …")
+            print(f"Universe changed — ignoring stale cache, re-fetching …")
 
     if cache_valid:
-        print(f"\nLoading cached OHLCV data ({cache_file}) …")
+        print(f"Loading cached OHLCV data ({cache_file}) …")
         all_data = {}
         for sym, d in raw_cache.items():
             if sym.startswith("__"):
@@ -718,7 +766,7 @@ def main():
             all_data[sym]["dates"] = [date.fromisoformat(x) for x in d["dates"]]
         print(f"  {len(all_data)} symbols loaded  |  simulation logic runs fresh every time")
     else:
-        print("\nFetching data …")
+        print("Fetching data …")
         all_data = fetch_data(UNIVERSE, start="2019-01-01", end="2026-06-01")
         if all_data:
             cache_out = {"__universe_hash__": universe_hash}
@@ -728,34 +776,51 @@ def main():
             with open(cache_file, "w") as f:
                 json.dump(cache_out, f)
             print(f"  Cached raw OHLCV to {cache_file} (delete to force re-fetch)")
+
     if not all_data:
         print("ERROR: no data fetched — Yahoo Finance may be rate limiting, wait a few minutes and retry")
         sys.exit(1)
     print(f"  Got data for {len(all_data)} symbols")
 
     brain = _import_brain()
+    n_cores = multiprocessing.cpu_count()
 
     # ── Year-by-year (full strategy) ──────────────────────────────────────────
-    print("\nRunning year-by-year backtest …")
-    year_results = []
-    for year in years:
-        print(f"  {year} …", end="", flush=True)
-        m = run_year(year, all_data, brain, FULL_RULES)
-        year_results.append((year, m))
-        print(f" {m['trades']} trades, Sharpe {m['sharpe']:.2f}")
+    if use_parallel:
+        print(f"Running year-by-year backtest (parallel, {min(len(years), n_cores)} cores, fresh $100k/year) …")
+        year_args = [(year, all_data, brain, FULL_RULES) for year in years]
+        with multiprocessing.Pool(processes=min(len(years), n_cores)) as pool:
+            raw_year = pool.map(_run_year_parallel, year_args)
+        year_results = sorted(raw_year, key=lambda x: x[0])
+        for year, m in year_results:
+            print(f"  {year} … {m['trades']} trades, Sharpe {m['sharpe']:.2f}")
+    else:
+        print("Running year-by-year backtest (sequential, compounding equity) …")
+        year_results = []
+        equity = 100_000.0
+        for year in years:
+            print(f"  {year} …", end="", flush=True)
+            m = run_year(year, all_data, brain, FULL_RULES, start_equity=equity)
+            year_results.append((year, m))
+            equity *= (1 + m["total_return"] / 100)
+            print(f" {m['trades']} trades, Sharpe {m['sharpe']:.2f}")
 
     print_year_table(year_results)
 
-    # ── Ablation + negative tests (parallelised) ──────────────────────────────
-    import multiprocessing
-    n_cores = min(len(ABLATION_CONFIGS), multiprocessing.cpu_count())
-    print(f"\nRunning {len(ABLATION_CONFIGS)} ablation/negative configs in parallel ({n_cores} cores) …")
+    # ── Ablation + negative tests ─────────────────────────────────────────────
+    if use_fast:
+        ablation_data = {s: d for s, d in all_data.items() if s in FAST_UNIVERSE}
+        print(f"Running ablation tests (fast universe: {len(ablation_data)} symbols) …")
+    else:
+        ablation_data = all_data
+        print(f"Running ablation tests (full universe: {len(ablation_data)} symbols) …")
 
-    worker_args = [(label, rules, all_data, brain, years) for label, rules in ABLATION_CONFIGS]
+    n_ablation_cores = min(len(ABLATION_CONFIGS), n_cores)
+    print(f"  {len(ABLATION_CONFIGS)} configs in parallel across {n_ablation_cores} cores …")
 
-    # Preserve original order after parallel execution
+    worker_args = [(label, rules, ablation_data, brain, years) for label, rules in ABLATION_CONFIGS]
     order = {label: i for i, (label, _) in enumerate(ABLATION_CONFIGS)}
-    with multiprocessing.Pool(processes=n_cores) as pool:
+    with multiprocessing.Pool(processes=n_ablation_cores) as pool:
         raw_results = pool.map(_run_ablation_config, worker_args)
 
     ablation_results = sorted(raw_results, key=lambda x: order[x[0]])
