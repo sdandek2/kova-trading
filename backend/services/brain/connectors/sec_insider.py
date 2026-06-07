@@ -262,3 +262,42 @@ def scan_for_insider_buys(symbols: list[str]) -> dict[str, dict]:
         results[sym] = get_insider_signal(sym)
         time.sleep(0.2)  # EDGAR rate limit: ~5 requests/second max
     return results
+
+
+def run_daily_insider_scan(symbols: list[str]) -> None:
+    """
+    Proactive daily scan — call this at startup in a background thread.
+
+    Bug fix: previously _inject_until was ONLY populated inside get_insider_signal(),
+    which only ran when a symbol was already in the tradeable universe. This meant
+    the injection mechanism never fired — a stock with insider buying but not already
+    in the universe never got scanned, so _inject_until stayed empty.
+
+    Fix: this function proactively scans a broad list of symbols at startup and
+    populates _inject_until directly. get_universe_additions() then returns them
+    on every subsequent cycle, injecting them into the universe correctly.
+
+    Rate: ~50 symbols scanned per ~10 seconds. Run in executor thread, not main loop.
+    Recommended symbol list: S&P 500 + active watchlist (~500–600 symbols).
+    EDGAR rate limit: respect 0.2s between calls.
+    """
+    import threading
+    logger.info("SEC insider: starting proactive daily scan of %d symbols", len(symbols))
+    _ensure_cik_map()
+
+    scanned = 0
+    injected = 0
+    for sym in symbols:
+        try:
+            result = get_insider_signal(sym)
+            if result.get("conviction_boost", 0) > 0:
+                injected += 1
+            scanned += 1
+            time.sleep(0.2)
+        except Exception as e:
+            logger.debug("SEC insider scan %s: %s", sym, e)
+
+    logger.info(
+        "SEC insider daily scan complete: %d scanned, %d injection candidates: %s",
+        scanned, injected, list(_inject_until.keys())
+    )

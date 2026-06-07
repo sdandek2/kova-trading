@@ -527,7 +527,26 @@ async def run_trading_cycle():
                 _regime_capital_mult = 0.60
             else:  # bull
                 _regime_capital_mult = 1.00
-            logger.info(f"Regime capital multiplier: {_regime_capital_mult:.0%} (regime={_brain_regime.regime}, vix={_brain_regime.vix_level})")
+
+            # ── FRED macro confidence adjustment (Bug fix: Session 6) ─────────
+            # FRED adjusts regime.confidence (+/-15%) based on macro trend
+            # (unemployment, jobs, fed funds rate). Previously confidence was
+            # computed but never used for sizing — only for logging.
+            # Fix: apply confidence to capital multiplier AFTER the regime base.
+            # High macro confidence (≥80%) → +10% size (max 1.10)
+            # Low macro confidence (≤50%) → -10% size (floor at 0.30)
+            # Normal range (51–79%) → no adjustment
+            _conf = _brain_regime.confidence
+            if _conf >= 0.80:
+                _regime_capital_mult = min(1.10, _regime_capital_mult + 0.10)
+            elif _conf <= 0.50:
+                _regime_capital_mult = max(0.30, _regime_capital_mult - 0.10)
+
+            logger.info(
+                f"Regime capital multiplier: {_regime_capital_mult:.0%} "
+                f"(regime={_brain_regime.regime}, vix={_brain_regime.vix_level}, "
+                f"macro_confidence={_conf:.0%})"
+            )
             # Persist for get_status() → iOS dashboard
             _last_regime = _brain_regime.regime
             _last_vix_level = _brain_regime.vix_level
@@ -2525,6 +2544,41 @@ async def _trading_loop():
         logger.info("News stream started alongside trading loop.")
     except Exception as _nw_err:
         logger.warning("Could not start news stream (non-fatal): %s", _nw_err)
+
+    # ── SEC insider proactive daily scan (non-fatal, background thread) ───────
+    # Bug fix: _inject_until is only populated when a symbol is already in the
+    # universe (inside get_insider_signal). Stocks with insider buying that aren't
+    # already in the universe never got scanned → inject mechanism always returned [].
+    # Fix: scan a broad list at startup so qualifying symbols are pre-loaded into
+    # _inject_until before the first universe fetch runs.
+    try:
+        _insider_scan_date_key = "sec_insider_scan_last_date"
+        _insider_scan_today = datetime.now(timezone.utc).date().isoformat()
+        if cache_get(_insider_scan_date_key) != _insider_scan_today:
+            from services.brain.connectors.sec_insider import run_daily_insider_scan as _run_insider_scan
+            # Scan broad but not exhaustive — EDGAR rate-limits at ~5 req/sec.
+            # 150 symbols × 0.2s sleep = ~30 sec in background thread (non-blocking).
+            # Covers large/mid caps where insider buying is most meaningful.
+            _INSIDER_SCAN_UNIVERSE = [
+                "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AVGO","JPM","LLY",
+                "V","UNH","XOM","MA","JNJ","PG","HD","COST","ABBV","BAC","MRK","CVX",
+                "NFLX","AMD","WMT","CRM","TMO","ACN","LIN","MCD","ABT","CSCO","GE",
+                "DHR","TXN","ISRG","NOW","AMGN","NEE","IBM","MS","GS","PFE","RTX",
+                "INTU","SPGI","BLK","AMAT","SYK","ELV","REGN","BSX","T","VRTX","MDT",
+                "ADI","GILD","AXP","MMC","C","ETN","PANW","KLAC","MU","LRCX","SNPS",
+                "CDNS","INTC","CME","PLD","ZTS","MDLZ","HCA","CB","SO","WM","APH",
+                "MELI","CRWD","DXCM","WELL","AON","MCO","ICE","SHW","EOG","ORLY",
+                "CTAS","PCAR","AJG","TT","PH","NSC","MSCI","FI","ITW","ECL","ROP",
+                "CARR","IDXX","CPRT","GWW","ODFL","FTNT","FAST","SRE","VRSK","TDG",
+                "TRV","ALL","AIG","SBUX","NKE","DIS","PEP","KO","LOW","UPS","FDX",
+                "DECK","WDAY","MDB","DDOG","ZM","OKTA","SNOW","COIN","HOOD","RBLX",
+            ]
+            _loop_ref = asyncio.get_running_loop()
+            _loop_ref.run_in_executor(None, _run_insider_scan, _INSIDER_SCAN_UNIVERSE)
+            cache_set(_insider_scan_date_key, _insider_scan_today, 86400)
+            logger.info("SEC insider proactive scan started in background (%d symbols)", len(_INSIDER_SCAN_UNIVERSE))
+    except Exception as _ins_err:
+        logger.warning("SEC insider proactive scan startup (non-fatal): %s", _ins_err)
     # Restore _eod_saved_date from cache so multiple deploys on the same day
     # don't re-run the EOD report (cache_get returns None if key missing/expired)
     _eod_saved_date_str = cache_get("eod_saved_date")

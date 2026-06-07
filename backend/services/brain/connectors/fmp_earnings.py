@@ -106,9 +106,13 @@ def _refresh_cache() -> None:
         except (TypeError, ValueError):
             continue
 
-        if eps_estimate == 0 or eps_estimate < 0:
+        if eps_estimate == 0:
             continue
 
+        # Bug fix: do NOT skip negative estimates. Growth companies often guide for
+        # a small loss (e.g. estimate -$0.10) and beat it (actual -$0.03).
+        # That's a meaningful positive surprise — +70% beat on abs basis.
+        # Use abs(eps_estimate) so the percentage math works regardless of sign.
         beat_pct = ((eps_actual - eps_estimate) / abs(eps_estimate)) * 100
 
         # Only care about meaningful beats/misses
