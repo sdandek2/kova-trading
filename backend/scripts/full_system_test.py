@@ -552,17 +552,26 @@ if should_run("entry"):
 if should_run("database"):
     section("11. Database (Cache + Trade Log)")
     try:
-        from services.db import cache_get, cache_set, get_trade_performance_summary
+        from services.db import cache_get, cache_set, cache_delete, get_trade_performance_summary
 
-        # Cache round-trip — signature: cache_set(key, value, ttl_seconds)
-        test_key = "__kova_health_test__"
-        cache_set(test_key, "ok", 60)
-        val = cache_get(test_key)
-        check("Cache write + read",     val == "ok", f"wrote 'ok', got '{val}'")
+        # Cache round-trip — writes test keys then deletes them immediately after.
+        # No permanent data left in DB.
+        _TEST_KEYS = ["__kova_health_test__", "__kova_ttl_test__"]
+        try:
+            cache_set("__kova_health_test__", "ok", 60)
+            val = cache_get("__kova_health_test__")
+            check("Cache write + read",  val == "ok", f"wrote 'ok', got '{val}'")
 
-        cache_set("__kova_ttl_test__", "expire_me", 3600)
-        val2 = cache_get("__kova_ttl_test__")
-        check("Cache TTL write",        val2 == "expire_me")
+            cache_set("__kova_ttl_test__", "expire_me", 3600)
+            val2 = cache_get("__kova_ttl_test__")
+            check("Cache TTL write",     val2 == "expire_me")
+        finally:
+            # Always clean up test keys — no test data left in Postgres
+            for _k in _TEST_KEYS:
+                try:
+                    cache_delete(_k)
+                except Exception:
+                    pass
 
         # Performance summary
         summary = get_trade_performance_summary()
