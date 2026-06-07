@@ -46,11 +46,13 @@ def compute_macd(prices: list[float], fast: int = 12, slow: int = 26, signal: in
 
     macd_val = macd_line[-1]
     signal_val = signal_ema[-1]
+    prev_hist = round(macd_line[-2] - signal_ema[-2], 4) if len(macd_line) > 1 and len(signal_ema) > 1 else None
 
     return {
         "macd": round(macd_val, 4),
         "signal": round(signal_val, 4),
         "histogram": round(macd_val - signal_val, 4),
+        "prev_histogram": prev_hist,
     }
 
 

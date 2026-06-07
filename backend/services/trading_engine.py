@@ -127,6 +127,9 @@ _pyramid_counts: dict = {}             # symbol → int (how many pyramid adds t
 # can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
 _pre_scaleout_qty: dict = {}           # symbol → int (qty held before first scale-out)
 _earnings_day_positions: set = set()   # symbols entered as earnings plays — forced EOD exit
+# Pending fills: limit orders placed but not yet confirmed filled.
+# Each cycle checks these and attaches TP/trailing at the actual fill price.
+_pending_fill_orders: dict = {}  # order_id → {symbol, side, stop_loss_pct, take_profit_pct}
 
 
 def _save_watermarks() -> None:
@@ -267,6 +270,34 @@ async def run_trading_cycle():
             logger.info("Market is closed. Skipping cycle.")
             return
         _extended_hours = _market_status in ("premarket", "afterhours")
+
+        # ── Fill-followup: check pending limit orders, update watermarks at actual fill price ──
+        if _pending_fill_orders:
+            for _oid in list(_pending_fill_orders.keys()):
+                _pf = _pending_fill_orders[_oid]
+                try:
+                    _filled_order = await loop.run_in_executor(
+                        None, lambda oid=_oid: alpaca_service.trading_client.get_order_by_id(oid)
+                    )
+                    if _filled_order.filled_avg_price is not None or str(_filled_order.status) == "filled":
+                        _actual_fill = float(_filled_order.filled_avg_price)
+                        _sym = _pf["symbol"]
+                        if _pf["side"] == "buy":
+                            _position_high_watermarks[_sym] = _actual_fill
+                            if _sym in _previous_positions:
+                                _previous_positions[_sym]["avg_entry_price"] = _actual_fill
+                        else:
+                            _short_low_watermarks[_sym] = _actual_fill
+                            if _sym in _previous_positions:
+                                _previous_positions[_sym]["avg_entry_price"] = _actual_fill
+                        _save_watermarks()
+                        logger.info(f"Fill-followup: {_sym} filled @ ${_actual_fill:.2f} — watermarks updated")
+                        del _pending_fill_orders[_oid]
+                    elif str(_filled_order.status) in ("canceled", "expired", "rejected"):
+                        logger.info(f"Fill-followup: order {_oid} {_filled_order.status} — removing from pending")
+                        del _pending_fill_orders[_oid]
+                except Exception as _fe:
+                    logger.debug(f"Fill-followup check failed for {_oid}: {_fe}")
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
@@ -718,10 +749,9 @@ async def run_trading_cycle():
                 _rsi_p = (compute_rsi(cp) or 50.0)
                 p_price = sym_data_p.get("current_price") or position.current_price
 
-                # Tier 1: confirmed winner — wait for 10% before adding to avoid buying false breakouts
-                tier1 = (10.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 75 and pyrs_taken == 0
+                # Tier 1: momentum confirmed at +5% — earlier add captures the best part of the move
+                tier1 = (5.0 <= pnl <= 21.0) and _mh > 0.05 and _rsi_p < 75 and pyrs_taken == 0
                 # Tier 2: extended winner — add smaller on continued strength
-                # Bug fix: was 22.0 leaving an 18-22% dead zone. Now 19.0 closes the gap.
                 tier2 = (19.0 <= pnl <= 40.0) and _mh > 0.03 and _rsi_p < 65 and pyrs_taken == 1
 
                 if tier1:
@@ -842,7 +872,7 @@ async def run_trading_cycle():
                 if entry_time:
                     hours_held = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
                     pnl = position.unrealized_pl_percent
-                    if hours_held >= 48 and -1.0 <= pnl <= 3.0:
+                    if hours_held >= 48 and -0.5 <= pnl <= 0.5:
                         stale_reason = (
                             f"{position.symbol} held {hours_held:.0f}h flat at {pnl:+.1f}% "
                             f"— redeploying capital to better opportunities"
@@ -959,10 +989,11 @@ async def run_trading_cycle():
                     pass
                 macd_hist = macd_data.get("histogram", 0.0)
                 pnl = position.unrealized_pl_percent
-                # Threshold -0.3: requires a clear, sustained negative histogram —
-                # not just intraday noise. A brief dip to -0.05 or -0.1 is normal
-                # consolidation; -0.3+ is genuine momentum reversal.
-                if macd_hist < -0.3 and 1.0 <= pnl <= 15.0:
+                _decay_vol = snapshot_light.get(position.symbol, {}).get("relative_volume", 1.0)
+                # Skip decay exit if volume is strong (≥1.5×) — high volume on negative MACD
+                # often means distribution day, not trend death. Let trailing stop handle it.
+                # Threshold -0.3: requires sustained negative histogram, not intraday noise.
+                if macd_hist < -0.3 and 1.0 <= pnl <= 15.0 and _decay_vol < 1.5:
                     decay_reason = (
                         f"{position.symbol} momentum decaying: MACD hist {macd_hist:.3f} "
                         f"while up {pnl:.1f}% — exiting before reversal"
@@ -1194,7 +1225,7 @@ async def run_trading_cycle():
                     _tradeable_cash -= reentry_cost
                     # Bug fix: reset to 1 not 0 — requires 35% gain before next scale-out.
                     # Resetting to 0 creates an infinite scale-out/re-entry loop every cycle.
-                    _scale_out_counts[sym] = 1
+                    _scale_out_counts[sym] = 0
                     _pre_scaleout_qty.pop(sym, None)
                     await manager.broadcast({"type": "order_filled", "data": re_order.model_dump(mode="json")})
 
@@ -1457,12 +1488,16 @@ async def run_trading_cycle():
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 continue
 
-            # ── Circuit breaker: block new buys AND shorts when daily loss limit hit ──
-            if decision.action in ("buy", "short") and circuit_breaker_active:
-                logger.info(f"Circuit breaker: skipping {decision.action.upper()} {decision.symbol} — daily loss limit active")
+            # ── Circuit breaker: block longs only — shorts are the hedge on red days ──
+            if decision.action == "buy" and circuit_breaker_active:
+                logger.info(f"Circuit breaker: skipping BUY {decision.symbol} — daily loss limit active")
                 log_bot_activity("circuit_breaker",
-                                 f"{decision.action.upper()} {decision.symbol} blocked — daily loss limit active",
+                                 f"BUY {decision.symbol} blocked — daily loss limit active",
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
+                from services.db import log_blocked_trade
+                log_blocked_trade(decision.symbol, "circuit_breaker",
+                                  getattr(decision, "signal_score", 0),
+                                  decision.price or 0, _current_cycle_id)
                 continue
 
             # ── Earnings play duplicate block ─────────────────────────────────
@@ -1654,8 +1689,7 @@ async def run_trading_cycle():
                         symbol=decision.symbol, cycle_id=_current_cycle_id,
                     )
                     continue
-                # Reserve the slot now — even if the order later fails, the slot is spent
-                _cycle_open_count += 1
+                # Slot reserved after order confirms (line ~1979) — failed orders don't waste cap
 
             # ── Entry confirmation (strategy-aware) ──
             deep = await loop.run_in_executor(
@@ -1977,7 +2011,9 @@ async def run_trading_cycle():
                     f"| trades today: {_daily_trade_count[today]}"
                 )
             if order:
-                # Track daily trade count (_cycle_open_count already incremented above)
+                # Count slot only after confirmed submission
+                if decision.action in ("buy", "short"):
+                    _cycle_open_count += 1
                 today = datetime.now(timezone.utc).date()
                 _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
                 logger.info(
@@ -2005,6 +2041,13 @@ async def run_trading_cycle():
                         f"seeding watermarks with estimated price ${fill_price:.2f} for {decision.symbol}. "
                         f"position_log entry deferred until fill confirmed."
                     )
+                    # Track for fill-followup worker — will attach TP/SL at actual fill price
+                    _pending_fill_orders[str(order.id)] = {
+                        "symbol": decision.symbol,
+                        "side": decision.action,
+                        "stop_loss_pct": decision.stop_loss_pct or _risk_settings["stop_loss_pct"],
+                        "take_profit_pct": decision.take_profit_pct or _risk_settings["take_profit_pct"],
+                    }
                     if decision.action == "buy" and fill_price > 0:
                         _position_high_watermarks[decision.symbol] = fill_price
                         _save_watermarks()

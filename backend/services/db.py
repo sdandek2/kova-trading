@@ -721,12 +721,28 @@ def log_circuit_breaker(day_pl_percent: float, portfolio_value: float,
 # ── bot_activity_log helpers ───────────────────────────────────────────────
 
 
+def log_blocked_trade(symbol: str, block_reason: str, signal_score: float,
+                      price_at_block: float = 0.0, cycle_id: str = None) -> None:
+    """
+    Log a blocked trade with signal score so opportunity cost can be ranked later.
+    block_reason: normalized key — 'circuit_breaker' | 'entry_rejected' | 'fomc' |
+                  'concentration' | 'trade_cap' | 'earnings_block' | 'premarket_no_news' |
+                  'afterhours_no_earnings' | 'window_closed'
+    """
+    try:
+        msg = f"BLOCKED [{block_reason}] {symbol} signal={signal_score:.0f} price=${price_at_block:.2f}"
+        log_bot_activity("blocked_trade", msg, symbol=symbol, cycle_id=cycle_id)
+    except Exception as e:
+        logger.warning(f"log_blocked_trade failed ({e})")
+
+
 def log_bot_activity(event_type: str, message: str,
                      symbol: str = None, cycle_id: str = None) -> None:
     """
     Log a single bot activity event. Never raises.
     event_type: 'scan', 'approved', 'rejected', 'earnings_block',
-                'circuit_breaker', 'trailing_stop', 'scale_out', 'entry_rejected'
+                'circuit_breaker', 'trailing_stop', 'scale_out', 'entry_rejected',
+                'blocked_trade'
     """
     try:
         conn = _get_conn()

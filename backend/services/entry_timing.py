@@ -345,7 +345,8 @@ def should_scale_out(
             )
 
     # ── RSI-based exits: recognize when upward momentum is exhausting ──────────
-    if rsi is not None:
+    # Aggressive mode: no RSI trim before +15% — let winners run
+    if rsi is not None and not (is_aggressive and position_unrealized_pl_percent < 15.0):
         if rsi > 80 and position_unrealized_pl_percent >= 8.0:
             return True, 0.50, (
                 f"{symbol} RSI {rsi:.1f} — significantly overbought with {position_unrealized_pl_percent:.1f}% gain — trimming 50%"
@@ -356,22 +357,22 @@ def should_scale_out(
             )
 
     # ── Profit target ──────────────────────────────────────────────────────────
-    if position_unrealized_pl_percent >= 15.0:
+    # Aggressive: first trim at +20% (not +15%) — let momentum run further
+    _profit_trigger = 20.0 if is_aggressive else 15.0
+    if position_unrealized_pl_percent >= _profit_trigger:
         return True, 0.50, (
             f"{symbol} up {position_unrealized_pl_percent:.1f}% — taking 50% profits, letting 50% ride with trailing stop"
         )
 
     # ── Stop loss ──────────────────────────────────────────────────────────────
-    if is_aggressive:
-        if position_unrealized_pl_percent <= -4.0:
-            return True, 1.0, (
-                f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses, redeploying cash"
-            )
-    else:
-        if position_unrealized_pl_percent <= -3.0:
-            return True, 1.0, (
-                f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
-            )
+    # Leveraged ETFs: 5% stop — normal intraday swings are 3-4%, tighter stop
+    # shakes out winners on noise. Regular stocks: 3% aggressive, 3% balanced.
+    _stop_threshold = -5.0 if _is_leveraged else (-3.0 if is_aggressive else -3.0)
+    if position_unrealized_pl_percent <= _stop_threshold:
+        return True, 1.0, (
+            f"{symbol} down {position_unrealized_pl_percent:.1f}% — cutting losses"
+            + (", redeploying cash" if is_aggressive else "")
+        )
 
     return False, 0.0, ""
 
@@ -423,10 +424,14 @@ def should_cover_short(
                 f"{symbol} RSI {rsi:.1f} — momentum exhausting with {position_unrealized_pl_percent:.1f}% gain — covering 50%"
             )
 
-    # ── Profit target ──────────────────────────────────────────────────────────
+    # ── Profit target: staggered covers to let downtrends run ─────────────────
+    if position_unrealized_pl_percent >= 20.0:
+        return True, 0.25, (
+            f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering 25% (2nd trim), letting 50% ride"
+        )
     if position_unrealized_pl_percent >= 10.0:
-        return True, 0.50, (
-            f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering 50%, letting rest ride with trailing stop"
+        return True, 0.25, (
+            f"{symbol} SHORT up {position_unrealized_pl_percent:.1f}% — covering 25% (1st trim), letting 75% ride"
         )
 
     # ── Stop loss: price rising against short ─────────────────────────────────

@@ -111,7 +111,11 @@ def _score_symbol(
 
     # ── MACD momentum ────────────────────────────────────────────────────────
     if macd_hist is not None:
-        if macd_hist > 0.10:
+        _prev_hist = macd_data.get("prev_histogram")
+        _zero_cross = _prev_hist is not None and _prev_hist < 0 and macd_hist >= 0
+        if _zero_cross:
+            breakdown["macd"] = 20  # strongest reversal signal: crossed from negative to positive
+        elif macd_hist > 0.10:
             breakdown["macd"] = 10
         elif macd_hist > 0:
             breakdown["macd"] = 5

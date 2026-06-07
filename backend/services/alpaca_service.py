@@ -124,11 +124,13 @@ def submit_market_order(
             if ask_price <= 0:
                 raise ValueError(f"Invalid ask price for {symbol}: {ask_price} — using plain market order")
 
-            # ── LIMIT ORDER: midpoint + 0.2% buffer ──
-            # Avoids paying full ask spread while still getting filled in normal conditions.
-            # 0.2% buffer ensures we're competitive without overpaying on wide-spread stocks.
+            # ── LIMIT ORDER: spread-aware buffer ──
+            # Narrow spread (liquid): 0.1% buffer — tight, gets filled fast.
+            # Wide spread (thin): 0.35% buffer — more aggressive to ensure fill.
             midpoint = round((bid_price + ask_price) / 2, 2) if bid_price > 0 else ask_price
-            limit_price = round(midpoint * 1.002, 2)  # 0.2% above midpoint
+            _spread_pct = (ask_price - bid_price) / ask_price if ask_price > 0 and bid_price > 0 else 0.002
+            _buffer = 0.0035 if _spread_pct > 0.005 else 0.001  # wide spread >0.5% → 0.35%, else 0.1%
+            limit_price = round(midpoint * (1 + _buffer), 2)
             current_price = ask_price  # use ask for TP/SL calculation
 
             take_profit_price = round(current_price * (1 + take_profit_pct), 2)
@@ -257,8 +259,6 @@ def submit_market_order(
         except Exception as e:
             logger.error(f"Failed to submit sell order for {symbol}: {e}")
             return None
-
-
 def cancel_order(order_id: str) -> bool:
     """Cancel an open order by ID. Returns True on success."""
     try:

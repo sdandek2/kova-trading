@@ -383,7 +383,7 @@ def build_option_order(
             return None
         long_put, short_put, short_call, long_call = result
         credit = round((short_call.bid + short_put.bid - long_call.ask - long_put.ask) * qty * 100, 2)
-        wing_width = min(short_call.strike - long_put.strike, short_put.strike - long_put.strike)
+        wing_width = min(long_call.strike - short_call.strike, short_put.strike - long_put.strike)
         max_risk = round((wing_width * qty * 100) - max(credit, 0), 2)
         return OptionOrder(
             strategy="iron_condor",
