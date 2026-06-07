@@ -136,8 +136,8 @@ if should_run("alpaca"):
         check("Snapshot fetch",         len(snap) > 0, f"{len(snap)} symbols")
         for sym in ["AAPL","MSFT","NVDA"]:
             d = snap.get(sym, {})
-            price = d.get("price") or d.get("last_price")
-            check(f"Snapshot {sym} has price", price and price > 0, f"${price}")
+            price = d.get("current_price") or d.get("price") or d.get("last_price")
+            check(f"Snapshot {sym} has price", bool(price and price > 0), f"${price}")
 
     except Exception as e:
         check("Alpaca connection", False, str(e))
@@ -321,19 +321,27 @@ if should_run("regime"):
 if should_run("signals"):
     section("5. Signals Engine (end-to-end scoring)")
     try:
-        # Function is _score_symbol (private) — takes a snapshot dict
+        # _score_symbol(symbol, data, regime_result, rs_score, sentiment, news_headlines)
         from services.brain.signals import _score_symbol
+        from services.brain.regime import RegimeResult
         from services import alpaca_service
 
         test_stocks = ["AAPL", "MSFT", "NVDA", "AMZN", "TSLA"]
         snap = alpaca_service.get_market_snapshot_light(test_stocks)
+
+        # Build a neutral mock regime result for testing
+        _mock_regime = RegimeResult(
+            regime="bull", confidence=0.70, vix_level="normal",
+            spy_trend="above_ma20", breadth_pct=60.0, score=1
+        )
 
         print(f"\n  {'Symbol':<8} {'Score':>6}  {'Action':<20}  Breakdown")
         print(f"  {'─'*8} {'─'*6}  {'─'*20}  {'─'*35}")
 
         for sym in test_stocks:
             try:
-                result = _score_symbol(sym, snap)
+                sym_data = snap.get(sym, {})
+                result = _score_symbol(sym, sym_data, _mock_regime, None, {}, [])
                 score  = result.score
                 action = result.suggested_action
                 bd     = result.score_breakdown
@@ -351,7 +359,8 @@ if should_run("signals"):
             except Exception as e:
                 check(f"{sym} scoring", False, str(e))
 
-        nvda = _score_symbol("NVDA", snap)
+        nvda_data = snap.get("NVDA", {})
+        nvda = _score_symbol("NVDA", nvda_data, _mock_regime, None, {}, [])
         bd   = nvda.score_breakdown
         check("Breakdown has entries",  len(bd) > 0, str(list(bd.keys())[:4]))
         check("Action set for NVDA",
