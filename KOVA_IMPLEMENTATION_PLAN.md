@@ -180,6 +180,15 @@ All 6 cards built in `AnalyticsView.swift`. New models in `Performance.swift`, n
 **E. Portfolio VaR card** ✅ Built in Session 5
 **F. Time-of-Day win rate chart** ✅ Built in Session 5 — horizontal bar chart with color-coded win rate
 
+**G. Near-Miss Tracker card** ⏳ Session 7 — "Did we miss good trades?"
+- Shows stocks that scored 35–54 (just below trade threshold) and what they did next
+- Counts how often we were right to skip vs. missed a profitable trade
+- Breaks down which signal was the deciding factor (e.g. "options_flow blocked 12 trades, avg +4.8%")
+- "Threshold verdict" line: tells you whether to raise/lower the 45-pt threshold based on data
+- Full spec in Session 7 → Step 5
+- **Files to create/modify:** `db.py`, `signals.py`, `trading_engine.py`, `routers/performance.py`, `Performance.swift`, `APIService.swift`, `AnalyticsView.swift`
+- **DB migration:** `near_miss_log` table (see Session 7 → Step 5)
+
 ---
 
 ## iOS Backend API Endpoints — Completed in Session 5 ✅
@@ -192,6 +201,7 @@ All 6 cards built in `AnalyticsView.swift`. New models in `Performance.swift`, n
 | `GET /api/performance/slippage` | ✅ Done |
 | `GET /api/performance/by-hour` | ✅ Done |
 | `GET /api/trading/status` → regime fields | ✅ Done (`brain_regime`, `vix_level`, `regime_confidence`, `regime_capital_mult`) |
+| `GET /api/performance/near-misses` | ⏳ Session 7 — near-miss tracker (scores 35–54) |
 
 ---
 
@@ -680,17 +690,17 @@ Also add fallback in `alpaca_service.py` Barchart injection block:
 
 ### Step 5 — Missed Trades Tracker (NEW FEATURE)
 
-**What it does:** Tracks stocks that were close to trading but didn't (score 35-54), then checks their actual price movement 1h/EOD/next-day. Shows which signals were the marginal ones. Helps calibrate thresholds.
+**What it does:** Tracks stocks that were close to trading but didn't (score 35-54), then checks their actual price movement 1h/EOD/next-day. Shows which signals were the marginal ones. Helps calibrate thresholds over time.
 
-**Already have:** `blocked_trades` table tracks trades blocked by circuit breaker/regime/other rules.
-**What's missing:** Near-miss tracking for stocks that scored 35-54 (just below threshold).
+**Already have:** `blocked_trades` table tracks trades blocked by circuit breaker/regime/other hard rules.
+**What's missing:** Near-miss tracking for stocks that *scored* but not enough (35–54).
 
-**Implementation:**
-1. In `signals.py`, after scoring: if `35 <= score < 45`, log to new `near_miss_log` table:
-   - symbol, score, breakdown JSON, timestamp
-2. Background worker (like the existing blocked_trades worker) checks price at +1h, EOD, next day
-3. New endpoint `GET /api/performance/near-misses` — shows which near-misses were profitable
-4. Dashboard card: "Trades we almost took — were we right to skip?"
+**Backend implementation (3 files):**
+
+1. **`db.py`** — add `log_near_miss()` and `update_near_miss_prices()` and `get_near_misses_report()`
+2. **`signals.py`** — after scoring, if `35 <= score < 45`: call `log_near_miss(symbol, score, breakdown, suggested_action, price)`
+3. **`trading_engine.py`** — background worker (same pattern as blocked_trades worker) checks price at +1h, EOD, next day and calls `update_near_miss_prices()`
+4. **`routers/performance.py`** — add `GET /api/performance/near-misses` endpoint
 
 **DB migration needed:**
 ```sql
@@ -698,16 +708,66 @@ CREATE TABLE near_miss_log (
     id SERIAL PRIMARY KEY,
     symbol VARCHAR(10),
     score INTEGER,
-    breakdown JSONB,
-    suggested_action VARCHAR(10),
+    breakdown JSONB,               -- full signal breakdown: {rs: 15, macd: 10, options_flow: -18, ...}
+    suggested_action VARCHAR(10),  -- "buy" | "short" | "skip"
     price_at_skip NUMERIC,
     price_1h NUMERIC,
     price_eod NUMERIC,
     price_next_day NUMERIC,
-    hypothetical_pnl_pct NUMERIC,
+    hypothetical_pnl_pct NUMERIC,  -- what % gain/loss if we had traded
     timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+
+**API response shape (`GET /api/performance/near-misses`):**
+```json
+{
+  "summary": {
+    "total_near_misses": 47,
+    "would_have_been_profitable": 28,
+    "accuracy_if_traded": "59.6%",
+    "avg_hypothetical_pnl": "+3.2%",
+    "threshold_verdict": "Current threshold (45) is close to optimal — lowering to 40 would add +2.1% avg PnL"
+  },
+  "top_missed_signals": [
+    {"signal": "options_flow", "times_was_deciding_factor": 12, "avg_pnl_when_deciding": "+4.8%"},
+    {"signal": "regime", "times_was_deciding_factor": 8, "avg_pnl_when_deciding": "-1.2%"}
+  ],
+  "recent": [
+    {"symbol": "MU", "score": 42, "price_at_skip": 864, "price_eod": 750, "hypothetical_pnl": "-13.2%", "was_right_to_skip": true}
+  ]
+}
+```
+
+**iOS UI — Near-Miss Tracker card (add to `AnalyticsView.swift`):**
+
+New card `G` in `AnalyticsView.swift` (after the existing 6 cards A–F):
+
+```
+┌─────────────────────────────────────────┐
+│ 🎯 Near Misses — Did We Miss Good Trades?│
+│                                          │
+│  47 near-misses last 30 days             │
+│  28 would have been profitable (59.6%)   │
+│  Avg hypothetical gain: +3.2%            │
+│                                          │
+│  Deciding signal:                        │
+│  options_flow  12x  avg +4.8% ████████  │
+│  regime        8x   avg -1.2% ███       │
+│  insider_buy   4x   avg +6.1% ██████████│
+│                                          │
+│  Threshold verdict:                      │
+│  ✅ Current (45) looks optimal            │
+│  [View all near misses →]                │
+└─────────────────────────────────────────┘
+```
+
+**Swift model additions needed:**
+- `NearMissSummary` struct in `Performance.swift`
+- `getNearMisses()` call in `APIService.swift`
+- Card view `NearMissCard` in `AnalyticsView.swift`
+
+**Why this matters:** After 60 days of paper trading you'll have ~500+ near-misses. The `top_missed_signals` array tells you exactly which signal is being too conservative. If `options_flow` keeps blocking profitable longs, maybe -18 is too harsh. If `regime` keeps saving you from bad trades, the regime penalty is correctly sized. This turns the system into a self-improving loop.
 
 ---
 
