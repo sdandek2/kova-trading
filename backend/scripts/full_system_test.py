@@ -136,7 +136,8 @@ if should_run("alpaca"):
         check("Snapshot fetch",         len(snap) > 0, f"{len(snap)} symbols")
         for sym in ["AAPL","MSFT","NVDA"]:
             d = snap.get(sym, {})
-            price = d.get("current_price") or d.get("price") or d.get("last_price")
+            closes = d.get("closing_prices") or []
+            price = d.get("current_price") or (closes[-1] if closes else None)
             check(f"Snapshot {sym} has price", bool(price and price > 0), f"${price}")
 
     except Exception as e:
