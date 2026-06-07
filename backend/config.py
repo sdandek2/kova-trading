@@ -10,9 +10,10 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     # Phase 7 external data APIs (optional — connectors degrade gracefully without keys)
-    uw_api_key: str = ""        # Unusual Whales — options flow
-    fmp_api_key: str = ""       # Financial Modeling Prep — earnings revisions
-    quiver_api_key: str = ""    # Quiver Quantitative — dark pool data
+    uw_api_key: str = ""           # Unusual Whales — options flow (legacy)
+    fmp_api_key: str = ""          # Financial Modeling Prep — earnings surprise
+    quiver_api_key: str = ""       # Quiver Quantitative — dark pool (legacy)
+    finnhub_api_key: str = ""      # Finnhub — analyst recommendation trends
 
     class Config:
         env_file = ".env"

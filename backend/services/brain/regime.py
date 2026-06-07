@@ -173,6 +173,23 @@ def detect_regime(
         regime = "chop"
         confidence = 0.5
 
+    # ── Session 6: FRED macro modifier ────────────────────────────────────────
+    # Adjusts confidence (not regime) based on 3-month economic trends.
+    # A single bad data point (one jobs report) does NOT change the regime —
+    # only sustained deterioration (3+ months) shifts macro_total meaningfully.
+    try:
+        macro_total = _get_fred_macro_score()
+        if macro_total >= 2:
+            confidence = min(1.0, confidence + 0.15)
+            notes_parts.append(f"FRED macro strong (+{macro_total}) → +15% confidence")
+        elif macro_total <= -2:
+            confidence = max(0.1, confidence - 0.15)
+            notes_parts.append(f"FRED macro weak ({macro_total}) → -15% confidence")
+        else:
+            notes_parts.append(f"FRED macro neutral ({macro_total:+d})")
+    except Exception as _fred_err:
+        logger.debug("FRED macro modifier skipped: %s", _fred_err)
+
     result = RegimeResult(
         regime=regime,
         confidence=round(confidence, 2),
@@ -187,3 +204,87 @@ def detect_regime(
         f"VIX={vix_level} SPY={spy_trend} Breadth={breadth:.0f}% | {result.notes}"
     )
     return result
+
+
+# ── FRED macro helper ─────────────────────────────────────────────────────────
+
+import time as _time
+
+_FRED_CACHE: dict = {}
+_FRED_TTL = 86_400  # 24 hours
+
+
+def _get_fred_macro_score() -> int:
+    """
+    Compute macro score from FRED data (-3 to +3).
+    Uses 3-month trends, not single readings — resistant to one-off noise.
+    Cached 24h.
+    """
+    global _FRED_CACHE
+    if _FRED_CACHE.get("expires", 0) > _time.time():
+        return _FRED_CACHE["score"]
+
+    import httpx, csv, io
+
+    def fetch_series(series_id: str) -> list[float]:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+        r = httpx.get(url, timeout=10, headers={"User-Agent": "Kova Trading kova@trading.com"})
+        r.raise_for_status()
+        rows = list(csv.reader(io.StringIO(r.text)))
+        values = []
+        for row in rows[1:]:  # skip header
+            if len(row) >= 2 and row[1] not in (".", "", " "):
+                try:
+                    values.append(float(row[1]))
+                except ValueError:
+                    pass
+        return values[-6:] if len(values) >= 6 else values  # last 6 months
+
+    # Unemployment rate — rising = bad, falling = good
+    unrate = fetch_series("UNRATE")
+    unemp_score = 0
+    if len(unrate) >= 3:
+        trend = unrate[-1] - unrate[-3]
+        if trend > 0.3:
+            unemp_score = -1
+        elif trend < -0.3:
+            unemp_score = +1
+
+    # Non-farm payrolls — compute monthly change
+    payems = fetch_series("PAYEMS")
+    jobs_score = 0
+    if len(payems) >= 4:
+        monthly_adds = [(payems[i] - payems[i-1]) * 1000 for i in range(-3, 0)]
+        avg_adds = sum(monthly_adds) / len(monthly_adds)
+        if avg_adds >= 150_000:
+            jobs_score = +1
+        elif avg_adds < 75_000:
+            jobs_score = -1
+
+    # Fed funds rate — cutting = accommodative = good, hiking = restrictive = bad
+    fedfunds = fetch_series("FEDFUNDS")
+    fed_score = 0
+    if len(fedfunds) >= 3:
+        fed_trend = fedfunds[-1] - fedfunds[-3]
+        if fed_trend < -0.1:
+            fed_score = +1   # cutting rates
+        elif fed_trend > 0.1:
+            fed_score = -1   # hiking rates
+
+    total = unemp_score + jobs_score + fed_score
+
+    _FRED_CACHE = {
+        "score": total,
+        "expires": _time.time() + _FRED_TTL,
+        "unemp": unemp_score,
+        "jobs": jobs_score,
+        "fed": fed_score,
+        "unrate_latest": unrate[-1] if unrate else None,
+    }
+    logger.info(
+        "FRED macro: unemp=%+d jobs=%+d fed=%+d total=%+d "
+        "(UNRATE=%.1f%%)",
+        unemp_score, jobs_score, fed_score, total,
+        unrate[-1] if unrate else 0,
+    )
+    return total

@@ -527,6 +527,75 @@ def get_tradeable_universe() -> list[str]:
     ]
     add(sector_etfs)
 
+    # ── Session 6: FMP Earnings Surprise injection ────────────────────────────
+    # Stocks with >10% EPS beat in the last 21 days — captures post-earnings drift
+    # (days 2–21 after initial gap-chasers leave, the real drift window)
+    try:
+        from services.brain.connectors.fmp_earnings import get_universe_additions as _fmp_adds
+        earnings_syms = _fmp_adds()
+        add(earnings_syms)
+        if earnings_syms:
+            logger.info(f"FMP earnings surprise injection: {earnings_syms}")
+    except Exception as e:
+        logger.debug(f"FMP earnings universe injection skipped: {e}")
+
+    # ── Session 6: SEC Form 4 Insider Buy injection ───────────────────────────
+    # Stocks with >$100K open-market insider buys in the last 30 days
+    # Only cash purchases counted — grants/awards/vesting ignored
+    try:
+        from services.brain.connectors.sec_insider import get_universe_additions as _sec_adds
+        insider_syms = _sec_adds()
+        add(insider_syms)
+        if insider_syms:
+            logger.info(f"SEC insider buy injection: {insider_syms}")
+    except Exception as e:
+        logger.debug(f"SEC insider universe injection skipped: {e}")
+
+    # ── Session 6: Barchart Unusual Options injection ─────────────────────────
+    # Stocks with unusual options flow (vol/OI > 10x) right now.
+    # This solves the trigger problem: without injection, the score boost in
+    # signals.py never fires because the stock was never in the universe to begin with.
+    # Filter: only inject if it looks like a real US equity ticker (1-4 uppercase letters)
+    # to avoid garbage like SVI.TO or index symbols from the Barchart feed.
+    try:
+        from services.brain.connectors.barchart_options import (
+            get_all_unusual_symbols as _bc_syms,
+            get_short_candidates as _bc_shorts,
+        )
+        import re as _re
+
+        def _bc_price_ok(sym: str) -> bool:
+            """Skip penny stocks under $3 — pump targets, not real options signals."""
+            try:
+                import yfinance as _yf
+                _p = (_yf.Ticker(sym).info or {}).get("regularMarketPrice") or \
+                     (_yf.Ticker(sym).info or {}).get("previousClose") or 999
+                return float(_p) >= 3.0
+            except Exception:
+                return True  # allow through if check fails — score gate handles it
+
+        # ── Bullish call flow → buy candidates ─────────────────────────────
+        _bc_candidates = _bc_syms()
+        bc_syms = [s for s in _bc_candidates
+                   if _re.match(r'^[A-Z]{1,5}$', s) and _bc_price_ok(s)]
+        add(bc_syms)
+        if bc_syms:
+            logger.info(f"Barchart unusual options injection (all flow): {bc_syms}")
+
+        # ── Heavy put flow → short candidates ──────────────────────────────
+        # Stocks with ≥5,000 put contracts at ≥50× vol/OI ratio are injected
+        # specifically as short candidates. The -18 score from bearish flow plus
+        # other falling indicators will push them into short territory (score < 0).
+        _bc_short_map = _bc_shorts()
+        bc_short_syms = [s for s in _bc_short_map
+                         if _re.match(r'^[A-Z]{1,5}$', s) and _bc_price_ok(s)]
+        add(bc_short_syms)
+        if bc_short_syms:
+            logger.info(f"Barchart heavy put flow → short injection: {bc_short_syms}")
+
+    except Exception as e:
+        logger.debug(f"Barchart options universe injection skipped: {e}")
+
     logger.info(f"Total universe: {len(universe)} stocks — 100% real-time, zero hardcoded individual stocks")
     return universe
 

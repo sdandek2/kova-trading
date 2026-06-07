@@ -346,11 +346,250 @@ GROUP BY DATE(created_at) ORDER BY 1;
 
 ---
 
-## Where to Start Next Session
+## Session 6 — Signal Upgrades ✅ COMPLETED
 
-**Phase 1 backend + iOS UI: COMPLETE ✅**
+### What was researched and decided (Session 6 planning):
 
-Next priority: **Phase 2 — Backtest 2020-2024** (once ~1 week of paper trading data exists)
+**Researched and REJECTED:**
+| Signal | Reason skipped |
+|---|---|
+| FMP earnings guard | User wants aggressive — blocks stocks that might go up |
+| FMP earnings surprise (standalone) | ~40% direction accuracy. Macro overrides it (employment report wiped out DOCU +9% beat) |
+| EODHD sentiment | Redundant with existing signals, unvalidated |
+| Quiver Quantitative | Paid only, $115–345/month |
+| OptionData.io unusual flow | 30 calls/month = useless. Code in their sample was mocked/fake |
+| Alpaca dark pool (Exchange D) | Requires paid SIP feed. Free paper accounts get IEX only which excludes TRF/dark pool |
+| Kadoa congressional trading | Data stale up to 45 days. Amounts mostly $1K–$15K (noise). Post-STOCK Act alpha small |
+| USASpending gov contracts | Action dates missing from free tier — can't time entries |
+| Senate lobbying | Quarterly data, too slow to be actionable |
+| Massive.com | Duplicates Alpaca entirely |
+| Nasdaq Data Link | WIKI dataset discontinued 2018. DEMO_KEY returns 403 |
+
+**Why earnings surprise was reconsidered and added back:**
+- With ATR stop protection, downside is capped at ~4%
+- ZM beat +9.2% → drifted +12.5% over 8 days (real post-earnings drift exists)
+- Math: 2 wins at +10% avg, 3 losses at -4% ATR stop = +8% net across 5 trades
+- Single macro event (employment report) caused yesterday's drop — not a structural failure
+
+---
+
+### Signal 1: Earnings Surprise via FMP ✅ IMPLEMENT
+
+**Source:** `https://financialmodelingprep.com/stable/earnings-calendar`
+**API key:** `KloIwZY8s1YC0qceIgM4D1Fm1Vot1Np5` (add to Railway env as `FMP_API_KEY`)
+**Free tier:** 250 calls/day. This uses ~2 calls/week (bulk fetch, cached)
+**File to create:** `backend/services/brain/connectors/fmp_earnings.py`
+
+**How it works — two-level implementation:**
+
+Level 1 — Universe injection (proactive):
+```python
+# In alpaca_service.get_tradeable_universe()
+# Fetch once/day: stocks that beat EPS by >10% in last 21 days
+# Inject those symbols into universe for 21 days post-earnings
+# This catches post-earnings drift on days 2–21 (after initial spike settles)
+```
+
+Level 2 — Score boost (when scoring injected symbols):
+```python
+# In signals.py
+# +12 pts conviction if beat >10% in last 21 days
+# -12 pts if missed >10% in last 21 days
+```
+
+**Bulk fetch (1 call for all symbols):**
+```python
+# Upcoming (1 call, cache 24h): from=today&to=today+21days
+# Past beats (1 call, cache 24h): from=today-21days&to=today (max 21 days back on free tier)
+```
+
+**Cache:** 24h — data only changes daily at most
+
+**Important:** Earnings surprise is NOT a standalone trade. Stock still needs base score ≥55 after boost.
+ATR stops protect the downside when macro overrides the signal.
+
+---
+
+### Signal 2: SEC Form 4 Insider Buys via EDGAR ✅ IMPLEMENT
+
+**Source:** `https://data.sec.gov/submissions/CIK{cik}.json`
+**API key:** None needed. Free, official US government data.
+**Headers required:** `User-Agent: Kova Trading kova@trading.com`
+**File to create:** `backend/services/brain/connectors/sec_insider.py`
+
+**How it works — two-level implementation:**
+
+Level 1 — Universe injection (proactive):
+```python
+# Each cycle: scan recent Form 4 filings for net cash buys > $500K in last 14 days
+# Inject those symbols into universe — finds stocks before market notices the filing
+# Only count BUYS (acquired, code='A'). Ignore sells entirely.
+# Sells are almost always RSU vesting, planned 10b5-1 programs, diversification — not informational
+```
+
+Level 2 — Score boost (when scoring injected symbols):
+```python
+# In signals.py:
+# Net insider bought > $500K last 30 days → +15 pts
+# Net insider bought > $100K last 30 days → +8 pts
+# Sells: 0 pts (ignored completely)
+```
+
+**Data reliability:** Legally mandated filing. Insiders must file within 2 business days.
+Data is 2–4 days old when we see it. Price cross-checked: Levinson $311.02 vs market $308-311 ✅
+
+**Key distinction:** Only cash purchases signal conviction.
+- CEO buying $2M open market = strong signal (they already have stock options, buying more means they're bullish)
+- CEO selling = could be divorce, house purchase, planned program, taxes — meaningless
+
+**CIK lookup:** `https://www.sec.gov/cgi-bin/browse-edgar?company={name}&CIK=&action=getcompany`
+Or use Alpaca symbol → company name → search EDGAR for CIK.
+
+**Universe coverage:** Pre-build a mapping of top 500 tradeable symbols → CIK numbers.
+Cache CIK map permanently (changes rarely). Check Form 4s daily.
+
+---
+
+### Signal 3: FRED Macro Regime Modifier ✅ IMPLEMENT
+
+**Source:** `https://fred.stlouisfed.org/graph/fredgraph.csv?id={SERIES}`
+**API key:** None needed. Federal Reserve official data. Completely free.
+**File to modify:** `backend/services/brain/regime.py`
+
+**How it works:**
+```python
+# Pull 3 series once per day (cache 24h):
+# UNRATE  — Unemployment Rate (monthly)
+# PAYEMS  — Non-Farm Payrolls total (compute monthly change)
+# FEDFUNDS — Fed Funds Rate (monthly)
+
+# Compute 3-month trend for each:
+unemp_score = -1 if rising >0.3% over 3mo else +1 if falling >0.3% else 0
+jobs_score  = +1 if avg monthly additions >150K else -1 if <75K else 0
+fed_score   = +1 if rate falling (cutting) else -1 if rising (hiking) else 0
+macro_total = unemp_score + jobs_score + fed_score  # range: -3 to +3
+```
+
+**Integration with existing regime:**
+```python
+# Current regime: bull/bear/chop from VIX + price momentum
+# Macro modifier adjusts CONFIDENCE, not the regime itself:
+# macro_total >= +2 → boost regime confidence by 15%
+# macro_total <= -2 → reduce regime confidence by 15%, reduce capital mult by 0.1
+# Single bad data point (like yesterday's jobs report) → doesn't move 3-month trend → regime unchanged
+```
+
+**Why this is better than reacting to single readings:**
+- Yesterday's employment drop was one data point. Unemployment is still 4.3% stable.
+- 3-month trend hasn't changed. Regime stays bull.
+- Only sustained deterioration (3+ months rising unemployment) triggers regime shift.
+
+**Current macro signal (as of 2026-06-07):**
+- Unemployment: STABLE (4.3%, no trend) → 0
+- Jobs: MODERATE (~172K/month avg) → 0
+- Fed: CUTTING (3.64% → 3.63%) → +1
+- Total: +1 → MACRO NEUTRAL, no regime change
+
+---
+
+### Signal 4: Barchart Unusual Options Flow ✅ IMPLEMENTED (Session 6)
+
+**Source:** `https://www.barchart.com/proxies/core-api/v1/options/get?unusual=1&...`
+**API key:** None needed. Session cookie scraping — no account required.
+**File created:** `backend/services/brain/connectors/barchart_options.py`
+**Replaces:** `unusual_whales.py` (which used raw Alpaca OI/volume, no unusual filter)
+
+**Why better than unusual_whales.py:**
+- Barchart pre-filters for unusual activity using vol/OI ratio
+- QQQ Call 1,589× ratio = volume is 1,589× open interest = brand new aggressive positioning
+- Old code just compared total call OI vs put OI — not the same thing
+
+**Authentication pattern (tested, working):**
+```python
+# Step 1: GET main page → captures XSRF-TOKEN and laravel_session cookies
+# Step 2: URL-decode XSRF token: urllib.parse.unquote(cookie)
+# Step 3: API call with decoded token as X-XSRF-TOKEN header
+```
+
+**Signal thresholds:**
+```python
+vol/OI > 50x → "very unusual" → call: +18 pts / put: -18 pts
+vol/OI > 10x → "unusual"      → call: +10 pts / put: -10 pts
+```
+
+**Filters applied:**
+- `volume >= 1,000` (ignore micro-volume noise)
+- Excludes SPY/QQQ/IWM/VIX/GLD/TLT/EEM (macro hedging, not stock signal)
+- Per symbol: keeps strongest signal across all strikes/expiries
+
+**Fallback:** If Barchart fails (rate limit, session expired), falls back to `unusual_whales.py`
+
+**Today's sample data (2026-06-06):**
+- QQQ Call $725 exp 06/08: vol/OI = 1,589× — extremely unusual
+- STM Call $100 exp 10/16: vol/OI = 669× — individual stock unusual bullish flow
+- NVDA Call $210 exp 06/08: vol/OI = 117× — unusual call positioning
+
+---
+
+### Signal 5: Finnhub Analyst Revisions (TEST FIRST, then implement)
+
+**Source:** `https://finnhub.io/api/v1/stock/price-target?symbol={ticker}&token={key}`
+**API key:** Sign up free at finnhub.io — get free developer token
+**Cost:** Free tier — unlimited calls but rate limited
+**Status:** Sandbox token in circulating script (`sandbox_c8m9bca201qio9kv9ngg`) is invalid/expired
+
+**What it gives:**
+```json
+{
+  "targetHigh": 260.0,
+  "targetLow": 150.0,
+  "targetMean": 210.0,
+  "targetMedian": 207.5,
+  "lastWeek": 200.0  ← compare to targetMedian
+}
+```
+
+**Signal logic:**
+```python
+# targetMedian > lastWeek → analysts raised target → +15 pts conviction
+# targetMedian < lastWeek → analysts lowered target → -15 pts conviction
+# This IS the revision direction signal FMP paywalls
+```
+
+**Before implementing:** Sign up for free Finnhub account, test endpoint returns valid data for AAPL/NVDA/MSFT.
+Then add `FINNHUB_API_KEY` to Railway env and implement in `connectors/fmp.py` (replace yfinance fallback).
+
+---
+
+### Session 6 implementation — COMPLETED ✅
+
+All implemented in-session:
+
+| Step | Status | Detail |
+|---|---|---|
+| Add `FMP_API_KEY` to Railway | ⏳ Manual | Add `FMP_API_KEY=KloIwZY8s1YC0qceIgM4D1Fm1Vot1Np5` in Railway dashboard |
+| Create `fmp_earnings.py` | ✅ Done | FMP stable API, 21-day window, +12/-12 boost, universe injection |
+| Create `sec_insider.py` | ✅ Done | EDGAR Form 4, P-code only, +15/>$500K +8/>$100K, universe injection |
+| Create `barchart_options.py` | ✅ Done | vol/OI ratio filter, +18/+10 unusual flow, replaces `unusual_whales.py` |
+| Modify `signals.py` | ✅ Done | Added earnings_surprise, insider_buy, barchart options_flow signals |
+| Modify `alpaca_service.py` | ✅ Done | Universe injection from FMP + SEC insider buys |
+| Modify `regime.py` | ✅ Done | FRED macro modifier (UNRATE/PAYEMS/FEDFUNDS, 3-month trends) |
+| Finnhub analyst revisions | ⏳ Next | Sign up free at finnhub.io, get token, test AAPL endpoint |
+
+**DB migrations needed:** None — all signals modify scoring and universe, no new tables required.
+
+**One manual step required before deploy:** Add `FMP_API_KEY=KloIwZY8s1YC0qceIgM4D1Fm1Vot1Np5` to Railway environment variables.
+
+---
+
+## Session 7 — What to Do Next ⬅️ START HERE
+
+### Immediate (before deploy):
+1. **Add Railway env var:** `FMP_API_KEY=KloIwZY8s1YC0qceIgM4D1Fm1Vot1Np5`
+2. **Test Finnhub** — sign up free at finnhub.io → get token → test `GET /api/v1/stock/price-target?symbol=AAPL&token=YOUR_KEY` → if returns real data, implement analyst revision signal in `connectors/fmp.py`
+
+### Medium term:
+**Phase 2 — Backtest 2020-2024** (once ~1 week of paper trading data exists)
 - Extend `backend/services/brain/backtest.py` to loop 2020-2024 using yfinance
 - Run ablation tests (toggle exit rules off one at a time)
 - Output: Year / Trades / Win% / AvgWin / AvgLoss / Sharpe / MaxDD table

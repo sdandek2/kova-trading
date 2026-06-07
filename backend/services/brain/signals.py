@@ -177,13 +177,23 @@ def _score_symbol(
 
     # ── External data boosts (Phase 7 — returns 0 if API key not set) ────────
     try:
-        from services.brain.connectors.unusual_whales import get_options_flow
-        flow = get_options_flow(symbol)
+        # Session 6: Barchart unusual options flow (vol/OI ratio filter)
+        # Falls back to Alpaca-based unusual_whales if Barchart fails
+        from services.brain.connectors.barchart_options import get_options_flow as _bc_flow
+        flow = _bc_flow(symbol)
         if flow.get("signal") not in ("unavailable", "neutral"):
             breakdown["options_flow"] = flow.get("conviction_boost", 0)
             score += breakdown["options_flow"]
+
     except Exception:
-        pass
+        try:
+            from services.brain.connectors.unusual_whales import get_options_flow
+            flow = get_options_flow(symbol)
+            if flow.get("signal") not in ("unavailable", "neutral"):
+                breakdown["options_flow"] = flow.get("conviction_boost", 0)
+                score += breakdown["options_flow"]
+        except Exception:
+            pass
 
     try:
         from services.brain.connectors.fmp import get_estimate_revision
@@ -200,6 +210,36 @@ def _score_symbol(
         if dp.get("signal") not in ("unavailable", "neutral"):
             breakdown["darkpool"] = dp.get("conviction_boost", 0)
             score += breakdown["darkpool"]
+    except Exception:
+        pass
+
+    # ── Session 6: FMP Earnings Surprise (+12/-12) ────────────────────────────
+    try:
+        from services.brain.connectors.fmp_earnings import get_earnings_signal
+        esurp = get_earnings_signal(symbol)
+        if esurp.get("signal") not in ("unavailable", "neutral"):
+            breakdown["earnings_surprise"] = esurp.get("conviction_boost", 0)
+            score += breakdown["earnings_surprise"]
+    except Exception:
+        pass
+
+    # ── Session 6: SEC Form 4 Insider Buys (+15 >$500K / +8 >$100K) ──────────
+    try:
+        from services.brain.connectors.sec_insider import get_insider_signal
+        insider = get_insider_signal(symbol)
+        if insider.get("signal") not in ("unavailable", "neutral"):
+            breakdown["insider_buy"] = insider.get("conviction_boost", 0)
+            score += breakdown["insider_buy"]
+    except Exception:
+        pass
+
+    # ── Session 6: Finnhub Analyst Recommendation Trends (+10/-10) ───────────
+    try:
+        from services.brain.connectors.finnhub import get_recommendation_signal
+        rec = get_recommendation_signal(symbol)
+        if rec.get("signal") not in ("unavailable", "neutral"):
+            breakdown["analyst_revision"] = rec.get("conviction_boost", 0)
+            score += breakdown["analyst_revision"]
     except Exception:
         pass
 
@@ -238,6 +278,15 @@ def _score_symbol(
     is_leveraged = symbol in _LEVERAGED_ETFS
     is_inverse = symbol in _INVERSE_ETFS
 
+    # Check for heavy institutional put flow — this overrides the normal action
+    # determination if the stock is already showing weakness (not in a strong uptrend)
+    _heavy_put_short = False
+    try:
+        from services.brain.connectors.barchart_options import get_short_candidates as _bc_sc
+        _heavy_put_short = symbol.upper() in _bc_sc()
+    except Exception:
+        pass
+
     if is_inverse:
         signal_type = "inverse_etf"
         suggested_action = "buy" if regime in ("bear", "chop") else "skip"
@@ -247,6 +296,18 @@ def _score_symbol(
     elif rsi is not None and rsi > 70 and macd_hist is not None and macd_hist < 0.5:
         signal_type = "short_candidate"
         suggested_action = "short" if regime in ("bear", "chop") else "skip"
+    elif (_heavy_put_short
+          and rsi is not None and rsi > 50          # not already oversold
+          and macd_hist is not None and macd_hist < 0  # momentum already turning down
+          and regime in ("bear", "chop")):
+        # Heavy institutional put flow (≥5,000 contracts, ≥50× ratio) on a stock where:
+        #   - RSI > 50: not oversold yet, room left to fall
+        #   - MACD < 0: momentum already turning negative (confirms direction)
+        #   - Bear/chop regime only: never fight a bull regime with a short
+        # MACD guard is critical — without it we'd short stocks with positive momentum
+        # that happen to have put flow, which is the wrong call if the stock is rising.
+        signal_type = "short_candidate"
+        suggested_action = "short"
     elif rsi is not None and rsi < 35:
         signal_type = "oversold"
         suggested_action = "buy" if regime in ("bull", "chop") else "skip"
