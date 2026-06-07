@@ -46,6 +46,7 @@
 		C1D2E3F4A5B6C1D2E3F4A5B6 /* BotSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2E3F4A5B6C7D2E3F4A5B6C7 /* BotSettings.swift */; };
 		AA01BB02CC03DD04EE05FF06 /* ModelSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01CC02DD03EE04FF05AA06 /* ModelSettings.swift */; };
 		AA02BB03CC04DD05EE06FF07 /* ModelPickerCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB02CC03DD04EE05FF06AA07 /* ModelPickerCard.swift */; };
+		AA03BB04CC05DD06EE07FF08 /* AnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB03CC04DD05EE06FF07AA08 /* AnalyticsView.swift */; };
 		C2D3E4F5A6B7C2D3E4F5A6B7 /* TradingBudgetCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E4F5A6B7C8D3E4F5A6B7C8 /* TradingBudgetCard.swift */; };
 		C3D4E5F6A7B8C3D4E5F6A7B8 /* PromptViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F6A7B8C9D4E5F6A7B8C9AA /* PromptViewerView.swift */; };
 		C63573D41DF85E25FD8D63E6 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44897F72CFAAF07A96EFA95 /* DashboardViewModel.swift */; };
@@ -99,6 +100,7 @@
 		A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EODReport.swift; path = Sources/Models/EODReport.swift; sourceTree = "<group>"; };
 		BB01CC02DD03EE04FF05AA06 /* ModelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ModelSettings.swift; path = Sources/Models/ModelSettings.swift; sourceTree = "<group>"; };
 		BB02CC03DD04EE05FF06AA07 /* ModelPickerCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ModelPickerCard.swift; path = Sources/Views/AI/ModelPickerCard.swift; sourceTree = "<group>"; };
+		BB03CC04DD05EE06FF07AA08 /* AnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AnalyticsView.swift; path = Sources/Views/AI/AnalyticsView.swift; sourceTree = "<group>"; };
 		A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EODReportView.swift; path = Sources/Views/AI/EODReportView.swift; sourceTree = "<group>"; };
 		A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FinanceModels.swift; path = Sources/Models/FinanceModels.swift; sourceTree = "<group>"; };
 		A9B8C7D6E5F4A9B8C7D6E5F4 /* TaxSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TaxSummaryView.swift; path = Sources/Views/Finance/TaxSummaryView.swift; sourceTree = "<group>"; };
@@ -196,6 +198,7 @@
 				A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */,
 				BB01CC02DD03EE04FF05AA06 /* ModelSettings.swift */,
 				BB02CC03DD04EE05FF06AA07 /* ModelPickerCard.swift */,
+				BB03CC04DD05EE06FF07AA08 /* AnalyticsView.swift */,
 				A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */,
 				A9B8C7D6E5F4A9B8C7D6E5F4 /* TaxSummaryView.swift */,
 				B0A9C8D7E6F5B0A9C8D7E6F5 /* ProfitReserveView.swift */,
@@ -352,6 +355,7 @@
 				C3D4E5F6A7B8C3D4E5F6A7B8 /* PromptViewerView.swift in Sources */,
 				AA01BB02CC03DD04EE05FF06 /* ModelSettings.swift in Sources */,
 				AA02BB03CC04DD05EE06FF07 /* ModelPickerCard.swift in Sources */,
+				AA03BB04CC05DD06EE07FF08 /* AnalyticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
