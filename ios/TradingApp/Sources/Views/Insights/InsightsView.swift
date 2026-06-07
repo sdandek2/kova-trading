@@ -69,7 +69,12 @@ struct InsightsView: View {
                         }
                     }
                 }
-                .padding(.vertical)
+
+                Divider().padding(.horizontal)
+
+                // Signal Intelligence — weight tracker
+                SignalWeightsView(vm: vm)
+                    .padding(.vertical)
             }
             .navigationTitle("Insights")
             .navigationDestination(isPresented: $showPrediction) {

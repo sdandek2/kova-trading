@@ -1,5 +1,55 @@
 import Foundation
 
+// MARK: - Signal Weights
+
+struct SignalWeightHistory: Decodable, Identifiable {
+    var id: String { "\(newWeight)-\(oldWeight)-\(adjustedAt ?? "unknown")" }
+    let oldWeight: Int
+    let newWeight: Int
+    let direction: String?
+    let winRate: Double?
+    let sampleCount: Int?
+    let adjustedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case oldWeight = "old_weight"
+        case newWeight = "new_weight"
+        case direction
+        case winRate = "win_rate"
+        case sampleCount = "sample_count"
+        case adjustedAt = "adjusted_at"
+    }
+}
+
+struct SignalWeight: Decodable, Identifiable {
+    var id: String { signalName }
+    let signalName: String
+    let currentWeight: Int
+    let defaultWeight: Int
+    let pctOfDefault: Int
+    let trend: String      // "up" | "down" | "flat"
+    let lastAdjusted: String?
+    let adjustmentReason: String?
+    let history: [SignalWeightHistory]
+
+    enum CodingKeys: String, CodingKey {
+        case signalName = "signal_name"
+        case currentWeight = "current_weight"
+        case defaultWeight = "default_weight"
+        case pctOfDefault = "pct_of_default"
+        case trend
+        case lastAdjusted = "last_adjusted"
+        case adjustmentReason = "adjustment_reason"
+        case history
+    }
+
+    var displayName: String {
+        signalName
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
+    }
+}
+
 // MARK: - Tax Summary
 
 struct TaxSummary: Decodable {

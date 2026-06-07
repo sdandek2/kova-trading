@@ -357,6 +357,11 @@ class APIService {
         try await fetch("/api/settings/models")
     }
 
+    // ── Signal Weights ──
+    func getSignalWeights() async throws -> [SignalWeight] {
+        try await fetch("/api/strategy/signal-weights")
+    }
+
     // ── Session 7: Near-Miss Tracker + Sprint Review ──
     func getNearMisses() async throws -> NearMissReport {
         try await fetch("/api/performance/near-misses")

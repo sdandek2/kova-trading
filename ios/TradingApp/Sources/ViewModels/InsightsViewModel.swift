@@ -5,9 +5,11 @@ class InsightsViewModel: ObservableObject {
     @Published var dailyPicks: DailyPicksResponse? = nil
     @Published var suggestions: [Suggestion] = []
     @Published var prediction: StockPrediction? = nil
+    @Published var signalWeights: [SignalWeight] = []
     @Published var isLoadingDailyPicks = false
     @Published var isLoadingSuggestions = false
     @Published var isLoadingPrediction = false
+    @Published var isLoadingSignalWeights = false
     @Published var dailyPicksError: String? = nil
     @Published var suggestionsError: String? = nil
     @Published var predictionError: String? = nil
@@ -56,6 +58,16 @@ class InsightsViewModel: ObservableObject {
             predictionError = error.localizedDescription
         }
         isLoadingPrediction = false
+    }
+
+    func loadSignalWeights() async {
+        isLoadingSignalWeights = true
+        do {
+            signalWeights = try await APIService.shared.getSignalWeights()
+        } catch {
+            // Non-fatal — section just stays empty
+        }
+        isLoadingSignalWeights = false
     }
 
     /// Collect all symbols currently shown and fetch their live prices in one batch call.

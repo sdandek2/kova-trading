@@ -169,36 +169,45 @@ def run_weekly_weight_adjustment() -> None:
     - Win rate > 70%: increase weight by up to 15% (max 115% of original)
     - 40–70%: leave unchanged
     """
-    from services.db import get_signal_win_rates, get_signal_weights, update_signal_weight
+    from services.db import get_signal_win_rates, get_signal_weights_full, update_signal_weight
 
     logger.info("Running weekly signal weight adjustment...")
     try:
         win_rates = get_signal_win_rates(days=30)
-        current_weights = get_signal_weights()
+        all_weights = get_signal_weights_full()  # {signal: {current, default}}
 
         for row in win_rates:
             signal = row["signal_name"]
             sample_count = row.get("sample_count") or 0
             win_rate = float(row.get("win_rate") or 0)
-            current = current_weights.get(signal)
+            weight_row = all_weights.get(signal)
 
-            if current is None:
+            if weight_row is None:
                 continue  # not a managed signal
             if sample_count < 15:
                 continue  # not enough data
 
+            current = weight_row["current"]
+            default_weight = weight_row["default"]
+
             if win_rate < 0.40:
+                # Decay toward 1 — floor is 85% of current (compounding decay), min 1
                 floor = max(1, int(current * 0.85))
                 new_weight = max(floor, current - 2)
                 reason = f"win_rate {win_rate:.0%} over {sample_count} trades — reduced"
-                update_signal_weight(signal, new_weight, reason)
+                update_signal_weight(signal, new_weight, reason,
+                                     old_weight=current, win_rate=win_rate, sample_count=sample_count)
                 logger.info(f"Weight adjusted: {signal} {current} → {new_weight} ({reason})")
 
             elif win_rate > 0.70:
-                cap = int(current * 1.15)
+                # Recovery/boost capped at 150% of DEFAULT — not current.
+                # Prevents permanent death: a signal at weight=1 can climb back to default
+                # at +2/week even after months of suppression.
+                cap = int(default_weight * 1.50)
                 new_weight = min(cap, current + 2)
                 reason = f"win_rate {win_rate:.0%} over {sample_count} trades — increased"
-                update_signal_weight(signal, new_weight, reason)
+                update_signal_weight(signal, new_weight, reason,
+                                     old_weight=current, win_rate=win_rate, sample_count=sample_count)
                 logger.info(f"Weight adjusted: {signal} {current} → {new_weight} ({reason})")
 
         logger.info("Weekly weight adjustment complete.")

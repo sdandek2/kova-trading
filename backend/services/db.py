@@ -1301,6 +1301,17 @@ def ensure_session7_tables() -> None:
             adjustment_reason TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS signal_weight_history (
+            id SERIAL PRIMARY KEY,
+            signal_name VARCHAR(50) NOT NULL,
+            old_weight INTEGER NOT NULL,
+            new_weight INTEGER NOT NULL,
+            direction VARCHAR(4),
+            win_rate NUMERIC,
+            sample_count INTEGER,
+            adjusted_at DATE DEFAULT CURRENT_DATE
+        );
+
         CREATE TABLE IF NOT EXISTS sprint_review_daily (
             id SERIAL PRIMARY KEY,
             review_date DATE UNIQUE NOT NULL,
@@ -1536,7 +1547,7 @@ def log_signal_performance(trade_date, symbol: str, breakdown: dict,
 
 
 def get_signal_weights() -> dict[str, int]:
-    """Read current signal weights from DB. Returns {signal_name: weight}."""
+    """Read current signal weights from DB. Returns {signal_name: current_weight}."""
     try:
         conn = _get_conn()
         if not conn:
@@ -1549,8 +1560,24 @@ def get_signal_weights() -> dict[str, int]:
         return {}
 
 
-def update_signal_weight(signal_name: str, new_weight: int, reason: str) -> None:
-    """Update a signal's weight in the DB."""
+def get_signal_weights_full() -> dict[str, dict]:
+    """Read current + default weights. Returns {signal_name: {current, default}}."""
+    try:
+        conn = _get_conn()
+        if not conn:
+            return {}
+        with conn.cursor() as cur:
+            cur.execute("SELECT signal_name, current_weight, default_weight FROM signal_weights")
+            return {row[0]: {"current": row[1], "default": row[2]} for row in cur.fetchall()}
+    except Exception as e:
+        logger.debug(f"get_signal_weights_full failed (non-fatal): {e}")
+        return {}
+
+
+def update_signal_weight(signal_name: str, new_weight: int, reason: str,
+                         old_weight: int | None = None, win_rate: float | None = None,
+                         sample_count: int | None = None) -> None:
+    """Update a signal's weight in the DB and append a history row."""
     if TEST_MODE:
         return
     try:
@@ -1558,11 +1585,27 @@ def update_signal_weight(signal_name: str, new_weight: int, reason: str) -> None
         if not conn:
             return
         with conn.cursor() as cur:
+            # Fetch old weight if not provided
+            if old_weight is None:
+                cur.execute("SELECT current_weight FROM signal_weights WHERE signal_name = %s", (signal_name,))
+                row = cur.fetchone()
+                old_weight = row[0] if row else new_weight
+
+            direction = "up" if new_weight > old_weight else "down" if new_weight < old_weight else "flat"
+
             cur.execute("""
                 UPDATE signal_weights
                 SET current_weight = %s, last_adjusted = CURRENT_DATE, adjustment_reason = %s
                 WHERE signal_name = %s
             """, (new_weight, reason, signal_name))
+
+            cur.execute("""
+                INSERT INTO signal_weight_history
+                    (signal_name, old_weight, new_weight, direction, win_rate, sample_count)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (signal_name, old_weight, new_weight, direction, win_rate, sample_count))
+
+        conn.commit()
     except Exception as e:
         logger.debug(f"update_signal_weight failed (non-fatal): {e}")
 
