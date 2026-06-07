@@ -219,12 +219,26 @@ async def _run_stream() -> None:
                 ping_interval=30,
                 ping_timeout=60,
             ) as ws:
+                # Wait for server's "connected" handshake before sending auth.
+                # Alpaca times out auth if we send before the server is ready.
+                raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                msgs = json.loads(raw) if isinstance(json.loads(raw), list) else [json.loads(raw)]
+                if not any(m.get("T") == "connected" for m in msgs):
+                    logger.warning("News stream: expected connected msg, got %s", raw[:100])
+
                 # Auth
                 await ws.send(json.dumps({
                     "action": "auth",
                     "key":    settings.alpaca_api_key,
                     "secret": settings.alpaca_secret_key,
                 }))
+
+                # Wait for authenticated confirmation before subscribing
+                raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                msgs = json.loads(raw) if isinstance(json.loads(raw), list) else [json.loads(raw)]
+                if any(m.get("T") == "error" for m in msgs):
+                    err = next(m for m in msgs if m.get("T") == "error")
+                    raise RuntimeError(f"Auth rejected: {err}")
 
                 # Subscribe to all news
                 await ws.send(json.dumps({
