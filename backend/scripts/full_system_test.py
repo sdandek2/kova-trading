@@ -433,29 +433,33 @@ if should_run("risk"):
         rsi = compute_rsi(prices)
         check("RSI computes",           rsi is not None and 0 <= rsi <= 100, f"RSI={rsi:.1f}")
 
-        # Position sizing
+        # Position sizing — signature: (portfolio_value, max_position_pct, current_price, atr, risk_per_trade_pct)
         qty = volatility_adjusted_quantity(
-            equity=100_000, price=150.0, atr=3.0,
-            risk_pct=0.01, max_position_pct=0.05
+            portfolio_value=100_000, max_position_pct=0.05,
+            current_price=150.0, atr=3.0, risk_per_trade_pct=0.01,
         )
         check("Position sizing returns qty", qty > 0, f"qty={qty}")
         position_value = qty * 150.0
         check("Position ≤ 5% of equity",
-              position_value <= 100_000 * 0.05 * 1.01,  # 1% tolerance
+              position_value <= 100_000 * 0.05 * 1.01,
               f"${position_value:.0f} of $100k")
 
-        # Circuit breaker imports
-        from services.trading_engine import _load_risk_settings
-        risk = _load_risk_settings()
-        check("Risk settings load",     isinstance(risk, dict))
-        check("Daily loss limit set",   "daily_loss_limit_pct" in risk,
-              f"{risk.get('daily_loss_limit_pct')}%")
-        check("Stop loss pct set",      "stop_loss_pct" in risk,
-              f"{risk.get('stop_loss_pct')*100:.0f}%")
-        check("Take profit pct set",    "take_profit_pct" in risk,
-              f"{risk.get('take_profit_pct')*100:.0f}%")
-        check("Max trades/cycle set",   "max_trades_per_cycle" in risk,
-              str(risk.get("max_trades_per_cycle")))
+        # Circuit breaker — load risk settings (requires Railway env; skipped locally)
+        try:
+            from services.trading_engine import _load_risk_settings
+            risk = _load_risk_settings()
+            check("Risk settings load",     isinstance(risk, dict))
+            check("Daily loss limit set",   "daily_loss_limit_pct" in risk,
+                  f"{risk.get('daily_loss_limit_pct')}%")
+            check("Stop loss pct set",      "stop_loss_pct" in risk,
+                  f"{risk.get('stop_loss_pct')*100:.0f}%")
+            check("Take profit pct set",    "take_profit_pct" in risk,
+                  f"{risk.get('take_profit_pct')*100:.0f}%")
+            check("Max trades/cycle set",   "max_trades_per_cycle" in risk,
+                  str(risk.get("max_trades_per_cycle")))
+        except Exception as _re:
+            check("Risk settings load", False,
+                  f"{_re} (run on Railway for full check)")
 
     except Exception as e:
         check("Risk management", False, str(e))
