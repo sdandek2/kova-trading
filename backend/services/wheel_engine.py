@@ -59,6 +59,7 @@ ASSIGNMENT_CALL_BUFFER = float(_os.environ.get("WHEEL_CALL_BUFFER",    "0.05")) 
 #   Contract 2: close when premium remaining = 25% → rides theta to near-zero
 PROFIT_TIER_1 = float(_os.environ.get("WHEEL_PROFIT_TIER_1", "0.50"))
 PROFIT_TIER_2 = float(_os.environ.get("WHEEL_PROFIT_TIER_2", "0.25"))
+EARLY_CLOSE_THRESHOLD = PROFIT_TIER_1   # alias for backward-compat (tests + status endpoint)
 
 # IV Rank filter — only enter when options are genuinely expensive
 MIN_IV_RANK     = float(_os.environ.get("WHEEL_MIN_IV_RANK",     "30"))  # 0-100 scale
