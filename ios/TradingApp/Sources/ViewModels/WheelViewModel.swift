@@ -43,7 +43,7 @@ final class WheelViewModel: ObservableObject {
             struct ScanResponse: Decodable {
                 let opportunities: [WheelOpportunity]
             }
-            let resp: ScanResponse = try await api.fetch("/wheel/scan")
+            let resp: ScanResponse = try await api.fetch("/wheel/scan", timeout: 60)
             opportunities = resp.opportunities
         } catch {
             errorMessage = "Scan failed: \(error.localizedDescription)"
@@ -60,7 +60,7 @@ final class WheelViewModel: ObservableObject {
                 let status: String
                 let message: String
             }
-            let resp: CycleResponse = try await api.fetch("/wheel/execute", method: "POST")
+            let resp: CycleResponse = try await api.fetch("/wheel/execute", method: "POST", timeout: 90)
             cycleResult = resp.message
             showCycleResult = true
             // Reload status after cycle
@@ -82,7 +82,8 @@ final class WheelViewModel: ObservableObject {
             }
             let resp: UniverseRefreshResponse = try await api.fetch(
                 "/wheel/universe/refresh",
-                method: "POST"
+                method: "POST",
+                timeout: 60
             )
             cycleResult = resp.message
             showCycleResult = true
