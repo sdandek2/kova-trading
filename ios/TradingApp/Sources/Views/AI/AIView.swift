@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AIView: View {
     @StateObject private var vm = TradingViewModel()
+    @StateObject private var insightsVM = InsightsViewModel()
     @State private var circuitBreakerDayPl: Double? = nil
     @State private var circuitBreakerLimit: Double = 3.0
     @State private var cycleIntervalSeconds: Int = 600  // default 10 min, refreshed on load
@@ -41,6 +42,12 @@ struct AIView: View {
 
                             // ── Real-time bot activity log ──
                             BotActivityView()
+
+                            // ── Signal Intelligence — weight tracker ──
+                            SignalWeightsView(vm: insightsVM)
+
+                            // ── Connector Health — failure rate monitor ──
+                            ConnectorHealthView(vm: insightsVM)
 
                             // ── Reports & History ──
                             HStack(spacing: 12) {
@@ -176,6 +183,8 @@ struct AIView: View {
                 cycleIntervalSeconds = settings.cycle_interval_seconds
             }
             await loadRecentDecisions()
+            await insightsVM.loadSignalWeights()
+            await insightsVM.loadConnectorHealth()
         }
         .onReceive(NotificationCenter.default.publisher(for: .circuitBreakerFired)) { note in
             if let dayPl = note.userInfo?["day_pl_percent"] as? Double {

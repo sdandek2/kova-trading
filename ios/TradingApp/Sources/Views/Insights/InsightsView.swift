@@ -69,17 +69,6 @@ struct InsightsView: View {
                         }
                     }
                 }
-
-                Divider().padding(.horizontal)
-
-                // Signal Intelligence — weight tracker
-                SignalWeightsView(vm: vm)
-
-                Divider().padding(.horizontal)
-
-                // Connector Health — failure rate monitor
-                ConnectorHealthView(vm: vm)
-                    .padding(.vertical)
             }
             .navigationTitle("Insights")
             .navigationDestination(isPresented: $showPrediction) {
