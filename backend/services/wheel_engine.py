@@ -694,50 +694,92 @@ def _add_to_profit_reserve_if_configured(amount: float):
 
 # ── Full cycle ─────────────────────────────────────────────────────────────────
 
+_LAST_SCAN_KEY = "wheel:last_scan_date"   # cache key — tracks when we last placed new puts
+SCAN_MAX_GAP_DAYS = 4                      # if no scan in 4+ days and market is open → scan today
+
+
+def _should_scan_today() -> bool:
+    """
+    Scan on Mon + Wed normally.
+    But if Monday was a holiday (or any scan day missed), scan on the
+    next open day automatically — never go more than SCAN_MAX_GAP_DAYS without scanning.
+    This means Tuesday after a Monday holiday = scan day.
+    """
+    try:
+        from services.db import cache_get
+        last_scan = cache_get(_LAST_SCAN_KEY)   # stored as "YYYY-MM-DD"
+        if not last_scan:
+            return True   # never scanned before → scan now
+        last = date.fromisoformat(str(last_scan))
+        gap = (date.today() - last).days
+        if gap >= SCAN_MAX_GAP_DAYS:
+            logger.info(f"Wheel: {gap} days since last scan (>{SCAN_MAX_GAP_DAYS}) → scanning today")
+            return True
+    except Exception:
+        return True   # on error → scan to be safe
+
+    # Normal schedule: Mon (0) and Wed (2)
+    weekday = datetime.now(timezone.utc).weekday()
+    return weekday in (0, 2)
+
+
+def _record_scan_date():
+    try:
+        from services.db import cache_set
+        cache_set(_LAST_SCAN_KEY, str(date.today()), 30 * 24 * 3600)
+    except Exception:
+        pass
+
+
 def run_wheel_cycle():
     """
-    Fully automatic. Called by scheduler:
-      Mon-Fri 9:45 AM ET → check profit targets, assignments, expirations
-      Mon + Wed only     → scan + place new puts (if market open)
+    Fully automatic. Called by scheduler Mon-Fri 9:45 AM ET.
 
-    Holiday/half-day safe: checks Alpaca market clock before any trade.
-    If market is closed, skips all order placement silently.
+    Every day:  check expirations, profit targets, assignments
+    Scan days:  place new puts — Mon + Wed normally,
+                OR next open day if previous scan day was a holiday.
+                Gap cap: never go more than 4 calendar days without scanning.
+
+    Holiday/half-day safe: checks Alpaca market clock before any order.
+    If market closed → skips all orders silently, logs next open time.
     """
     is_open = _market_is_open()
-    weekday = datetime.now(timezone.utc).weekday()  # 0=Mon
+    logger.info(f"Wheel cycle starting — market_open={is_open}")
 
-    logger.info(f"Wheel cycle starting — market_open={is_open}, weekday={weekday}")
-
-    # Always run these (they just read DB / check Alpaca positions — no orders)
+    # Always run (read-only DB checks, no orders needed)
     try:
         check_expirations()
     except Exception as e:
         logger.error(f"Wheel expirations: {e}")
 
-    # Assignment check and order placement only when market is open
-    if is_open:
-        try:
-            check_profit_targets()
-        except Exception as e:
-            logger.error(f"Wheel profit targets: {e}")
-
-        try:
-            check_assignments()
-        except Exception as e:
-            logger.error(f"Wheel assignments: {e}")
-
-        # New puts: Mon + Wed only
-        if weekday in (0, 2):
-            try:
-                opps = scan_opportunities()
-                slots = MAX_ACTIVE_POSITIONS - len(get_active_wheel_positions())
-                for opp in opps[:min(2, slots)]:
-                    execute_put(opp)
-            except Exception as e:
-                logger.error(f"Wheel scan+execute: {e}")
-    else:
+    if not is_open:
         next_open = _next_market_open()
         logger.info(f"Wheel: market closed — skipping orders. Next open: {next_open}")
+        return
+
+    try:
+        check_profit_targets()
+    except Exception as e:
+        logger.error(f"Wheel profit targets: {e}")
+
+    try:
+        check_assignments()
+    except Exception as e:
+        logger.error(f"Wheel assignments: {e}")
+
+    # Scan + place new puts — Mon/Wed or make-up day after holiday
+    if _should_scan_today():
+        try:
+            opps = scan_opportunities()
+            slots = MAX_ACTIVE_POSITIONS - len(get_active_wheel_positions())
+            placed = 0
+            for opp in opps[:min(2, slots)]:
+                if execute_put(opp):
+                    placed += 1
+            _record_scan_date()   # record even if no slots — prevents repeated scanning
+            logger.info(f"Wheel scan complete: {placed} puts placed, {len(opps)} opportunities found")
+        except Exception as e:
+            logger.error(f"Wheel scan+execute: {e}")
 
     logger.info("Wheel cycle complete")
 

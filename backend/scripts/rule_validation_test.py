@@ -1143,6 +1143,20 @@ if should_run("wheel"):
         "market guard present",
     )
 
+    # ── 12m. Holiday make-up scan logic exists ────────────────────────────────
+    check(
+        "Holiday make-up scan: gap cap prevents missing scan on Monday holiday",
+        "SCAN_MAX_GAP_DAYS" in wheel_src and "_should_scan_today" in wheel_src,
+        "gap cap logic present",
+    )
+
+    # ── 12n. Last scan date is recorded after each scan ───────────────────────
+    check(
+        "Scan date recorded to prevent repeated scanning same day",
+        "_record_scan_date" in wheel_src,
+        "record present",
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
