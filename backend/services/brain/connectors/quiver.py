@@ -31,6 +31,9 @@ _CACHE_TTL = 86_400
 
 # Daily circuit breaker — stop calling Yahoo after first 429, reset next day
 _blocked_date: date | None = None
+# Safety: if any error repeats 10+ times consecutively, back off for the day
+_consecutive_errors: int = 0
+_CONSECUTIVE_ERROR_LIMIT = 10
 
 _cache: dict[str, tuple[dict, float]] = {}
 
@@ -68,7 +71,7 @@ def get_darkpool_signal(symbol: str) -> dict:
           "details": str
         }
     """
-    global _blocked_date
+    global _blocked_date, _consecutive_errors
 
     cached = _cache.get(symbol)
     if cached and time.time() < cached[1]:
@@ -88,10 +91,19 @@ def get_darkpool_signal(symbol: str) -> dict:
     try:
         result = _fetch_institutional_data(symbol)
         if result.get("signal") != "unavailable":
+            _consecutive_errors = 0  # successful fetch — reset counter
             logger.info("yfinance institutional %s: %s", symbol, result.get("details", "ok"))
         else:
+            _consecutive_errors += 1
+            if _consecutive_errors >= _CONSECUTIVE_ERROR_LIMIT:
+                _blocked_date = date.today()
+                logger.warning(
+                    f"yfinance: {_consecutive_errors} consecutive failures — "
+                    f"circuit breaker engaged for today"
+                )
             logger.debug("yfinance institutional %s unavailable: %s", symbol, result.get("details", ""))
     except Exception as e:
+        _consecutive_errors += 1
         logger.warning("yfinance institutional %s error: %s", symbol, e)
         result = _unavailable(str(e))
 
