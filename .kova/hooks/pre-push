@@ -8,7 +8,7 @@ TEST_SCRIPT="$BACKEND_DIR/scripts/rule_validation_test.py"
 echo ""
 echo "🔍 Running Kova rule validation..."
 
-cd "$BACKEND_DIR" && python "$TEST_SCRIPT"
+cd "$BACKEND_DIR" && python3 "$TEST_SCRIPT"
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
