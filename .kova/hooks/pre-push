@@ -1,0 +1,25 @@
+#!/bin/bash
+# Kova pre-push hook — runs rule_validation_test.py before every push
+# Blocks push if any rule validation fails. Takes ~5 seconds.
+
+BACKEND_DIR="$(git rev-parse --show-toplevel)/backend"
+TEST_SCRIPT="$BACKEND_DIR/scripts/rule_validation_test.py"
+
+echo ""
+echo "🔍 Running Kova rule validation..."
+
+cd "$BACKEND_DIR" && python "$TEST_SCRIPT"
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo ""
+    echo "❌ Rule validation FAILED — push blocked."
+    echo "   Fix the failing checks above, then push again."
+    echo ""
+    exit 1
+fi
+
+echo ""
+echo "✅ Rule validation passed — pushing."
+echo ""
+exit 0
