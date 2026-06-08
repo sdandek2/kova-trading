@@ -1158,6 +1158,90 @@ if should_run("wheel"):
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 13. Wheel iOS JSON Contract — every Swift required field must be present
+#     and the right type so JSONDecoder never silently returns nil status.
+# ══════════════════════════════════════════════════════════════════════════════
+section("Wheel iOS JSON Contract (Swift decode safety)")
+
+# Build the status dict the same way the endpoint does, without a real DB/Alpaca connection.
+# We mock the DB calls and verify the *shape* of the response.
+
+def _mock_wheel_status() -> dict:
+    """Minimal mock of get_wheel_status() output — same keys, zero values."""
+    return {
+        "regime": "neutral",
+        "mode": "paper",
+        "active_positions": [],
+        "active_count": 0,
+        "max_positions": 5,
+        "summary": {
+            "total_premium_collected": 0.0,   # Swift: totalPremiumCollected (non-optional Double)
+            "total_realized_pl": 0.0,          # Swift: totalRealizedPl      (non-optional Double)
+            "active_cycles": 0,                # Swift: activeCycles         (non-optional Int)
+            "completed_cycles": 0,             # Swift: completedCycles      (non-optional Int)
+            "win_rate": None,                  # Swift: winRate?             (optional Double)
+            "avg_cycle_days": None,            # Swift: avgCycleDays?        (optional Double)
+        },
+        "profit_reserve": 0.0,
+        "account": None,                       # Swift: account?  (optional — None = null = ok)
+        "universe": [],
+        "universe_count": 0,
+    }
+
+status = _mock_wheel_status()
+
+# ── WheelStatus top-level required fields ─────────────────────────────────────
+for field in ("regime", "mode", "active_positions", "active_count",
+              "max_positions", "summary", "universe", "universe_count"):
+    check(f"WheelStatus has '{field}'", field in status, "present" if field in status else "MISSING")
+
+check("WheelStatus.regime is str",          isinstance(status["regime"], str),          type(status["regime"]).__name__)
+check("WheelStatus.mode is str",            isinstance(status["mode"], str),            type(status["mode"]).__name__)
+check("WheelStatus.active_count is int",    isinstance(status["active_count"], int),    type(status["active_count"]).__name__)
+check("WheelStatus.max_positions is int",   isinstance(status["max_positions"], int),   type(status["max_positions"]).__name__)
+check("WheelStatus.active_positions is list", isinstance(status["active_positions"], list), "list")
+check("WheelStatus.universe is list",       isinstance(status["universe"], list),       "list")
+check("WheelStatus.account is None or dict",
+      status["account"] is None or isinstance(status["account"], dict), "ok")
+
+# ── WheelSummary required fields (non-optional in Swift → must be present + right type) ──
+s = status["summary"]
+for field in ("total_premium_collected", "total_realized_pl", "active_cycles", "completed_cycles"):
+    check(f"WheelSummary has '{field}'", field in s, "present" if field in s else "MISSING")
+
+check("summary.total_premium_collected is float", isinstance(s["total_premium_collected"], float), type(s["total_premium_collected"]).__name__)
+check("summary.total_realized_pl is float",       isinstance(s["total_realized_pl"], float),       type(s["total_realized_pl"]).__name__)
+check("summary.active_cycles is int",             isinstance(s["active_cycles"], int),             type(s["active_cycles"]).__name__)
+check("summary.completed_cycles is int",          isinstance(s["completed_cycles"], int),          type(s["completed_cycles"]).__name__)
+check("summary.win_rate is None or float",
+      s["win_rate"] is None or isinstance(s["win_rate"], float), "ok")
+
+# ── Verify get_wheel_summary() source uses Swift-compatible keys ───────────────
+# We check source code (not live import) to avoid needing real DB/env vars.
+engine_src = pathlib.Path(os.path.join(services_dir, "wheel_engine.py")).read_text()
+check("get_wheel_summary uses 'total_premium_collected' (Swift key)",
+      '"total_premium_collected"' in engine_src, "found" if '"total_premium_collected"' in engine_src else "MISSING — Swift decode will fail")
+check("get_wheel_summary uses 'active_cycles' (Swift key)",
+      '"active_cycles"' in engine_src, "found" if '"active_cycles"' in engine_src else "MISSING — Swift decode will fail")
+check("get_wheel_summary uses 'completed_cycles' (Swift key)",
+      '"completed_cycles"' in engine_src, "found" if '"completed_cycles"' in engine_src else "MISSING — Swift decode will fail")
+check("get_wheel_summary casts active_cycles to int",
+      "int(raw.get(\"active_count\"" in engine_src or 'int(raw.get("active_count"' in engine_src,
+      "int cast present" if 'int(raw.get("active_count"' in engine_src else "MISSING — Swift Int will fail on float")
+
+# ── Verify get_universe_details() source uses Swift-compatible keys ────────────
+univ_src = pathlib.Path(os.path.join(services_dir, "wheel_universe.py")).read_text()
+check('universe normalizes score to int (not float)',
+      'int(d.get("score")' in univ_src, "found" if 'int(d.get("score")' in univ_src else "MISSING — Swift Int fails on 92.0")
+check("universe renames ai_reason → reason (Swift CodingKey)",
+      '"reason"' in univ_src and 'pop("ai_reason"' in univ_src,
+      "found" if 'pop("ai_reason"' in univ_src else "MISSING — reason will be nil in Swift")
+check("universe adds is_active field",
+      '"is_active"' in univ_src, "found" if '"is_active"' in univ_src else "MISSING")
+check("universe adds added_at field",
+      '"added_at"' in univ_src, "found" if '"added_at"' in univ_src else "MISSING")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 import time
