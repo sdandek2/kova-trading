@@ -43,11 +43,35 @@ struct AIView: View {
                             // ── Real-time bot activity log ──
                             BotActivityView()
 
-                            // ── Signal Intelligence — weight tracker ──
-                            SignalWeightsView(vm: insightsVM)
-
-                            // ── Connector Health — failure rate monitor ──
-                            ConnectorHealthView(vm: insightsVM)
+                            // ── Signal Intelligence + Connector Health ──
+                            NavigationLink {
+                                ScrollView {
+                                    VStack(spacing: 16) {
+                                        SignalWeightsView(vm: insightsVM)
+                                        ConnectorHealthView(vm: insightsVM)
+                                    }
+                                    .padding()
+                                }
+                                .navigationTitle("Signal Intelligence")
+                                .task {
+                                    await insightsVM.loadSignalWeights()
+                                    await insightsVM.loadConnectorHealth()
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "waveform.path.ecg")
+                                    Text("Signal Intelligence")
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(14)
+                            }
+                            .foregroundColor(.primary)
 
                             // ── Reports & History ──
                             HStack(spacing: 12) {
@@ -183,8 +207,6 @@ struct AIView: View {
                 cycleIntervalSeconds = settings.cycle_interval_seconds
             }
             await loadRecentDecisions()
-            await insightsVM.loadSignalWeights()
-            await insightsVM.loadConnectorHealth()
         }
         .onReceive(NotificationCenter.default.publisher(for: .circuitBreakerFired)) { note in
             if let dayPl = note.userInfo?["day_pl_percent"] as? Double {
