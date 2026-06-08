@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KOVA — Features & Rules Reference</title>
+<title>KOVA — Rules Reference 2026</title>
 <style>
   :root {
     --bg: #0d0f14;
@@ -146,11 +146,17 @@
 <body>
 
 <header>
-  <h1>⚡ KOVA — Features &amp; Rules Reference</h1>
-  <p>Complete system rules, thresholds, and logic — auto-derived from codebase · June 2026</p>
+  <h1>⚡ KOVA — Rules Reference</h1>
+  <p>Complete system rules, thresholds, and next-gen blueprint · Updated 2026-06-08</p>
 </header>
 
 <nav class="toc">
+  <a href="#status">Status</a>
+  <a href="#books">4 Books</a>
+  <a href="#golive">Go-Live</a>
+  <a href="#envs">Environments</a>
+  <a href="#timeline">Timeline</a>
+  <a href="#rules">Rules</a>
   <a href="#signals">Signal Scoring</a>
   <a href="#regime">Regime Detection</a>
   <a href="#data-sources">Data Sources</a>
@@ -167,6 +173,139 @@
 </nav>
 
 <main>
+
+<!-- ═══════════════════════════════ STATUS ══════════════════════════════════════ -->
+<section id="status">
+  <h2>📡 Current Status</h2>
+  <div class="grid-3">
+    <div class="card"><div class="card-title">✅ Paper Trading</div><p>Live on Railway — running every 10 min during market hours</p></div>
+    <div class="card"><div class="card-title">✅ Signal Weights</div><p>Self-tuning weekly via Sunday sprint review</p></div>
+    <div class="card"><div class="card-title">✅ Connector Health</div><p>Monitoring all 13 connectors + iOS push alerts</p></div>
+    <div class="card"><div class="card-title">✅ iOS Dashboard</div><p>Signal Intelligence + Connector Health in AI Agent tab</p></div>
+    <div class="card"><div class="card-title">⏳ Month 1 Improvements</div><p>Confluence sizing, trailing stops, entry windows — not yet started</p></div>
+    <div class="card"><div class="card-title">⏳ India Book</div><p>Designed (Zerodha + PaperBrokerIndia) — not yet built</p></div>
+    <div class="card"><div class="card-title">📅 Go-Live Decision</div><p>~2026-07-07 (Day 30) — win rate check</p></div>
+    <div class="card"><div class="card-title">🔴 Crypto Book</div><p>Planned Month 4-5</p></div>
+    <div class="card"><div class="card-title">🔴 DEV/STAGING</div><p>Second Railway service not yet set up</p></div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ 4 BOOKS ══════════════════════════════════════ -->
+<section id="books">
+  <h2>📚 4 Trading Books (24/7 Coverage)</h2>
+  <p style="color:var(--muted); margin-bottom:16px">India closes → US opens → Crypto fills gaps. Zero overlap between India and US sessions.</p>
+  <table>
+    <thead><tr><th>Book</th><th>Hours (ET)</th><th>Broker</th><th>AI</th><th>Universe</th><th>Target Win Rate</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><strong>1 — US Equities</strong></td><td>9:30 AM – 4:00 PM</td><td>Alpaca</td><td>Claude Sonnet</td><td>20-30 stocks</td><td><span class="badge badge-green">M12: 85-90% → M24: 90%</span></td><td><span class="badge badge-green">Live (paper)</span></td></tr>
+      <tr><td><strong>2 — US Options</strong></td><td>9:30 AM – 4:00 PM</td><td>Alpaca</td><td>Claude Sonnet</td><td>Conviction routing</td><td><span class="badge badge-green">M12: 80-85% → M24: 85-88%</span></td><td><span class="badge badge-yellow">Month 3-4</span></td></tr>
+      <tr><td><strong>3 — India (Zerodha)</strong></td><td>11:45 PM – 6:00 AM</td><td>Zerodha (Kite)</td><td>Gemini Flash (thinking:OFF) → Claude Haiku → Sonnet</td><td>Nifty 50 + BankNifty options</td><td><span class="badge badge-yellow">M12: 72-78% → M24: 85%+</span></td><td><span class="badge badge-yellow">Staging Month 1</span></td></tr>
+      <tr><td><strong>4 — Crypto</strong></td><td>24/7/365</td><td>Alpaca Crypto</td><td>Claude Haiku</td><td>BTC + ETH (≤15% portfolio)</td><td><span class="badge badge-yellow">M12: 72-78% → M24: 80-85%</span></td><td><span class="badge badge-red">Month 4-5</span></td></tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <div class="card-title">Revenue Targets (realistic)</div>
+    <table>
+      <thead><tr><th>Milestone</th><th>Win Rate</th><th>Monthly P&amp;L</th><th>Key Levers</th></tr></thead>
+      <tbody>
+        <tr><td>Month 3</td><td>US: 68-73%</td><td>$3k–$10k</td><td>Confluence sizing + trailing stops</td></tr>
+        <tr><td>Month 6</td><td>US: 78-82% · India: 60-65% · Crypto: 60-65%</td><td>$8k–$25k</td><td>Options firing + India live + crypto</td></tr>
+        <tr><td>Month 12</td><td>US: 85-90% · India: 72-78% · Crypto: 72-78%</td><td>$25k–$80k</td><td>Full adaptive system + all 4 books compounding</td></tr>
+        <tr><td>Month 24</td><td>All books: 85-90%+</td><td>$80k–$150k+</td><td>Full market cycle learned, all books at peak</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ GO-LIVE ═══════════════════════════════════════ -->
+<section id="golive">
+  <h2>🚀 Go-Live Rules</h2>
+  <table>
+    <thead><tr><th>Day</th><th>Date</th><th>Condition</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>Day 30</td><td>~2026-07-07</td><td>Win rate &gt;60% + no crashes + MaxDD &lt;10%</td><td><span class="badge badge-green">Deploy $10k live</span></td></tr>
+      <tr><td>Day 30</td><td>~2026-07-07</td><td>Win rate 55-60%</td><td><span class="badge badge-yellow">Wait for Day 60</span></td></tr>
+      <tr><td>Day 30</td><td>~2026-07-07</td><td>Win rate &lt;55%</td><td><span class="badge badge-red">Investigate — something broken</span></td></tr>
+      <tr><td>Day 45</td><td>~2026-07-22</td><td>Still &gt;60%</td><td><span class="badge badge-green">Add $15k → total $25k deployed</span></td></tr>
+      <tr><td>Day 60</td><td>~2026-08-06</td><td>Sharpe &gt;1.5 sustained</td><td><span class="badge badge-purple">Scale beyond $25k</span></td></tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <div class="card-title">India Go-Live Stages</div>
+    <table>
+      <thead><tr><th>Stage</th><th>When</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Stage 1</td><td>Now → Month 2</td><td>STAGING only, paper, Gemini Flash</td></tr>
+        <tr><td>Stage 2</td><td>Month 2 (30-day paper proof)</td><td>Promote to PROD infra, still paper mode</td></tr>
+        <tr><td>Stage 3</td><td>Month 3 (win rate ≥55%)</td><td>Flip <code>india_paper_mode=False</code> → deploy ₹500k (~$6k)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ ENVIRONMENTS ══════════════════════════════════ -->
+<section id="envs">
+  <h2>🌐 DEV → STAGING → PROD Pipeline</h2>
+  <div class="card">
+    <p style="margin-bottom:12px"><strong>Railway:</strong> same project, two Services (prod + staging), different branch + env vars. Zero extra cost.</p>
+    <table>
+      <thead><tr><th>Setting</th><th>DEV (local)</th><th>STAGING (Railway)</th><th>PROD (Railway)</th></tr></thead>
+      <tbody>
+        <tr><td>Branch</td><td>feature/*</td><td>staging</td><td>main</td></tr>
+        <tr><td>US Broker</td><td>Alpaca paper</td><td>Alpaca paper</td><td><span class="badge badge-green">Alpaca live</span></td></tr>
+        <tr><td>India Broker</td><td>PaperBrokerIndia</td><td>PaperBrokerIndia</td><td>Zerodha live</td></tr>
+        <tr><td>AI — US books</td><td>Claude Haiku</td><td>Claude Haiku</td><td>Claude Sonnet</td></tr>
+        <tr><td>AI — India book</td><td>Gemini Flash (thinking:OFF)</td><td>Gemini Flash (thinking:OFF)</td><td>Gemini Flash→Claude Haiku→Sonnet</td></tr>
+        <tr><td>AI — Crypto book</td><td>Claude Haiku</td><td>Claude Haiku</td><td>Claude Haiku</td></tr>
+        <tr><td>DB</td><td>Local Postgres</td><td>Staging Postgres</td><td>Prod Postgres</td></tr>
+        <tr><td>Sentry</td><td>Off</td><td>On</td><td>On</td></tr>
+        <tr><td>india_enabled</td><td>True</td><td>True</td><td>False → True (Stage 2)</td></tr>
+        <tr><td>Proof required</td><td>—</td><td>5 days clean DEV</td><td>14 days staging, win rate ≥ baseline ±2%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-title">Promotion Gate</div>
+    <p style="color:var(--muted); font-size:13px">feature/* → 5 days DEV paper, no crashes → PR to staging → 14 days paper, win rate ≥ baseline ±2%, no MaxDD regression → PR to main → live capital deployed.<br><br>
+    <strong>india_enabled=False default</strong> — all India code completely inert in prod even after deployment until env var explicitly flipped.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════ TIMELINE ══════════════════════════════════════ -->
+<section id="timeline">
+  <h2>📅 12-Month Implementation Timeline</h2>
+  <table>
+    <thead><tr><th>Month</th><th>Target Win Rate</th><th>Key Work</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Month 1</strong></td><td>62-67%</td><td>Confluence position sizing · Trailing stops · Entry windows · Drawdown laddering · India STAGING setup</td></tr>
+      <tr><td><strong>Month 2</strong></td><td>68-72%</td><td>Multi-timeframe regime · Sector rotation tracking · Pullback entry · India FII/DII signals</td></tr>
+      <tr><td><strong>Month 3-4</strong></td><td>73-77%</td><td>Options conviction routing · Earnings event plays · Iron condors · India live (if paper proves)</td></tr>
+      <tr><td><strong>Month 4-5</strong></td><td>76-80%</td><td>Signal correlation matrix · Decay weighting · Dark pool signal · Crypto Book 4 live</td></tr>
+      <tr><td><strong>Month 5-6</strong></td><td>78-82%</td><td>Cross-book risk · 13F flow signal · Claude Sunday optimizer · Tax lot tracking</td></tr>
+      <tr><td><strong>Month 7-9</strong></td><td>80-84%</td><td>AI analyzes losing trades · Short squeeze signal · India ADR correlation · RL agent collecting data</td></tr>
+      <tr><td><strong>Month 9-12</strong></td><td>85-90%</td><td>RL agent tuning · Universe tightened to 10-15 stocks · Tax harvesting (Nov) · Full 24/7 autonomous</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════ NON-NEGOTIABLE RULES ═════════════════════════ -->
+<section id="rules">
+  <h2>⚖️ Non-Negotiable Rules</h2>
+  <div class="card">
+    <div class="rule-row"><span class="rule-icon">🚦</span><div class="rule-text"><strong>Never block trades — only size them down</strong><em>Soft gates always. Confluence reduces size, never kills the trade.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">📈</span><div class="rule-text"><strong>AvgWin must stay greater than AvgLoss</strong><em>Never cut winners to inflate win rate. The ratio matters more than the rate.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">🧪</span><div class="rule-text"><strong>Backtest first for structural changes</strong><em>Regime logic, MACD windows, min_score changes need backtest proof before live.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">🔧</span><div class="rule-text"><strong>Parameter drift is always OK</strong><em>Auto-tuning within guardrails never needs a backtest. It's the system working.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">🛡️</span><div class="rule-text"><strong>Brain has fallback to claude_service</strong><em>Safety net — bot never stops trading if brain errors at any step.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">🚀</span><div class="rule-text"><strong>14-day staging proof before any prod change</strong><em>feature/* → 5 days DEV → 14 days STAGING → main. No exceptions.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">🇮🇳</span><div class="rule-text"><strong>india_enabled=False default</strong><em>All India code completely inert in prod until env var explicitly flipped.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">💰</span><div class="rule-text"><strong>Never deploy full capital in one shot</strong><em>Day 30 → $10k. Day 45 → +$15k. Scale at Day 60+.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">📋</span><div class="rule-text"><strong>Every decision is logged</strong><em>Full audit trail. signal_performance_log, connector_health_log, signal_weight_history.</em></div></div>
+    <div class="rule-row"><span class="rule-icon">📱</span><div class="rule-text"><strong>iOS override always available</strong><em>Manual parameter values lock for 7 days. Human always in control.</em></div></div>
+  </div>
+</section>
+
+<hr class="divider">
 
 <!-- ═══════════════════════════════ SIGNAL SCORING ══════════════════════════════ -->
 <section id="signals">
