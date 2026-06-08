@@ -10,7 +10,7 @@ struct ConnectorHealth: Decodable, Identifiable {
     let failurePct: Int
     let lastCalled: String?
     let lastError: String?
-    let keyMissing: Bool
+    let keyMissing: Bool?
 
     enum CodingKeys: String, CodingKey {
         case connectorName = "connector_name"
