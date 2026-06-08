@@ -46,7 +46,7 @@ import os as _os
 
 MAX_ACTIVE_POSITIONS   = int(_os.environ.get("WHEEL_MAX_POSITIONS",    "5"))    # scale up as capital grows
 CONTRACTS_PER_TRADE    = int(_os.environ.get("WHEEL_CONTRACTS",        "2"))    # tiered close strategy
-MIN_PREMIUM_YIELD      = float(_os.environ.get("WHEEL_MIN_YIELD",      "0.015")) # 1.5% min yield/strike
+MIN_PREMIUM_YIELD      = float(_os.environ.get("WHEEL_MIN_YIELD",      "0.008")) # 0.8% min yield/strike (bear: defensive stocks have lower IV)
 TARGET_DTE             = int(_os.environ.get("WHEEL_TARGET_DTE",       "45"))   # sweet spot for theta
 MIN_DTE                = int(_os.environ.get("WHEEL_MIN_DTE",          "21"))   # never inside 21 DTE
 MAX_DTE                = int(_os.environ.get("WHEEL_MAX_DTE",          "60"))   # never beyond 60 DTE
@@ -505,7 +505,7 @@ def scan_opportunities() -> list[dict]:
                 try:
                     strike = float(contract.strike_price)
                     ratio = strike / stock_price
-                    if not (0.80 <= ratio <= 0.97):
+                    if not (0.75 <= ratio <= 0.97):
                         continue
 
                     snap = opts_client.get_option_snapshot(
