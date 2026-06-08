@@ -55,6 +55,11 @@ def check_and_alert(manager=None) -> list[dict]:
         row_72 = health_72h.get(connector)
         row_48 = health_48h.get(connector)
 
+        # Key not configured — expected, not a failure. Show in dashboard but don't alert.
+        if row_48 and row_48.get("key_missing") and row_48.get("total_calls", 0) == 0:
+            logger.debug(f"CONNECTOR_NO_KEY: {connector} — API key not set, skipping health check")
+            continue
+
         # Silent — connector not firing at all
         if not row_48 or row_48["total_calls"] == 0:
             issue = {

@@ -23,10 +23,15 @@ logger = logging.getLogger(__name__)
 _API_BASE = "https://financialmodelingprep.com/stable"
 
 
-def _log_health(result: dict) -> None:
+def _log_health(result: dict, no_key: bool = False) -> None:
     try:
         from services.db import log_connector_call
-        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        if no_key:
+            status = "no_key"
+        elif result.get("signal") == "unavailable":
+            status = "unavailable"
+        else:
+            status = "ok"
         log_connector_call("fmp_earnings", status, result.get("details", ""))
     except Exception:
         pass
@@ -77,6 +82,7 @@ def _refresh_cache() -> None:
     api_key = _get_api_key()
     if not api_key:
         logger.warning("FMP earnings: FMP_API_KEY not set — skipping earnings signal")
+        _log_health({"signal": "unavailable", "details": "FMP_API_KEY not set"}, no_key=True)
         _cache_fetched_at = time.time()
         return
 

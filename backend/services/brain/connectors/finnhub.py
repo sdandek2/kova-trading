@@ -26,10 +26,15 @@ logger = logging.getLogger(__name__)
 _API_BASE = "https://finnhub.io/api/v1"
 
 
-def _log_health(result: dict) -> None:
+def _log_health(result: dict, no_key: bool = False) -> None:
     try:
         from services.db import log_connector_call
-        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        if no_key:
+            status = "no_key"
+        elif result.get("signal") == "unavailable":
+            status = "unavailable"
+        else:
+            status = "ok"
         log_connector_call("finnhub", status, result.get("details", ""))
     except Exception:
         pass
@@ -64,7 +69,7 @@ def get_recommendation_signal(symbol: str) -> dict:
     api_key = _get_api_key()
     if not api_key:
         result = {"signal": "unavailable", "conviction_boost": 0, "details": "FINNHUB_API_KEY not set"}
-        _log_health(result)
+        _log_health(result, no_key=True)
         return result
 
     try:

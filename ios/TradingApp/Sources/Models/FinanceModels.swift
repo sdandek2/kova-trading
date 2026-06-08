@@ -10,6 +10,7 @@ struct ConnectorHealth: Decodable, Identifiable {
     let failurePct: Int
     let lastCalled: String?
     let lastError: String?
+    let keyMissing: Bool
 
     enum CodingKeys: String, CodingKey {
         case connectorName = "connector_name"
@@ -18,12 +19,7 @@ struct ConnectorHealth: Decodable, Identifiable {
         case failurePct = "failure_pct"
         case lastCalled = "last_called"
         case lastError = "last_error"
-    }
-
-    var statusColor: String {
-        if failurePct >= 80 { return "red" }
-        if failurePct >= 40 { return "orange" }
-        return "green"
+        case keyMissing = "key_missing"
     }
 
     var displayName: String {

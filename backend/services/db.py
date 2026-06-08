@@ -1652,11 +1652,18 @@ def get_connector_health(hours: int = 24) -> list[dict]:
             cur.execute("""
                 SELECT
                     connector_name,
-                    COUNT(*) AS total_calls,
-                    SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS failed_calls,
-                    ROUND(SUM(CASE WHEN status != 'ok' THEN 1.0 ELSE 0 END) / COUNT(*) * 100) AS failure_pct,
+                    COUNT(*) FILTER (WHERE status != 'no_key') AS total_calls,
+                    SUM(CASE WHEN status = 'unavailable' OR status = 'error' THEN 1 ELSE 0 END) AS failed_calls,
+                    CASE
+                        WHEN COUNT(*) FILTER (WHERE status != 'no_key') = 0 THEN 0
+                        ELSE ROUND(
+                            SUM(CASE WHEN status IN ('unavailable','error') THEN 1.0 ELSE 0 END)
+                            / COUNT(*) FILTER (WHERE status != 'no_key') * 100
+                        )
+                    END AS failure_pct,
                     MAX(called_at) AS last_called,
-                    MAX(CASE WHEN status != 'ok' THEN details END) AS last_error
+                    MAX(CASE WHEN status IN ('unavailable','error') THEN details END) AS last_error,
+                    BOOL_OR(status = 'no_key') AS key_missing
                 FROM connector_health_log
                 WHERE called_at >= NOW() - INTERVAL '%s hours'
                 GROUP BY connector_name
@@ -1666,11 +1673,12 @@ def get_connector_health(hours: int = 24) -> list[dict]:
             return [
                 {
                     "connector_name": r[0],
-                    "total_calls": r[1],
-                    "failed_calls": r[2],
+                    "total_calls": r[1] or 0,
+                    "failed_calls": r[2] or 0,
                     "failure_pct": int(r[3] or 0),
                     "last_called": r[4].isoformat() if r[4] else None,
                     "last_error": r[5],
+                    "key_missing": bool(r[6]),
                 }
                 for r in rows
             ]

@@ -45,9 +45,10 @@ struct ConnectorHealthView: View {
     }
 
     var overallStatusColor: Color {
-        if vm.connectorHealth.contains(where: { $0.failurePct >= 80 }) { return .red }
-        if vm.connectorHealth.contains(where: { $0.failurePct >= 40 }) { return .orange }
-        if vm.connectorHealth.isEmpty { return .secondary }
+        let active = vm.connectorHealth.filter { !$0.keyMissing }
+        if active.contains(where: { $0.failurePct >= 80 }) { return .red }
+        if active.contains(where: { $0.failurePct >= 40 }) { return .orange }
+        if active.isEmpty { return .secondary }
         return .green
     }
 }
@@ -56,12 +57,14 @@ struct ConnectorHealthRow: View {
     let connector: ConnectorHealth
 
     var statusColor: Color {
+        if connector.keyMissing { return .secondary }
         if connector.failurePct >= 80 { return .red }
         if connector.failurePct >= 40 { return .orange }
         return .green
     }
 
     var statusIcon: String {
+        if connector.keyMissing { return "key.slash" }
         if connector.failurePct >= 80 { return "xmark.circle.fill" }
         if connector.failurePct >= 40 { return "exclamationmark.triangle.fill" }
         return "checkmark.circle.fill"
@@ -75,12 +78,16 @@ struct ConnectorHealthRow: View {
 
             Text(connector.displayName)
                 .font(.subheadline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(connector.keyMissing ? .secondary : .primary)
 
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
-                if connector.totalCalls == 0 {
+                if connector.keyMissing {
+                    Text("No API key")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if connector.totalCalls == 0 {
                     Text("No calls")
                         .font(.caption)
                         .foregroundStyle(.secondary)
