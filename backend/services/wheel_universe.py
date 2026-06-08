@@ -225,12 +225,20 @@ def get_universe_details() -> list[dict]:
                 WHERE active = TRUE
                 ORDER BY score DESC
             """)
-            cols = [d[0] for d in cur.description]
             rows = []
             for row in cur.fetchall():
+                cols = [d[0] for d in cur.description]
                 d = dict(zip(cols, row))
-                if hasattr(d.get("last_refreshed"), "isoformat"):
-                    d["last_refreshed"] = d["last_refreshed"].isoformat()
+                # Normalize for iOS JSON decoding:
+                # score stored as FLOAT in DB → cast to int so Swift Int decodes cleanly
+                d["score"] = int(d.get("score") or 0)
+                # Rename ai_reason → reason to match Swift CodingKey
+                d["reason"] = d.pop("ai_reason", None)
+                # is_active not in query; add it so Swift Optional field has a value
+                d["is_active"] = True
+                # Rename last_refreshed → added_at for Swift CodingKey
+                lr = d.pop("last_refreshed", None)
+                d["added_at"] = lr.isoformat() if hasattr(lr, "isoformat") else lr
                 rows.append(d)
             return rows
     except Exception as e:
