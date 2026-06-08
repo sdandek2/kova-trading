@@ -68,6 +68,11 @@
 		F5E6D7C8B9A0F5E6D7C8B9A0 /* ProfitReserveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A9C8D7E6F5B0A9C8D7E6F5 /* ProfitReserveView.swift */; };
 		F613D4FEA0AB05ED94B16D6A /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98185D223838F12E20232E0F /* Account.swift */; };
 		F9E7890EBA46415D88277DC1 /* Order.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1DFB31D36986CDAD442306 /* Order.swift */; };
+		WH01AA02BB03CC04DD05EE06 /* WheelModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH11AA12BB13CC14DD15EE16 /* WheelModels.swift */; };
+		WH02AA03BB04CC05DD06EE07 /* WheelViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH12AA13BB14CC15DD16EE17 /* WheelViewModel.swift */; };
+		WH03AA04BB05CC06DD07EE08 /* WheelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH13AA14BB15CC16DD17EE18 /* WheelView.swift */; };
+		WH04AA05BB06CC07DD08EE09 /* WheelPositionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */; };
+		WH05AA06BB07CC08DD09EE10 /* WheelUniverseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -134,6 +139,11 @@
 		F2A3B4C5D6E7F2A3B4C5D6E7 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Sources/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
 		FA91403580F7C26E4D7DC85A /* OrdersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OrdersView.swift; path = Sources/Views/Orders/OrdersView.swift; sourceTree = "<group>"; };
 		FCC19DCD9B52FD90768369D9 /* BotControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotControlView.swift; path = Sources/Views/AI/BotControlView.swift; sourceTree = "<group>"; };
+		WH11AA12BB13CC14DD15EE16 /* WheelModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelModels.swift; path = Sources/Models/WheelModels.swift; sourceTree = "<group>"; };
+		WH12AA13BB14CC15DD16EE17 /* WheelViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelViewModel.swift; path = Sources/ViewModels/WheelViewModel.swift; sourceTree = "<group>"; };
+		WH13AA14BB15CC16DD17EE18 /* WheelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelView.swift; path = Sources/Views/Wheel/WheelView.swift; sourceTree = "<group>"; };
+		WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelPositionRowView.swift; path = Sources/Views/Wheel/WheelPositionRowView.swift; sourceTree = "<group>"; };
+		WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelUniverseView.swift; path = Sources/Views/Wheel/WheelUniverseView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -227,6 +237,11 @@
 				296B9E41E949870FF3C92A49 /* NewsView.swift */,
 				556A96BC36DB2577FEA68B16 /* OrderRowView.swift */,
 				FA91403580F7C26E4D7DC85A /* OrdersView.swift */,
+				WH11AA12BB13CC14DD15EE16 /* WheelModels.swift */,
+				WH12AA13BB14CC15DD16EE17 /* WheelViewModel.swift */,
+				WH13AA14BB15CC16DD17EE18 /* WheelView.swift */,
+				WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */,
+				WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */,
 				9788A1872451B15183194D45 /* Sources/Assets.xcassets */,
 				3B61BFC59B1D49ED7380B5EB /* Sources/Info.plist */,
 			);
@@ -364,6 +379,11 @@
 				AA01BB02CC03DD04EE05FF06 /* ModelSettings.swift in Sources */,
 				AA02BB03CC04DD05EE06FF07 /* ModelPickerCard.swift in Sources */,
 				AA03BB04CC05DD06EE07FF08 /* AnalyticsView.swift in Sources */,
+				WH01AA02BB03CC04DD05EE06 /* WheelModels.swift in Sources */,
+				WH02AA03BB04CC05DD06EE07 /* WheelViewModel.swift in Sources */,
+				WH03AA04BB05CC06DD07EE08 /* WheelView.swift in Sources */,
+				WH04AA05BB06CC07DD08EE09 /* WheelPositionRowView.swift in Sources */,
+				WH05AA06BB07CC08DD09EE10 /* WheelUniverseView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

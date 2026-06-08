@@ -26,10 +26,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Price range for wheel candidates — collateral needs to be manageable
-MIN_PRICE = 5.0
-MAX_PRICE = 80.0
-MIN_VOLUME = 1_000_000
+# Price range for wheel candidates — collateral needs to be manageable.
+# These are sensible defaults. Override via Railway env vars:
+#   WHEEL_MIN_PRICE=10  → skip penny stocks as account grows
+#   WHEEL_MAX_PRICE=150 → allow higher-priced stocks as capital scales
+#   WHEEL_MIN_VOLUME=2000000 → tighten liquidity requirement in live mode
+import os
+MIN_PRICE  = float(os.environ.get("WHEEL_MIN_PRICE",  "5.0"))
+MAX_PRICE  = float(os.environ.get("WHEEL_MAX_PRICE",  "80.0"))
+MIN_VOLUME = int(os.environ.get("WHEEL_MIN_VOLUME",   "1000000"))
 
 # ETF/index exclusions — reuse Kova's list + add options-relevant ones
 _WHEEL_EXCLUSIONS = {
@@ -317,8 +322,25 @@ Score 0-100. Return 12-15 stocks only."""
             return []
 
         summary = parsed.get("reasoning_summary", "")
+
+        # Bug #3 fix: enforce minimum score threshold before saving.
+        # AI can return stocks scoring 55-65 — too weak for real collateral.
+        # Scoring: AI assigns 0-100 based on IV richness × liquidity × safety × regime fit.
+        # A score < 60 means the AI itself isn't confident — skip it.
+        MIN_UNIVERSE_SCORE = 60
+        before = len(universe)
+        universe = [s for s in universe if s.get("score", 0) >= MIN_UNIVERSE_SCORE]
+        if len(universe) < before:
+            logger.info(
+                f"Wheel universe: filtered {before - len(universe)} stocks below score {MIN_UNIVERSE_SCORE}"
+            )
+
+        if not universe:
+            logger.error("Wheel universe: no stocks passed min score filter — keeping existing universe")
+            return []
+
         logger.info(
-            f"Wheel universe: AI selected {len(universe)} stocks. "
+            f"Wheel universe: {len(universe)} stocks saved (score ≥ {MIN_UNIVERSE_SCORE}). "
             f"Summary: {summary}"
         )
 

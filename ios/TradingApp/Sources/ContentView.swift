@@ -85,6 +85,11 @@ struct ContentView: View {
                         Label("Insights", systemImage: "lightbulb.fill")
                     }
 
+                WheelView()
+                    .tabItem {
+                        Label("Wheel", systemImage: "arrow.2.circlepath")
+                    }
+
                 SettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gearshape.fill")

@@ -39,14 +39,53 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Execution config ───────────────────────────────────────────────────────────
-MAX_ACTIVE_POSITIONS  = 5      # max concurrent wheel positions
-MIN_PREMIUM_YIELD     = 0.015  # min premium / strike = 1.5%
-MIN_DTE               = 21     # minimum DTE when opening
-MAX_DTE               = 45     # maximum DTE when opening
-TARGET_DELTA          = 0.25   # ~25-delta put
-ASSIGNMENT_CALL_BUFFER = 0.05  # sell covered call 5% above cost basis
-EARLY_CLOSE_THRESHOLD  = 0.50  # buy-to-close when premium decays to 50% of collected
+# ── Execution config ─────────────────────────────────────────────────────────
+# All key params are Railway env-var overridable — change on Railway, no redeploy.
+# Sensible defaults shown. Override via WHEEL_* env vars to tune as account grows.
+import os as _os
+
+MAX_ACTIVE_POSITIONS   = int(_os.environ.get("WHEEL_MAX_POSITIONS",    "5"))    # scale up as capital grows
+CONTRACTS_PER_TRADE    = int(_os.environ.get("WHEEL_CONTRACTS",        "2"))    # tiered close strategy
+MIN_PREMIUM_YIELD      = float(_os.environ.get("WHEEL_MIN_YIELD",      "0.015")) # 1.5% min yield/strike
+TARGET_DTE             = int(_os.environ.get("WHEEL_TARGET_DTE",       "45"))   # sweet spot for theta
+MIN_DTE                = int(_os.environ.get("WHEEL_MIN_DTE",          "21"))   # never inside 21 DTE
+MAX_DTE                = int(_os.environ.get("WHEEL_MAX_DTE",          "60"))   # never beyond 60 DTE
+DTE_FORCE_CLOSE        = int(_os.environ.get("WHEEL_FORCE_CLOSE_DTE",  "21"))   # gamma risk spikes at 21
+TARGET_DELTA           = float(_os.environ.get("WHEEL_TARGET_DELTA",   "0.25")) # ~25-delta put
+ASSIGNMENT_CALL_BUFFER = float(_os.environ.get("WHEEL_CALL_BUFFER",    "0.05")) # covered call 5% above cost
+
+# Tiered profit close (2 contracts per trade):
+#   Contract 1: close when premium remaining = 50% → locked profit, capital freed early
+#   Contract 2: close when premium remaining = 25% → rides theta to near-zero
+PROFIT_TIER_1 = float(_os.environ.get("WHEEL_PROFIT_TIER_1", "0.50"))
+PROFIT_TIER_2 = float(_os.environ.get("WHEEL_PROFIT_TIER_2", "0.25"))
+
+# IV Rank filter — only enter when options are genuinely expensive
+MIN_IV_RANK     = float(_os.environ.get("WHEEL_MIN_IV_RANK",     "30"))  # 0-100 scale
+MIN_IV_ABSOLUTE = float(_os.environ.get("WHEEL_MIN_IV_ABS",      "0.25")) # fallback when <20 days history
+
+# Sector diversification
+MAX_PER_SECTOR  = int(_os.environ.get("WHEEL_MAX_PER_SECTOR",    "2"))
+SECTOR_MAP = {
+    "SOFI": "fintech",   "HOOD": "fintech",   "PYPL": "fintech",
+    "AFRM": "fintech",   "DAVE": "fintech",   "BILL": "fintech",
+    "COIN": "crypto",    "MSTR": "crypto",
+    "BAC":  "banks",     "C":    "banks",      "WFC":  "banks",
+    "JPM":  "banks",     "GS":   "banks",      "MS":   "banks",
+    "NVDA": "semis",     "AMD":  "semis",      "MU":   "semis",
+    "INTC": "semis",     "QCOM": "semis",      "AVGO": "semis",
+    "SMCI": "tech",      "CRM":  "tech",       "SNOW": "tech",
+    "SNAP": "social",    "PINS": "social",     "RBLX": "social",
+    "RIVN": "ev",        "LCID": "ev",         "NIO":  "ev",
+    "XPEV": "ev",        "LI":   "ev",
+    "F":    "auto",      "GM":   "auto",
+    "T":    "telecom",   "VZ":   "telecom",
+    "WBA":  "healthcare","CVS":  "healthcare", "TDOC": "healthcare",
+    "FCX":  "materials", "AA":   "materials",  "CLF":  "materials",
+    "UBER": "gig",       "LYFT": "gig",        "DASH": "gig",
+    "PENN": "gaming",    "DKNG": "gaming",     "MGM":  "gaming",
+    "PLTR": "data",      "TSLA": "ev",
+}
 
 # Cache key for wheel profit reserve (separate from Kova's reserve)
 _WHEEL_RESERVE_KEY = "wheel:reserved_cash"
@@ -110,15 +149,35 @@ def _next_market_open() -> Optional[str]:
 
 
 # ── Regime (read-only from Kova cache) ───────────────────────────────────────
+#
+# Kova stores regime in "premarket_scan" → "macro_regime" (2h TTL, ~9 AM ET).
+# Wheel reads this key. Falls back to computing fresh from macro.py if stale.
+# NEVER writes to Kova's cache — read-only.
 
 def _get_current_regime() -> str:
     try:
         from services.db import cache_get
+
+        # Primary: Kova's premarket_scan cache (written ~9 AM ET daily)
+        premarket = cache_get("premarket_scan")
+        if isinstance(premarket, dict):
+            regime = premarket.get("macro_regime", "")
+            if regime:
+                return regime.lower()
+
+        # Fallback 1: legacy "market_regime" key (may not exist, but check anyway)
         data = cache_get("market_regime")
         if isinstance(data, dict):
             return data.get("regime", "neutral").lower()
-        if isinstance(data, str):
+        if isinstance(data, str) and data:
             return data.lower()
+
+        # Fallback 2: compute fresh from macro.py directly
+        # Used when: wheel runs before Kova's 9 AM scan, or scan hasn't fired today
+        from services.macro import get_macro_context
+        macro = get_macro_context()
+        return macro.get("market_regime", "neutral").lower()
+
     except Exception:
         pass
     return "neutral"
@@ -250,6 +309,88 @@ def get_wheel_summary() -> dict:
         return {}
 
 
+# ── Earnings avoidance ───────────────────────────────────────────────────────
+
+_EARNINGS_CACHE_KEY = "wheel:earnings_dates"
+_EARNINGS_CACHE_TTL = 12 * 3600   # refresh every 12 hours
+
+
+def _get_earnings_within_days(symbols: list, days: int = 14) -> dict:
+    """
+    Returns {symbol: "YYYY-MM-DD"} for symbols with earnings within `days` calendar days.
+    Uses FMP API if available, falls back to AI estimate, caches result 12h.
+
+    This is the single most important filter for the wheel strategy.
+    A stock gapping ±20% on earnings wrecks a put position instantly.
+    """
+    try:
+        from services.db import cache_get, cache_set
+        cached = cache_get(_EARNINGS_CACHE_KEY)
+        if cached and isinstance(cached, dict):
+            # Filter to requested symbols only
+            return {s: cached[s] for s in symbols if s in cached}
+    except Exception:
+        pass
+
+    result: dict[str, str] = {}
+    today = date.today()
+    cutoff = today + timedelta(days=days)
+
+    # ── Attempt 1: FMP earnings calendar (if key available) ──────────────────
+    try:
+        from config import settings
+        fmp_key = settings.fmp_api_key
+        if fmp_key:
+            import urllib.request, json as _json
+            symbol_csv = ",".join(symbols)
+            url = (f"https://financialmodelingprep.com/api/v3/earning_calendar"
+                   f"?from={today}&to={cutoff}&apikey={fmp_key}")
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                data = _json.loads(resp.read())
+            for item in data:
+                sym = item.get("symbol", "")
+                dt = item.get("date", "")
+                if sym in symbols and dt:
+                    result[sym] = dt
+            logger.info(f"Wheel earnings: FMP found {len(result)} upcoming in {days}d window")
+    except Exception as fmp_err:
+        logger.debug(f"Wheel earnings FMP lookup failed ({fmp_err}), trying AI")
+
+    # ── Attempt 2: AI estimate for symbols not found via FMP ─────────────────
+    remaining = [s for s in symbols if s not in result]
+    if remaining:
+        try:
+            from services.ai_client import ask_ai, parse_ai_json
+            prompt = f"""For each stock below, does it have earnings within the next {days} calendar days (today is {today})?
+
+Stocks: {', '.join(remaining)}
+
+Return ONLY valid JSON:
+{{"earnings": [{{"symbol": "TSLA", "has_earnings_soon": true, "expected_date": "2026-06-15"}}, ...]}}
+
+If you are NOT confident a stock has earnings in the next {days} days, set has_earnings_soon to false.
+Only flag ones you are confident about."""
+            raw = ask_ai(prompt, max_tokens=600)
+            parsed = parse_ai_json(raw)
+            for item in parsed.get("earnings", []):
+                if item.get("has_earnings_soon") and item.get("expected_date"):
+                    sym = item["symbol"]
+                    if sym in symbols:
+                        result[sym] = item["expected_date"]
+            logger.info(f"Wheel earnings: AI flagged {len(result)} stocks with upcoming earnings")
+        except Exception as ai_err:
+            logger.warning(f"Wheel earnings AI lookup failed: {ai_err}")
+
+    # Cache the full result for all symbols
+    try:
+        from services.db import cache_set
+        cache_set(_EARNINGS_CACHE_KEY, result, _EARNINGS_CACHE_TTL)
+    except Exception:
+        pass
+
+    return result
+
+
 # ── Scanner ───────────────────────────────────────────────────────────────────
 
 def scan_opportunities() -> list[dict]:
@@ -276,14 +417,32 @@ def scan_opportunities() -> list[dict]:
     expiry_min = today + timedelta(days=MIN_DTE)
     expiry_max = today + timedelta(days=MAX_DTE)
     opportunities = []
+    sector_counts = _active_sector_counts()
 
     trading_client = _get_wheel_trading_client()
     data_client = _get_wheel_data_client()
     opts_client = _get_wheel_options_client()
 
+    # Pre-fetch earnings dates for the whole universe in one AI call (cheap)
+    earnings_within_14d = _get_earnings_within_days(universe, days=14)
+
     for symbol in universe:
         if symbol in active_symbols:
             continue
+
+        # ── Must-do #7: Earnings avoidance ───────────────────────────────────
+        # Never open a new put within 14 days of earnings.
+        # Stock can gap ±20% overnight on earnings — put assignment risk is severe.
+        if symbol in earnings_within_14d:
+            logger.info(f"Wheel skip {symbol}: earnings within 14 days ({earnings_within_14d[symbol]})")
+            continue
+
+        # Sector diversification check
+        sector_ok, sector_reason = _sector_allows(symbol, sector_counts)
+        if not sector_ok:
+            logger.debug(f"Wheel scan skip {symbol}: {sector_reason}")
+            continue
+
         try:
             from alpaca.data.requests import StockLatestQuoteRequest
             q = data_client.get_stock_latest_quote(
@@ -297,7 +456,7 @@ def scan_opportunities() -> list[dict]:
 
             from alpaca.trading.requests import GetOptionContractsRequest
             from alpaca.trading.enums import ContractType
-            contracts = trading_client.get_option_contracts(
+            contracts_resp = trading_client.get_option_contracts(
                 GetOptionContractsRequest(
                     underlying_symbols=[symbol],
                     type=ContractType.PUT,
@@ -305,19 +464,27 @@ def scan_opportunities() -> list[dict]:
                     expiration_date_lte=str(expiry_max),
                 )
             )
-            if not contracts or not contracts.option_contracts:
+            if not contracts_resp or not contracts_resp.option_contracts:
                 continue
 
-            best = None
-            best_yield = 0.0
+            # Sort: prefer contracts closest to TARGET_DTE (45 days)
+            sorted_contracts = sorted(
+                contracts_resp.option_contracts,
+                key=lambda c: abs((c.expiration_date - today).days - TARGET_DTE)
+            )
 
-            for contract in contracts.option_contracts:
+            best = None
+            best_score = 0.0
+            atm_iv_recorded = False
+
+            from alpaca.data.requests import OptionSnapshotRequest
+            for contract in sorted_contracts:
                 try:
                     strike = float(contract.strike_price)
                     ratio = strike / stock_price
                     if not (0.80 <= ratio <= 0.97):
                         continue
-                    from alpaca.data.requests import OptionSnapshotRequest
+
                     snap = opts_client.get_option_snapshot(
                         OptionSnapshotRequest(symbol_or_symbols=contract.symbol)
                     ).get(contract.symbol)
@@ -331,9 +498,34 @@ def scan_opportunities() -> list[dict]:
                     prem_yield = premium / strike
                     if prem_yield < MIN_PREMIUM_YIELD:
                         continue
-                    if prem_yield > best_yield:
-                        best_yield = prem_yield
-                        dte = (contract.expiration_date - today).days
+
+                    # Get IV from greeks (real delta + IV instead of proxies)
+                    iv = 0.0
+                    real_delta = None
+                    if snap.greeks:
+                        iv = float(snap.greeks.implied_volatility or 0)
+                        real_delta = abs(float(snap.greeks.delta or 0))
+
+                    # Record IV for rank history (once per symbol per scan)
+                    if iv > 0 and not atm_iv_recorded:
+                        _record_iv(symbol, iv)
+                        atm_iv_recorded = True
+
+                    # IV rank filter
+                    iv_ok, iv_reason = _iv_passes_filter(symbol, iv)
+                    if not iv_ok:
+                        logger.debug(f"Wheel scan skip {symbol}: {iv_reason}")
+                        continue
+
+                    dte = (contract.expiration_date - today).days
+                    annual_yield = prem_yield * (365 / max(dte, 1))
+
+                    # Score = annual yield weighted by DTE proximity to 45
+                    dte_penalty = abs(dte - TARGET_DTE) / TARGET_DTE  # 0 = perfect
+                    score = annual_yield * (1 - dte_penalty * 0.2)
+
+                    if score > best_score:
+                        best_score = score
                         best = {
                             "symbol": symbol,
                             "stock_price": round(stock_price, 2),
@@ -343,8 +535,13 @@ def scan_opportunities() -> list[dict]:
                             "dte": dte,
                             "premium": round(premium, 2),
                             "premium_yield_pct": round(prem_yield * 100, 2),
-                            "annual_yield_pct": round(prem_yield * (365 / max(dte, 1)) * 100, 1),
-                            "collateral": round(strike * 100, 2),
+                            "annual_yield_pct": round(annual_yield * 100, 1),
+                            "collateral": round(strike * CONTRACTS_PER_TRADE * 100, 2),
+                            "contracts": CONTRACTS_PER_TRADE,
+                            "iv": round(iv * 100, 1) if iv else None,
+                            "delta": round(real_delta, 3) if real_delta else None,
+                            "iv_reason": iv_reason,
+                            "sector": SECTOR_MAP.get(symbol, "other"),
                             "regime": regime,
                             "mode": "paper" if _is_paper() else "live",
                         }
@@ -354,8 +551,10 @@ def scan_opportunities() -> list[dict]:
             if best:
                 opportunities.append(best)
                 logger.info(
-                    f"Wheel opp: {symbol} ${best['strike']} put exp {best['expiry']} | "
-                    f"${best['premium']} ({best['premium_yield_pct']}% / {best['annual_yield_pct']}% annual)"
+                    f"Wheel opp: {symbol} ${best['strike']} put exp {best['expiry']} "
+                    f"DTE={best['dte']} | ${best['premium']}×{CONTRACTS_PER_TRADE} "
+                    f"({best['premium_yield_pct']}% / {best['annual_yield_pct']}% annual) "
+                    f"IV={best['iv']}% delta={best['delta']} sector={best['sector']}"
                 )
         except Exception as e:
             logger.error(f"Wheel scan {symbol}: {e}")
@@ -367,20 +566,43 @@ def scan_opportunities() -> list[dict]:
 # ── Order execution ───────────────────────────────────────────────────────────
 
 def execute_put(opportunity: dict) -> Optional[dict]:
-    """Place cash-secured put order."""
+    """Place cash-secured put order — CONTRACTS_PER_TRADE (2) contracts per position."""
     try:
         from alpaca.trading.requests import LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
 
+        qty = CONTRACTS_PER_TRADE  # 2 contracts per trade (tiered close strategy)
+
+        # ── Bug #1 fix: buying power check ───────────────────────────────────
+        # Each put requires strike × 100 × qty in cash collateral.
+        # Skip if we'd use more than 90% of remaining buying power.
+        collateral_needed = opportunity["strike"] * 100 * qty
+        try:
+            account = _get_wheel_trading_client().get_account()
+            buying_power = float(account.buying_power)
+            if collateral_needed > buying_power * 0.90:
+                logger.warning(
+                    f"Wheel skip {opportunity['symbol']}: collateral ${collateral_needed:,.0f} "
+                    f"> 90% of buying power ${buying_power:,.0f}"
+                )
+                return None
+        except Exception as bp_err:
+            logger.warning(f"Wheel buying power check failed ({bp_err}), proceeding anyway")
+
+        limit_px = round(opportunity["premium"] * 0.98, 2)
+
         order = _get_wheel_trading_client().submit_order(LimitOrderRequest(
             symbol=opportunity["contract"],
-            qty=1,
+            qty=qty,
             side=OrderSide.SELL,
             type=OrderType.LIMIT,
             time_in_force=TimeInForce.DAY,
-            limit_price=round(opportunity["premium"] * 0.98, 2),
+            limit_price=limit_px,
         ))
-        logger.info(f"Wheel PUT: {opportunity['symbol']} ${opportunity['strike']} exp {opportunity['expiry']} | {order.id}")
+        logger.info(
+            f"Wheel PUT: {opportunity['symbol']} ${opportunity['strike']} exp {opportunity['expiry']} "
+            f"×{qty} contracts @ ${limit_px} | {order.id}"
+        )
 
         pos_id = _open_wheel_position(
             symbol=opportunity["symbol"],
@@ -392,7 +614,9 @@ def execute_put(opportunity: dict) -> Optional[dict]:
             put_order_id=str(order.id),
             regime=_get_current_regime(),
         )
-        return {"order_id": str(order.id), "position_db_id": pos_id, **opportunity}
+        # Store contracts_remaining in notes field (no schema change needed)
+        _update_wheel_position(pos_id, notes=f"contracts_remaining:{qty}")
+        return {"order_id": str(order.id), "position_db_id": pos_id, "contracts": qty, **opportunity}
     except Exception as e:
         logger.error(f"Wheel execute_put: {e}")
         return None
@@ -450,15 +674,23 @@ def execute_covered_call(position: dict) -> Optional[dict]:
         if not best:
             return None
 
+        # Match qty to shares held — assignment gives 100 shares per put contract.
+        # If 2 puts were sold and both assigned → 200 shares → sell 2 calls.
+        shares = int(position.get("shares_qty") or 100)
+        call_qty = max(1, shares // 100)   # 100 shares = 1 contract
+
         order = client.submit_order(LimitOrderRequest(
             symbol=best["contract_symbol"],
-            qty=1,
+            qty=call_qty,
             side=OrderSide.SELL,
             type=OrderType.LIMIT,
             time_in_force=TimeInForce.DAY,
             limit_price=round(best["premium"] * 0.98, 2),
         ))
-        logger.info(f"Wheel CALL: {symbol} ${best['strike']} exp {best['expiry']} | {order.id}")
+        logger.info(
+            f"Wheel CALL: {symbol} ${best['strike']} exp {best['expiry']} "
+            f"×{call_qty} contracts | {order.id}"
+        )
 
         prev = float(position.get("total_premium_collected") or 0)
         _update_wheel_position(
@@ -469,9 +701,9 @@ def execute_covered_call(position: dict) -> Optional[dict]:
             call_expiry=best["expiry"],
             call_premium=best["premium"],
             call_order_id=str(order.id),
-            total_premium_collected=prev + best["premium"] * 100,
+            total_premium_collected=prev + best["premium"] * call_qty * 100,
         )
-        return {"order_id": str(order.id), **best}
+        return {"order_id": str(order.id), "contracts": call_qty, **best}
     except Exception as e:
         logger.error(f"Wheel execute_covered_call: {e}")
         return None
@@ -496,6 +728,100 @@ def _buy_to_close(position: dict, contract: str, current_price: float, reason: s
     except Exception as e:
         logger.error(f"Wheel buy-to-close error: {e}")
         return None
+
+
+# ── Stop-loss on assigned shares ─────────────────────────────────────────────
+
+# If assigned and stock drops more than this % below cost basis → sell shares + exit cycle.
+# Prevents a single bad assignment from wiping out weeks of premium income.
+ASSIGNMENT_STOP_LOSS_PCT = float(_os.environ.get("WHEEL_STOP_LOSS_PCT", "0.20"))  # 20% below cost = exit
+
+def check_assignment_stop_loss():
+    """
+    Must-do #10 — stop-loss on assigned shares.
+
+    After assignment we hold 100-200 shares. If the stock drops 20%+ below
+    cost basis, sell shares immediately and mark cycle as completed with a loss.
+    Without this, one bad assignment can erase 10 cycles of premium income.
+
+    Example: assigned SOFI @ $18, drops to $14.40 (-20%) → sell, take -$720 loss.
+    Better than riding it to $10 (-$1,600 loss).
+    """
+    if not _market_is_open():
+        return
+
+    active = get_active_wheel_positions()
+    assigned = [p for p in active if p["phase"] == "assigned" and p.get("cost_basis")]
+    if not assigned:
+        return
+
+    try:
+        from alpaca.data.requests import StockLatestQuoteRequest
+        data_client = _get_wheel_data_client()
+    except Exception:
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    for pos in assigned:
+        try:
+            symbol = pos["symbol"]
+            cost = float(pos["cost_basis"])
+            stop_price = cost * (1 - ASSIGNMENT_STOP_LOSS_PCT)
+
+            q = data_client.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            ).get(symbol)
+            if not q:
+                continue
+            current_price = float((q.ask_price + q.bid_price) / 2)
+            if current_price <= 0:
+                continue
+
+            if current_price <= stop_price:
+                loss_pct = (current_price - cost) / cost * 100
+                shares = pos.get("shares_qty") or 100
+                loss_dollars = (current_price - cost) * shares
+
+                logger.warning(
+                    f"Wheel STOP-LOSS: {symbol} cost ${cost:.2f} → now ${current_price:.2f} "
+                    f"({loss_pct:.1f}%) ≤ stop ${stop_price:.2f} — selling {shares} shares"
+                )
+
+                # Sell shares via market order
+                try:
+                    from alpaca.trading.requests import MarketOrderRequest
+                    from alpaca.trading.enums import OrderSide, TimeInForce
+                    order = _get_wheel_trading_client().submit_order(MarketOrderRequest(
+                        symbol=symbol,
+                        qty=shares,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.DAY,
+                    ))
+                    prev_prem = float(pos.get("total_premium_collected") or 0)
+                    net_result = prev_prem + loss_dollars  # premium collected minus share loss
+
+                    _update_wheel_position(
+                        pos["id"],
+                        phase="completed",
+                        status="stop_loss",
+                        realized_pl=net_result,
+                        closed_at=now,
+                        notes=(
+                            f"STOP-LOSS: assigned ${cost:.2f} → sold ${current_price:.2f} "
+                            f"({loss_pct:.1f}%). Share loss: ${loss_dollars:.0f}. "
+                            f"Premium collected: ${prev_prem:.0f}. Net: ${net_result:.0f}"
+                        ),
+                    )
+                    logger.warning(
+                        f"Wheel STOP-LOSS executed: {symbol} | share loss ${loss_dollars:.0f} "
+                        f"| premium buffer ${prev_prem:.0f} | net ${net_result:.0f} | order {order.id}"
+                    )
+                except Exception as sell_err:
+                    logger.error(f"Wheel stop-loss sell failed for {symbol}: {sell_err}")
+
+        except Exception as e:
+            logger.error(f"Wheel stop-loss check pos {pos.get('id')}: {e}")
 
 
 # ── Assignment + expiration + profit targets ──────────────────────────────────
@@ -579,14 +905,34 @@ def check_expirations():
             logger.error(f"Wheel check_expirations pos {pos.get('id')}: {e}")
 
 
+def _parse_contracts_remaining(notes: str) -> int:
+    """Extract contracts_remaining from notes field. Format: 'contracts_remaining:N ...'"""
+    try:
+        for part in str(notes or "").split():
+            if part.startswith("contracts_remaining:"):
+                return int(part.split(":")[1])
+    except Exception:
+        pass
+    return CONTRACTS_PER_TRADE  # default: assume full position
+
+
+def _set_contracts_remaining(notes: str, remaining: int) -> str:
+    """Update or insert contracts_remaining in the notes string."""
+    import re
+    tag = f"contracts_remaining:{remaining}"
+    if "contracts_remaining:" in str(notes or ""):
+        return re.sub(r"contracts_remaining:\d+", tag, notes)
+    return f"{notes or ''} {tag}".strip()
+
+
 def check_profit_targets():
     """
-    Early close at 50% profit decay.
+    Tiered profit close — 2 contracts per position:
+      Contract 1: close at PROFIT_TIER_1 (50% remaining) → buy-to-close 1 contract
+      Contract 2: close at PROFIT_TIER_2 (25% remaining) → buy-to-close 1 contract
 
-    If we sold a put for $100 and it's now worth $50 (50% decay),
-    buy-to-close and free capital 2-3 weeks early for the next cycle.
-    This is standard options management and improves annual returns.
-
+    Contract 1 books quick profit + frees half collateral early.
+    Contract 2 rides theta to near-zero for max capture.
     Market must be open to execute.
     """
     if not _market_is_open():
@@ -596,12 +942,15 @@ def check_profit_targets():
     opts_client = _get_wheel_options_client()
     now = datetime.now(timezone.utc).isoformat()
 
+    from alpaca.data.requests import OptionSnapshotRequest
+
     for pos in active:
         try:
-            # Check puts
-            if pos["phase"] == "put_open" and pos.get("put_contract") and pos.get("put_premium"):
+            phase = pos["phase"]
+
+            # ── PUTS: tiered close ──────────────────────────────────────────
+            if phase == "put_open" and pos.get("put_contract") and pos.get("put_premium"):
                 original_prem = float(pos["put_premium"])
-                from alpaca.data.requests import OptionSnapshotRequest
                 snap = opts_client.get_option_snapshot(
                     OptionSnapshotRequest(symbol_or_symbols=pos["put_contract"])
                 ).get(pos["put_contract"])
@@ -614,31 +963,52 @@ def check_profit_targets():
                     continue
 
                 decay_ratio = current_prem / original_prem
-                if decay_ratio <= EARLY_CLOSE_THRESHOLD:
-                    # Premium decayed to 50% — close early, book profit
-                    profit = (original_prem - current_prem) * 100
+                contracts_left = _parse_contracts_remaining(pos.get("notes", ""))
+
+                if contracts_left >= 2 and decay_ratio <= PROFIT_TIER_1:
+                    # Close contract 1 at 50% profit
+                    profit1 = (original_prem - current_prem) * 100
                     logger.info(
-                        f"Wheel EARLY CLOSE (put): {pos['symbol']} "
-                        f"orig ${original_prem:.2f} → now ${current_prem:.2f} "
-                        f"({decay_ratio*100:.0f}% remaining) | profit ${profit:.2f}"
+                        f"Wheel TIER-1 CLOSE (put): {pos['symbol']} "
+                        f"orig ${original_prem:.2f} → ${current_prem:.2f} "
+                        f"({decay_ratio*100:.0f}% remaining) | 1-of-2 profit ${profit1:.2f}"
                     )
                     order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
-                                             f"50% profit target ({decay_ratio*100:.0f}% remaining)")
+                                             f"tier-1 50% profit (1-of-2)")
                     if order_id:
-                        _add_to_profit_reserve_if_configured(profit)
+                        _add_to_profit_reserve_if_configured(profit1)
+                        new_notes = _set_contracts_remaining(pos.get("notes", ""), 1)
+                        new_notes += f" | tier1_closed_at:{decay_ratio*100:.0f}%"
+                        _update_wheel_position(
+                            pos["id"],
+                            notes=new_notes,
+                        )
+
+                elif contracts_left == 1 and decay_ratio <= PROFIT_TIER_2:
+                    # Close final contract at 25% remaining → position complete
+                    profit2 = (original_prem - current_prem) * 100
+                    total_prem = float(pos.get("total_premium_collected") or 0) + profit2
+                    logger.info(
+                        f"Wheel TIER-2 CLOSE (put): {pos['symbol']} "
+                        f"${current_prem:.2f} remaining | final profit ${profit2:.2f} "
+                        f"| total collected ${total_prem:.2f}"
+                    )
+                    order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                                             f"tier-2 25% final close")
+                    if order_id:
+                        _add_to_profit_reserve_if_configured(profit2)
                         _update_wheel_position(
                             pos["id"],
                             phase="completed", status="completed",
-                            realized_pl=profit,
-                            total_premium_collected=profit,
+                            realized_pl=total_prem,
+                            total_premium_collected=total_prem,
                             closed_at=now,
-                            notes=f"Early close at {decay_ratio*100:.0f}% premium remaining. Profit: ${profit:.2f}",
+                            notes=f"Tiered close complete. Total: ${total_prem:.2f}",
                         )
 
-            # Check calls (same logic)
-            elif pos["phase"] == "call_open" and pos.get("call_contract") and pos.get("call_premium"):
+            # ── CALLS: tiered close (same tiers) ───────────────────────────
+            elif phase == "call_open" and pos.get("call_contract") and pos.get("call_premium"):
                 original_prem = float(pos["call_premium"])
-                from alpaca.data.requests import OptionSnapshotRequest
                 snap = opts_client.get_option_snapshot(
                     OptionSnapshotRequest(symbol_or_symbols=pos["call_contract"])
                 ).get(pos["call_contract"])
@@ -651,29 +1021,48 @@ def check_profit_targets():
                     continue
 
                 decay_ratio = current_prem / original_prem
-                if decay_ratio <= EARLY_CLOSE_THRESHOLD:
-                    prev_prem = float(pos.get("total_premium_collected") or 0)
-                    call_profit = (original_prem - current_prem) * 100
-                    cost = float(pos.get("cost_basis") or 0)
-                    # We still hold shares — mark phase as assigned (back to step 2)
-                    # so we can sell a new call next cycle
+                contracts_left = _parse_contracts_remaining(pos.get("notes", ""))
+                prev_prem = float(pos.get("total_premium_collected") or 0)
+
+                if contracts_left >= 2 and decay_ratio <= PROFIT_TIER_1:
+                    call_profit1 = (original_prem - current_prem) * 100
                     logger.info(
-                        f"Wheel EARLY CLOSE (call): {pos['symbol']} "
-                        f"${call_profit:.2f} profit — back to assigned phase"
+                        f"Wheel TIER-1 CLOSE (call): {pos['symbol']} "
+                        f"${call_profit1:.2f} profit | 1-of-2"
                     )
                     order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
-                                             f"50% call profit target")
+                                             "tier-1 50% call profit")
                     if order_id:
+                        _add_to_profit_reserve_if_configured(call_profit1)
+                        new_notes = _set_contracts_remaining(pos.get("notes", ""), 1)
                         _update_wheel_position(
                             pos["id"],
-                            phase="assigned",   # back to holding shares → sell new call
+                            total_premium_collected=prev_prem + call_profit1,
+                            notes=new_notes,
+                        )
+
+                elif contracts_left == 1 and decay_ratio <= PROFIT_TIER_2:
+                    call_profit2 = (original_prem - current_prem) * 100
+                    logger.info(
+                        f"Wheel TIER-2 CLOSE (call): {pos['symbol']} "
+                        f"${call_profit2:.2f} | back to assigned → sell new call"
+                    )
+                    order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
+                                             "tier-2 25% final call close")
+                    if order_id:
+                        new_notes = _set_contracts_remaining("", CONTRACTS_PER_TRADE)
+                        _update_wheel_position(
+                            pos["id"],
+                            phase="assigned",
                             call_contract=None,
                             call_order_id=None,
-                            total_premium_collected=prev_prem + call_profit,
-                            notes=f"Call closed early at {decay_ratio*100:.0f}% remaining. Selling new call.",
+                            total_premium_collected=prev_prem + call_profit2,
+                            notes=new_notes,
                         )
-                        # Sell new call immediately
-                        execute_covered_call({**pos, "total_premium_collected": prev_prem + call_profit})
+                        execute_covered_call({
+                            **pos,
+                            "total_premium_collected": prev_prem + call_profit2,
+                        })
 
         except Exception as e:
             logger.error(f"Wheel check_profit_targets pos {pos.get('id')}: {e}")
@@ -690,6 +1079,452 @@ def _add_to_profit_reserve_if_configured(amount: float):
             _add_to_wheel_reserve(reserve_amount)
     except Exception:
         pass
+
+
+# ── DTE Force Close ──────────────────────────────────────────────────────────
+
+def check_dte_force_close():
+    """
+    Force close all open option positions at DTE ≤ DTE_FORCE_CLOSE (21 days).
+
+    45/21-DTE rule: open at ~45 DTE, ride to 21 DTE where theta decay
+    flattens out. At 21 DTE gamma risk spikes — close to avoid pin risk
+    and free up capital for the next 45-DTE cycle.
+
+    Applies to both puts (put_open) and calls (call_open).
+    Market must be open.
+    """
+    if not _market_is_open():
+        return
+
+    active = get_active_wheel_positions()
+    if not active:
+        return
+
+    today = date.today()
+    now = datetime.now(timezone.utc).isoformat()
+    opts_client = _get_wheel_options_client()
+    from alpaca.data.requests import OptionSnapshotRequest
+
+    for pos in active:
+        try:
+            # ── Puts ────────────────────────────────────────────────────
+            if pos["phase"] == "put_open" and pos.get("put_expiry") and pos.get("put_contract"):
+                expiry = date.fromisoformat(str(pos["put_expiry"]))
+                dte = (expiry - today).days
+                if dte > DTE_FORCE_CLOSE:
+                    continue
+
+                logger.info(
+                    f"Wheel DTE-FORCE-CLOSE (put): {pos['symbol']} exp {expiry} "
+                    f"DTE={dte} ≤ {DTE_FORCE_CLOSE} — force closing"
+                )
+                snap = opts_client.get_option_snapshot(
+                    OptionSnapshotRequest(symbol_or_symbols=pos["put_contract"])
+                ).get(pos["put_contract"])
+                if not snap or not snap.latest_quote:
+                    continue
+                ask = float(snap.latest_quote.ask_price or 0)
+                bid = float(snap.latest_quote.bid_price or 0)
+                current_prem = (ask + bid) / 2
+                if current_prem <= 0:
+                    continue
+
+                contracts_left = _parse_contracts_remaining(pos.get("notes", ""))
+                original_prem = float(pos.get("put_premium") or 0)
+                profit = (original_prem - current_prem) * contracts_left * 100
+                prev_total = float(pos.get("total_premium_collected") or 0)
+
+                order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                                         f"DTE-force (DTE={dte})")
+                if order_id:
+                    _add_to_profit_reserve_if_configured(profit)
+                    _update_wheel_position(
+                        pos["id"],
+                        phase="completed", status="completed",
+                        realized_pl=prev_total + profit,
+                        total_premium_collected=prev_total + profit,
+                        closed_at=now,
+                        notes=f"DTE force close at DTE={dte}. Profit: ${profit:.2f}",
+                    )
+
+            # ── Calls ────────────────────────────────────────────────────
+            elif pos["phase"] == "call_open" and pos.get("call_expiry") and pos.get("call_contract"):
+                expiry = date.fromisoformat(str(pos["call_expiry"]))
+                dte = (expiry - today).days
+                if dte > DTE_FORCE_CLOSE:
+                    continue
+
+                logger.info(
+                    f"Wheel DTE-FORCE-CLOSE (call): {pos['symbol']} exp {expiry} "
+                    f"DTE={dte} ≤ {DTE_FORCE_CLOSE} — force closing"
+                )
+                snap = opts_client.get_option_snapshot(
+                    OptionSnapshotRequest(symbol_or_symbols=pos["call_contract"])
+                ).get(pos["call_contract"])
+                if not snap or not snap.latest_quote:
+                    continue
+                ask = float(snap.latest_quote.ask_price or 0)
+                bid = float(snap.latest_quote.bid_price or 0)
+                current_prem = (ask + bid) / 2
+                if current_prem <= 0:
+                    continue
+
+                contracts_left = _parse_contracts_remaining(pos.get("notes", ""))
+                original_prem = float(pos.get("call_premium") or 0)
+                call_profit = (original_prem - current_prem) * contracts_left * 100
+                prev_total = float(pos.get("total_premium_collected") or 0)
+
+                order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
+                                         f"DTE-force call (DTE={dte})")
+                if order_id:
+                    _add_to_profit_reserve_if_configured(call_profit)
+                    new_notes = _set_contracts_remaining("", CONTRACTS_PER_TRADE)
+                    _update_wheel_position(
+                        pos["id"],
+                        phase="assigned",
+                        call_contract=None,
+                        call_order_id=None,
+                        total_premium_collected=prev_total + call_profit,
+                        notes=new_notes,
+                    )
+                    # Back to holding shares → sell new call immediately
+                    execute_covered_call({
+                        **pos,
+                        "total_premium_collected": prev_total + call_profit,
+                    })
+
+        except Exception as e:
+            logger.error(f"Wheel check_dte_force_close pos {pos.get('id')}: {e}")
+
+
+# ── Bear Call Spreads ─────────────────────────────────────────────────────────
+
+def scan_bear_spreads() -> list:
+    """
+    Scan for bear call spread opportunities when regime is bearish.
+
+    Bear call spread: sell OTM call + buy higher-strike call on same expiry.
+    - Max profit = net credit (keeps if stock stays below short strike)
+    - Max loss = spread width - credit (capped downside, unlike naked calls)
+    - Used in bearish/sideways regime instead of cash-secured puts
+
+    Returns list of spread opportunities without placing orders.
+    """
+    regime = _get_current_regime()
+    if regime not in ("bearish", "bear"):
+        logger.debug(f"Bear spreads: regime={regime} — skipping (not bearish)")
+        return []
+
+    universe = _get_active_universe_symbols()
+    active_symbols = {p["symbol"] for p in get_active_wheel_positions()}
+    today = date.today()
+    expiry_min = today + timedelta(days=MIN_DTE)
+    expiry_max = today + timedelta(days=MAX_DTE)
+    spreads = []
+
+    trading_client = _get_wheel_trading_client()
+    data_client = _get_wheel_data_client()
+    opts_client = _get_wheel_options_client()
+
+    from alpaca.data.requests import StockLatestQuoteRequest, OptionSnapshotRequest
+    from alpaca.trading.requests import GetOptionContractsRequest
+    from alpaca.trading.enums import ContractType
+
+    sector_counts = _active_sector_counts()
+
+    for symbol in universe:
+        if symbol in active_symbols:
+            continue
+        sector_ok, sector_reason = _sector_allows(symbol, sector_counts)
+        if not sector_ok:
+            continue
+
+        try:
+            q = data_client.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            ).get(symbol)
+            if not q:
+                continue
+            stock_price = float((q.ask_price + q.bid_price) / 2)
+            if stock_price <= 0:
+                continue
+
+            contracts_resp = trading_client.get_option_contracts(GetOptionContractsRequest(
+                underlying_symbols=[symbol],
+                type=ContractType.CALL,
+                expiration_date_gte=str(expiry_min),
+                expiration_date_lte=str(expiry_max),
+            ))
+            if not contracts_resp or not contracts_resp.option_contracts:
+                continue
+
+            # Group contracts by expiry — find best spread per expiry
+            from collections import defaultdict
+            by_expiry = defaultdict(list)
+            for c in contracts_resp.option_contracts:
+                by_expiry[c.expiration_date].append(c)
+
+            best_spread = None
+            best_credit = 0.0
+
+            for expiry_date, exp_contracts in by_expiry.items():
+                dte = (expiry_date - today).days
+                # Prefer 45-DTE
+                exp_contracts_sorted = sorted(exp_contracts, key=lambda c: float(c.strike_price))
+
+                # Find short call: 5-10% OTM (bearish → sell closer to ATM than wheel puts)
+                short_candidates = [
+                    c for c in exp_contracts_sorted
+                    if 1.03 <= float(c.strike_price) / stock_price <= 1.10
+                ]
+                if not short_candidates:
+                    continue
+
+                for short_contract in short_candidates[:3]:
+                    short_strike = float(short_contract.strike_price)
+                    # Long call: 5-10% above short strike (defines max loss)
+                    long_candidates = [
+                        c for c in exp_contracts_sorted
+                        if 1.04 <= float(c.strike_price) / short_strike <= 1.12
+                    ]
+                    if not long_candidates:
+                        continue
+                    long_contract = long_candidates[0]
+                    long_strike = float(long_contract.strike_price)
+
+                    try:
+                        short_snap = opts_client.get_option_snapshot(
+                            OptionSnapshotRequest(symbol_or_symbols=short_contract.symbol)
+                        ).get(short_contract.symbol)
+                        long_snap = opts_client.get_option_snapshot(
+                            OptionSnapshotRequest(symbol_or_symbols=long_contract.symbol)
+                        ).get(long_contract.symbol)
+                        if not short_snap or not long_snap:
+                            continue
+
+                        short_bid = float((short_snap.latest_quote.bid_price or 0))
+                        long_ask = float((long_snap.latest_quote.ask_price or 0))
+                        if short_bid <= 0 or long_ask <= 0:
+                            continue
+
+                        net_credit = short_bid - long_ask
+                        if net_credit <= 0:
+                            continue
+
+                        spread_width = long_strike - short_strike
+                        max_profit = net_credit * 100
+                        max_loss = (spread_width - net_credit) * 100
+                        risk_reward = max_profit / max_loss if max_loss > 0 else 0
+
+                        if net_credit > best_credit and risk_reward >= 0.25:
+                            best_credit = net_credit
+                            best_spread = {
+                                "symbol": symbol,
+                                "stock_price": round(stock_price, 2),
+                                "type": "bear_call_spread",
+                                "short_contract": short_contract.symbol,
+                                "short_strike": short_strike,
+                                "long_contract": long_contract.symbol,
+                                "long_strike": long_strike,
+                                "expiry": str(expiry_date),
+                                "dte": dte,
+                                "net_credit": round(net_credit, 2),
+                                "spread_width": round(spread_width, 2),
+                                "max_profit": round(max_profit, 2),
+                                "max_loss": round(max_loss, 2),
+                                "risk_reward": round(risk_reward, 3),
+                                "sector": SECTOR_MAP.get(symbol, "other"),
+                                "regime": regime,
+                                "mode": "paper" if _is_paper() else "live",
+                            }
+                    except Exception:
+                        continue
+
+            if best_spread:
+                spreads.append(best_spread)
+                logger.info(
+                    f"Bear spread: {symbol} sell ${best_spread['short_strike']} "
+                    f"/ buy ${best_spread['long_strike']} call "
+                    f"exp {best_spread['expiry']} DTE={best_spread['dte']} "
+                    f"net credit ${best_spread['net_credit']} "
+                    f"R/R={best_spread['risk_reward']}"
+                )
+
+        except Exception as e:
+            logger.error(f"Bear spread scan {symbol}: {e}")
+
+    return spreads
+
+
+def execute_bear_spread(spread: dict) -> Optional[dict]:
+    """
+    Execute a bear call spread: sell short call + buy long call simultaneously.
+
+    Uses a limit order on the short leg; long leg is a protective buy.
+    Net credit must be positive (verified in scan_bear_spreads).
+    """
+    try:
+        from alpaca.trading.requests import LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
+
+        client = _get_wheel_trading_client()
+
+        # Sell the short call (credit leg) first
+        short_order = client.submit_order(LimitOrderRequest(
+            symbol=spread["short_contract"],
+            qty=CONTRACTS_PER_TRADE,
+            side=OrderSide.SELL,
+            type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=round(spread["net_credit"] * 0.98, 2),
+        ))
+
+        # Buy the long call (protective leg) — if this fails, cancel the short immediately
+        long_credit = spread["spread_width"] - spread["net_credit"]
+        try:
+            long_order = client.submit_order(LimitOrderRequest(
+                symbol=spread["long_contract"],
+                qty=CONTRACTS_PER_TRADE,
+                side=OrderSide.BUY,
+                type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                limit_price=round(long_credit * 1.02, 2),
+            ))
+        except Exception as long_err:
+            # Bug #2 fix: long leg failed → cancel short leg to avoid naked short exposure
+            logger.error(
+                f"Wheel bear spread: long leg FAILED for {spread['symbol']} ({long_err}). "
+                f"Cancelling short leg {short_order.id} to avoid naked short."
+            )
+            try:
+                client.cancel_order_by_id(str(short_order.id))
+                logger.info(f"Wheel bear spread: short leg {short_order.id} cancelled successfully")
+            except Exception as cancel_err:
+                logger.error(
+                    f"Wheel bear spread: CRITICAL — could not cancel short leg {short_order.id}: {cancel_err}. "
+                    f"Manual intervention required for {spread['symbol']}."
+                )
+            return None
+
+        logger.info(
+            f"Wheel BEAR SPREAD: {spread['symbol']} "
+            f"sell ${spread['short_strike']} / buy ${spread['long_strike']} call "
+            f"exp {spread['expiry']} | credit=${spread['net_credit']} "
+            f"×{CONTRACTS_PER_TRADE} | short={short_order.id} long={long_order.id}"
+        )
+
+        pos_id = _open_wheel_position(
+            symbol=spread["symbol"],
+            phase="bear_spread_open",
+            put_contract=spread["short_contract"],   # reuse put_contract field for short leg
+            put_strike=spread["short_strike"],
+            put_expiry=spread["expiry"],
+            put_premium=spread["net_credit"],
+            put_order_id=str(short_order.id),
+            regime=_get_current_regime(),
+        )
+        _update_wheel_position(
+            pos_id,
+            notes=(
+                f"bear_call_spread | long_contract:{spread['long_contract']} "
+                f"long_strike:{spread['long_strike']} "
+                f"long_order_id:{long_order.id} "
+                f"max_loss:{spread['max_loss']} "
+                f"contracts_remaining:{CONTRACTS_PER_TRADE}"
+            )
+        )
+        return {
+            "short_order_id": str(short_order.id),
+            "long_order_id": str(long_order.id),
+            "position_db_id": pos_id,
+            **spread,
+        }
+    except Exception as e:
+        logger.error(f"Wheel execute_bear_spread: {e}")
+        return None
+
+
+# ── IV Rank ───────────────────────────────────────────────────────────────────
+
+def _record_iv(symbol: str, iv: float):
+    """Store today's ATM IV reading for a symbol. Builds 52-week history."""
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO wheel_iv_history (symbol, recorded_at, atm_iv)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (symbol, recorded_at) DO UPDATE SET atm_iv = EXCLUDED.atm_iv
+            """, (symbol, date.today(), iv))
+    except Exception as e:
+        logger.debug(f"IV record {symbol}: {e}")
+
+
+def _get_iv_rank(symbol: str, current_iv: float) -> float:
+    """
+    IV Rank = (current_iv - min_52w) / (max_52w - min_52w) × 100.
+    Returns -1 when insufficient history (< 20 days) → caller uses absolute threshold.
+    """
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return -1
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT MIN(atm_iv), MAX(atm_iv), COUNT(*)
+                FROM wheel_iv_history
+                WHERE symbol = %s AND recorded_at >= CURRENT_DATE - 365
+            """, (symbol,))
+            row = cur.fetchone()
+        if not row or (row[2] or 0) < 20:
+            return -1   # not enough history yet
+        min_iv, max_iv = float(row[0]), float(row[1])
+        if max_iv <= min_iv:
+            return 50.0
+        return round(((current_iv - min_iv) / (max_iv - min_iv)) * 100, 1)
+    except Exception:
+        return -1
+
+
+def _iv_passes_filter(symbol: str, current_iv: float) -> tuple[bool, str]:
+    """Returns (passes, reason). Fails only when IV is genuinely low."""
+    if current_iv <= 0:
+        return True, "no IV data"   # can't filter — allow
+    rank = _get_iv_rank(symbol, current_iv)
+    if rank == -1:
+        # Not enough history — use absolute threshold
+        if current_iv < MIN_IV_ABSOLUTE:
+            return False, f"IV {current_iv*100:.0f}% < {MIN_IV_ABSOLUTE*100:.0f}% (no rank history yet)"
+        return True, f"IV {current_iv*100:.0f}% (no rank yet, above absolute floor)"
+    if rank < MIN_IV_RANK:
+        return False, f"IV rank {rank:.0f} < {MIN_IV_RANK} (options cheap, skip)"
+    return True, f"IV rank {rank:.0f}"
+
+
+# ── Sector diversification ────────────────────────────────────────────────────
+
+def _active_sector_counts() -> dict[str, int]:
+    """Count active positions per sector."""
+    active = get_active_wheel_positions()
+    counts: dict[str, int] = {}
+    for pos in active:
+        sector = SECTOR_MAP.get(pos["symbol"], "other")
+        counts[sector] = counts.get(sector, 0) + 1
+    return counts
+
+
+def _sector_allows(symbol: str, sector_counts: dict[str, int]) -> tuple[bool, str]:
+    """Returns (allowed, reason)."""
+    sector = SECTOR_MAP.get(symbol, "other")
+    count = sector_counts.get(sector, 0)
+    if count >= MAX_PER_SECTOR:
+        return False, f"sector '{sector}' full ({count}/{MAX_PER_SECTOR})"
+    return True, f"sector '{sector}' {count+1}/{MAX_PER_SECTOR}"
 
 
 # ── Full cycle ─────────────────────────────────────────────────────────────────
@@ -731,6 +1566,45 @@ def _record_scan_date():
         pass
 
 
+_LAST_REGIME_KEY = "wheel:last_known_regime"   # detects regime flips → triggers immediate universe refresh
+
+def _check_regime_changed_and_refresh() -> bool:
+    """
+    Detect regime flip (e.g. bull → bear) and trigger immediate universe refresh.
+    Returns True if a refresh was triggered.
+
+    Why: universe composition changes dramatically between regimes.
+    Bull → defensive/stable names (SOFI, BAC) → can stay.
+    Bull → Bear → need to re-evaluate immediately, not wait until Sunday.
+    """
+    try:
+        from services.db import cache_get, cache_set
+        current_regime = _get_current_regime()
+        last_regime = cache_get(_LAST_REGIME_KEY)
+
+        if last_regime is None:
+            # First run — store and move on
+            cache_set(_LAST_REGIME_KEY, current_regime, 7 * 24 * 3600)
+            return False
+
+        if str(last_regime).lower() != current_regime.lower():
+            logger.info(
+                f"Wheel: regime flipped {last_regime} → {current_regime} — "
+                f"triggering immediate universe refresh"
+            )
+            cache_set(_LAST_REGIME_KEY, current_regime, 7 * 24 * 3600)
+            try:
+                from services.wheel_universe import refresh_universe
+                result = refresh_universe()
+                logger.info(f"Wheel: regime-change refresh complete — {len(result)} stocks")
+                return True
+            except Exception as e:
+                logger.error(f"Wheel regime-change refresh failed: {e}")
+    except Exception:
+        pass
+    return False
+
+
 def run_wheel_cycle():
     """
     Fully automatic. Called by scheduler Mon-Fri 9:45 AM ET.
@@ -746,7 +1620,13 @@ def run_wheel_cycle():
     is_open = _market_is_open()
     logger.info(f"Wheel cycle starting — market_open={is_open}")
 
-    # Always run (read-only DB checks, no orders needed)
+    # ── Step 0: Regime-change check → immediate universe refresh if flipped ──
+    try:
+        _check_regime_changed_and_refresh()
+    except Exception as e:
+        logger.error(f"Wheel regime-change check: {e}")
+
+    # ── Step 1: Always check expirations (read-only DB, no orders) ───────────
     try:
         check_expirations()
     except Exception as e:
@@ -757,27 +1637,59 @@ def run_wheel_cycle():
         logger.info(f"Wheel: market closed — skipping orders. Next open: {next_open}")
         return
 
+    # ── Step 2: Stop-loss on assigned shares (runs before anything else) ─────
+    try:
+        check_assignment_stop_loss()
+    except Exception as e:
+        logger.error(f"Wheel assignment stop-loss: {e}")
+
+    # ── Step 3: DTE force close (45→21 rule — must run before profit targets) ─
+    try:
+        check_dte_force_close()
+    except Exception as e:
+        logger.error(f"Wheel DTE force close: {e}")
+
+    # ── Step 4: Tiered profit targets (50% then 25%) ──────────────────────
     try:
         check_profit_targets()
     except Exception as e:
         logger.error(f"Wheel profit targets: {e}")
 
+    # ── Step 5: Check assignments → sell covered calls ─────────────────────
     try:
         check_assignments()
     except Exception as e:
         logger.error(f"Wheel assignments: {e}")
 
-    # Scan + place new puts — Mon/Wed or make-up day after holiday
+    # ── Step 6: Open new positions on scan days ────────────────────────────
     if _should_scan_today():
         try:
-            opps = scan_opportunities()
-            slots = MAX_ACTIVE_POSITIONS - len(get_active_wheel_positions())
+            regime = _get_current_regime()
+            active_count = len(get_active_wheel_positions())
+            slots = MAX_ACTIVE_POSITIONS - active_count
             placed = 0
-            for opp in opps[:min(2, slots)]:
-                if execute_put(opp):
-                    placed += 1
-            _record_scan_date()   # record even if no slots — prevents repeated scanning
-            logger.info(f"Wheel scan complete: {placed} puts placed, {len(opps)} opportunities found")
+
+            if slots > 0:
+                if regime in ("bearish", "bear"):
+                    # Bearish regime → bear call spreads instead of puts
+                    logger.info(f"Wheel: bearish regime — scanning bear call spreads ({slots} slots)")
+                    spreads = scan_bear_spreads()
+                    for spread in spreads[:min(2, slots)]:
+                        if execute_bear_spread(spread):
+                            placed += 1
+                    logger.info(f"Wheel bear spreads: {placed} placed, {len(spreads)} found")
+                else:
+                    # Neutral/bullish → standard cash-secured puts
+                    logger.info(f"Wheel: {regime} regime — scanning puts ({slots} slots)")
+                    opps = scan_opportunities()
+                    for opp in opps[:min(2, slots)]:
+                        if execute_put(opp):
+                            placed += 1
+                    logger.info(f"Wheel puts: {placed} placed, {len(opps)} opportunities found")
+            else:
+                logger.info(f"Wheel: all {MAX_ACTIVE_POSITIONS} slots full — no new positions")
+
+            _record_scan_date()
         except Exception as e:
             logger.error(f"Wheel scan+execute: {e}")
 
@@ -799,6 +1711,19 @@ def get_wheel_status() -> dict:
     from services.wheel_universe import get_universe_details
     universe = get_universe_details()
 
+    # Live account balance from Alpaca wheel account
+    account_info = None   # None → null in JSON so Swift Optional decodes cleanly
+    try:
+        acct = _get_wheel_trading_client().get_account()
+        account_info = {
+            "portfolio_value": float(acct.portfolio_value),
+            "cash":            float(acct.cash),
+            "buying_power":    float(acct.buying_power),
+            "equity":          float(acct.equity),
+        }
+    except Exception:
+        pass  # Not fatal — dashboard still loads without balance row
+
     return {
         "regime": regime,
         "mode": "paper" if _is_paper() else "live",
@@ -808,6 +1733,7 @@ def get_wheel_status() -> dict:
         "max_positions": MAX_ACTIVE_POSITIONS,
         "summary": summary,
         "profit_reserve": _get_wheel_reserve(),
+        "account": account_info,
         "universe": universe,
         "universe_count": len(universe),
         "config": {

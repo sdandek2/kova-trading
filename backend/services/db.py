@@ -272,6 +272,24 @@ def _ensure_table(conn):
             )
         """)
 
+        # ── Wheel Bot: wheel_iv_history ─────────────────────────────────────
+        # Stores daily ATM IV readings per symbol.
+        # Used to compute IV Rank: (current - min_52w) / (max_52w - min_52w) × 100
+        # One row per (symbol, date) — ON CONFLICT DO UPDATE keeps latest reading.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_iv_history (
+                id          SERIAL PRIMARY KEY,
+                symbol      TEXT NOT NULL,
+                recorded_at DATE NOT NULL,
+                atm_iv      FLOAT NOT NULL,
+                UNIQUE (symbol, recorded_at)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wheel_iv_history_symbol_date
+            ON wheel_iv_history (symbol, recorded_at DESC)
+        """)
+
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
