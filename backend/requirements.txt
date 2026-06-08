@@ -12,5 +12,5 @@ pytz>=2024.1
 psycopg2-binary>=2.9.9
 # google-genai removed — using Gemini REST API directly via httpx to avoid websockets conflict with alpaca-py
 json-repair==0.30.3
-yfinance>=0.2.40
+yfinance>=0.2.40,<0.2.100  # pinned range to force Railway cache bust 2026-06-08
 scikit-learn>=1.4.0

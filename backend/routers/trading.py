@@ -55,7 +55,7 @@ def get_recent_ai_decisions(limit: int = Query(20, ge=1, le=100)):
         if e.get("event_type") in (
             "approved", "order_placed", "entry_rejected",
             "earnings_block", "circuit_breaker",
-            "news_trigger", "connector_critical",
+            "news_trigger",
         )
     ]
     return decisions[:limit]
