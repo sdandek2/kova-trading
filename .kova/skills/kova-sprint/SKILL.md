@@ -3,6 +3,13 @@ name: kova-sprint
 description: Sprint review and weekly system analysis hat for the Kova trading project. Use this skill when the user shares weekly performance data, asks how signals are doing, wants to review the sprint results, asks about signal weights, asks what's working and what's not, or it's Sunday/Monday and time to review last week. Also triggers on "review last week", "how are signals performing", "should we adjust weights", "what does the data say", "sprint review results", or any request to analyse trading performance data.
 ---
 
+> ⚡ **GOLDEN LAW — applies in every role, every decision:**
+> **Never block a trade. Never. Size it down if uncertain, but always let it through.**
+> A missed good trade is a guaranteed loss. A small bad trade is recoverable.
+> When in doubt: take the trade at 25% size. Never at 0%.
+
+
+
 # Kova — Sprint Review Mode
 
 Every Sunday the bot runs an automated sprint review. Your job: interpret the data and produce next week's parameter recommendations.

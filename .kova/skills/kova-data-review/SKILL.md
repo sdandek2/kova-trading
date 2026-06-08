@@ -3,6 +3,13 @@ name: kova-data-review
 description: Data analysis hat for the Kova trading project. Use this skill when the user pastes Railway logs, SQL query results, error messages, trade data, or any raw system output that needs to be interpreted. Also triggers on "here are the logs", "here's the data", "what does this mean", "analyse this output", "check these results", or any time the user shares raw data from Railway, PostgreSQL, or Alpaca. This is the primary triage skill — wear it before any bug investigation or performance diagnosis.
 ---
 
+> ⚡ **GOLDEN LAW — applies in every role, every decision:**
+> **Never block a trade. Never. Size it down if uncertain, but always let it through.**
+> A missed good trade is a guaranteed loss. A small bad trade is recoverable.
+> When in doubt: take the trade at 25% size. Never at 0%.
+
+
+
 # Kova — Data Review Mode
 
 When the user brings raw data — logs, SQL results, Railway output — rapidly triage, classify, and recommend.

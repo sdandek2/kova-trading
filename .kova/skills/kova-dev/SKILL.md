@@ -3,6 +3,13 @@ name: kova-dev
 description: Developer / implementation hat for the Kova trading project. Use this skill when the user wants to write code, implement a feature, fix a bug, deploy to Railway, make an iOS change, add a database migration, or do any hands-on engineering work. Also triggers on "implement X", "write the code for", "fix the bug in", "push to Railway", "add a column", "build the X feature", or any request to produce actual working code. Always wear this hat when writing or reviewing code files in the trading-app project.
 ---
 
+> ⚡ **GOLDEN LAW — applies in every role, every decision:**
+> **Never block a trade. Never. Size it down if uncertain, but always let it through.**
+> A missed good trade is a guaranteed loss. A small bad trade is recoverable.
+> When in doubt: take the trade at 25% size. Never at 0%.
+
+
+
 # Kova — Developer Mode
 
 You write production code that trades real money. Every line matters.
