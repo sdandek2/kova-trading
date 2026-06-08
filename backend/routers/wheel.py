@@ -27,6 +27,93 @@ router = APIRouter(prefix="/wheel", tags=["wheel"])
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
+@router.get("/debug/contract")
+def wheel_debug_contract():
+    """
+    Deep debug — takes first symbol with contracts (T) and inspects
+    the first 5 contracts in detail: strike, bid, ask, premium_yield, ratio.
+    """
+    try:
+        from datetime import date, timedelta
+        from services.wheel_engine import (
+            MIN_DTE, MAX_DTE, TARGET_DTE, MIN_PREMIUM_YIELD,
+            _get_wheel_trading_client, _get_wheel_data_client,
+            _get_wheel_options_client,
+        )
+        from alpaca.trading.requests import GetOptionContractsRequest
+        from alpaca.trading.enums import ContractType
+        from alpaca.data.requests import StockLatestQuoteRequest, OptionSnapshotRequest
+
+        symbol = "T"
+        today = date.today()
+        expiry_min = today + timedelta(days=MIN_DTE)
+        expiry_max = today + timedelta(days=MAX_DTE)
+
+        trading_client = _get_wheel_trading_client()
+        data_client    = _get_wheel_data_client()
+        opts_client    = _get_wheel_options_client()
+
+        q = data_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=symbol)).get(symbol)
+        stock_price = float((q.ask_price + q.bid_price) / 2) if q else 0
+
+        contracts_resp = trading_client.get_option_contracts(GetOptionContractsRequest(
+            underlying_symbols=[symbol],
+            type=ContractType.PUT,
+            expiration_date_gte=str(expiry_min),
+            expiration_date_lte=str(expiry_max),
+        ))
+        contracts = contracts_resp.option_contracts if contracts_resp else []
+        sorted_contracts = sorted(contracts, key=lambda c: abs((c.expiration_date - today).days - TARGET_DTE))
+
+        results = {
+            "symbol": symbol,
+            "stock_price": stock_price,
+            "min_dte": MIN_DTE, "max_dte": MAX_DTE,
+            "min_premium_yield": MIN_PREMIUM_YIELD,
+            "total_contracts": len(contracts),
+            "contracts_checked": []
+        }
+
+        for contract in sorted_contracts[:10]:
+            strike = float(contract.strike_price)
+            ratio = round(strike / stock_price, 3)
+            dte = (contract.expiration_date - today).days
+            info = {
+                "symbol": contract.symbol,
+                "strike": strike,
+                "dte": dte,
+                "ratio": ratio,
+                "ratio_ok": 0.75 <= ratio <= 0.97,
+            }
+            try:
+                snap = opts_client.get_option_snapshot(OptionSnapshotRequest(symbol_or_symbols=contract.symbol)).get(contract.symbol)
+                if snap and snap.latest_quote:
+                    ask = float(snap.latest_quote.ask_price or 0)
+                    bid = float(snap.latest_quote.bid_price or 0)
+                    premium = (ask + bid) / 2
+                    prem_yield = round(premium / strike, 4) if strike > 0 else 0
+                    info.update({
+                        "bid": bid, "ask": ask,
+                        "premium": round(premium, 3),
+                        "prem_yield": prem_yield,
+                        "yield_ok": prem_yield >= MIN_PREMIUM_YIELD,
+                        "greeks": {
+                            "iv": float(snap.greeks.implied_volatility or 0) if snap.greeks else None,
+                            "delta": float(snap.greeks.delta or 0) if snap.greeks else None,
+                        } if snap.greeks else None
+                    })
+                else:
+                    info["quote"] = "no snapshot/quote"
+            except Exception as e:
+                info["error"] = str(e)
+            results["contracts_checked"].append(info)
+
+        return results
+    except Exception as e:
+        logger.error(f"GET /wheel/debug/contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/status")
 def wheel_status():
     """Full dashboard — positions, P&L, universe, config. iOS Wheel tab home."""
