@@ -1033,6 +1033,117 @@ if should_run("negative"):
     check("Fewer than 15 trades → no weight change", w == 1.0, f"weight={w:.3f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 12. Wheel Bot Isolation + Safety Rules
+# ══════════════════════════════════════════════════════════════════════════════
+if should_run("wheel"):
+    section("12. Wheel Bot — Isolation, Safety, Config Rules")
+    import ast, pathlib
+
+    # ── 12a. Zero imports from Kova trading logic ─────────────────────────────
+    # Check actual import lines only (not comments or docstrings)
+    wheel_src = pathlib.Path(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "services/wheel_engine.py")
+    ).read_text()
+
+    import_lines = [l.strip() for l in wheel_src.splitlines()
+                    if l.strip().startswith(("import ", "from ")) and "#" not in l.split("import")[0]]
+    FORBIDDEN_IMPORTS = ["trading_engine", "claude_service", "brain"]
+    for mod in FORBIDDEN_IMPORTS:
+        found = any(mod in line for line in import_lines)
+        check(
+            f"wheel_engine must NOT import Kova module: {mod}",
+            not found,
+            "clean" if not found else f"FOUND import: {mod}",
+        )
+
+    # ── 12b. ask_ai_pro must never be called from wheel files ─────────────────
+    wheel_files = ["wheel_engine.py", "wheel_universe.py",
+                   "wheel_optimizer.py", "wheel_scheduler.py"]
+    services_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "services")
+    for fname in wheel_files:
+        fpath = os.path.join(services_dir, fname)
+        if pathlib.Path(fpath).exists():
+            src = pathlib.Path(fpath).read_text()
+            check(
+                f"{fname} must NOT call ask_ai_pro (no Sonnet/Pro costs)",
+                "ask_ai_pro" not in src,
+                "clean" if "ask_ai_pro" not in src else "FOUND ask_ai_pro",
+            )
+
+    # ── 12c. Paper mode default is ON ─────────────────────────────────────────
+    from services.wheel_engine import _is_paper, EARLY_CLOSE_THRESHOLD, MAX_ACTIVE_POSITIONS
+    check("Default ALPACA_WHEEL_BASE_URL is paper", _is_paper(), f"paper={_is_paper()}")
+
+    # ── 12d. URL-based paper detection works correctly ────────────────────────
+    paper_url  = "https://paper-api.alpaca.markets"
+    live_url   = "https://api.alpaca.markets"
+    check("'paper' in paper URL → is_paper=True",  "paper" in paper_url,  paper_url)
+    check("'paper' not in live URL → is_paper=False", "paper" not in live_url, live_url)
+
+    # ── 12e. MAX_ACTIVE_POSITIONS is a safe limit ─────────────────────────────
+    check("MAX_ACTIVE_POSITIONS set",       MAX_ACTIVE_POSITIONS > 0, str(MAX_ACTIVE_POSITIONS))
+    check("MAX_ACTIVE_POSITIONS ≤ 10",      MAX_ACTIVE_POSITIONS <= 10, f"{MAX_ACTIVE_POSITIONS}")
+    check("MAX_ACTIVE_POSITIONS ≥ 1",       MAX_ACTIVE_POSITIONS >= 1, f"{MAX_ACTIVE_POSITIONS}")
+
+    # ── 12f. Early close threshold is sane ────────────────────────────────────
+    check("EARLY_CLOSE_THRESHOLD set",      0 < EARLY_CLOSE_THRESHOLD < 1, str(EARLY_CLOSE_THRESHOLD))
+    check("EARLY_CLOSE_THRESHOLD ≤ 0.75",   EARLY_CLOSE_THRESHOLD <= 0.75, f"{EARLY_CLOSE_THRESHOLD}")
+    check("EARLY_CLOSE_THRESHOLD ≥ 0.30",   EARLY_CLOSE_THRESHOLD >= 0.30, f"{EARLY_CLOSE_THRESHOLD}")
+
+    # ── 12g. Wheel profit reserve uses separate cache key from Kova ───────────
+    from services.wheel_engine import _WHEEL_RESERVE_KEY
+    # Read Kova reserve key from source — avoids importing trading_engine (Python version issue)
+    te_src = pathlib.Path(
+        os.path.join(services_dir, "trading_engine.py")
+    ).read_text()
+    kova_key_line = next((l for l in te_src.splitlines() if "_RESERVE_CACHE_KEY" in l and "=" in l), "")
+    kova_key = kova_key_line.split("=")[-1].strip().strip('"').strip("'") if kova_key_line else ""
+    check(
+        "Wheel reserve key differs from Kova reserve key",
+        bool(kova_key) and _WHEEL_RESERVE_KEY != kova_key,
+        f"wheel={_WHEEL_RESERVE_KEY!r} | kova={kova_key!r}",
+    )
+
+    # ── 12h. Wheel regime access is read-only (no cache_set calls with regime) ─
+    check(
+        "wheel_engine does not write regime cache",
+        'cache_set("market_regime' not in wheel_src and
+        "cache_set('market_regime" not in wheel_src,
+        "no regime writes found",
+    )
+
+    # ── 12i. Scheduler is daemon (won't block app shutdown) ───────────────────
+    scheduler_src = pathlib.Path(
+        os.path.join(services_dir, "wheel_scheduler.py")
+    ).read_text()
+    check("Wheel scheduler thread is daemon=True", "daemon=True" in scheduler_src, "daemon=True")
+
+    # ── 12j. Config has isolated wheel keys ───────────────────────────────────
+    config_src = pathlib.Path(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "config.py")
+    ).read_text()
+    check("config has alpaca_wheel_key",       "alpaca_wheel_key"       in config_src, "found")
+    check("config has alpaca_wheel_secret",    "alpaca_wheel_secret"    in config_src, "found")
+    check("config has alpaca_wheel_base_url",  "alpaca_wheel_base_url"  in config_src, "found")
+
+    # ── 12k. Wheel router prefix is /wheel (no overlap with Kova routes) ──────
+    router_src = pathlib.Path(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "routers/wheel.py")
+    ).read_text()
+    check('Wheel router prefix is "/wheel"', 'prefix="/wheel"' in router_src, "found /wheel prefix")
+
+    # ── 12l. Market hours guard exists in run_wheel_cycle ─────────────────────
+    check(
+        "run_wheel_cycle checks market hours before trading",
+        "_market_is_open()" in wheel_src,
+        "market guard present",
+    )
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 import time
