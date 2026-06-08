@@ -15,6 +15,8 @@ from models.trade import Position, Order
 
 logger = logging.getLogger(__name__)
 
+from services.connector_health import track_api
+
 trading_client = TradingClient(
     settings.alpaca_api_key,
     settings.alpaca_secret_key,
@@ -27,6 +29,7 @@ data_client = StockHistoricalDataClient(
 )
 
 
+@track_api("alpaca_account")
 def get_account() -> AccountInfo:
     account = trading_client.get_account()
     portfolio_value = float(account.portfolio_value)
@@ -51,6 +54,7 @@ def get_account() -> AccountInfo:
     )
 
 
+@track_api("alpaca_positions")
 def get_positions() -> list[Position]:
     raw = trading_client.get_all_positions()
     result = []
@@ -92,6 +96,7 @@ def get_orders(limit: int = 50) -> list[Order]:
     return result
 
 
+@track_api("alpaca_orders")
 def submit_market_order(
     symbol: str,
     qty: int,
@@ -342,6 +347,7 @@ def submit_short_order(
         return None
 
 
+@track_api("alpaca_market_data")
 def get_market_snapshot(symbols: list[str]) -> dict:
     """Return latest quote + 5-day price change for each symbol."""
     snapshot = {}
@@ -617,6 +623,7 @@ def get_tradeable_universe() -> list[str]:
     return universe
 
 
+@track_api("alpaca_market_data")
 def get_market_snapshot_light(symbols: list[str]) -> dict:
     """
     Lightweight snapshot — only current price + 5-day change.
@@ -912,6 +919,7 @@ def submit_extended_hours_order(
         return None
 
 
+@track_api("news_api")
 def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
     """
     Fetch latest financial news in parallel from 10+ free sources:

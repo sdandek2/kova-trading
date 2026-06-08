@@ -9,14 +9,51 @@ Thresholds:
   0 calls in 48hrs              → SILENT (connector not firing — check wiring)
 
 Each connector must call log_connector_call() on every invocation.
+Use @track_api("name") decorator to auto-log any function.
 """
 import logging
+import functools
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+
+def track_api(connector_name: str):
+    """
+    Decorator that auto-logs success/failure of any function to connector_health_log.
+
+    Usage:
+        @track_api("alpaca_orders")
+        def submit_market_order(...):
+            ...
+
+    On success  → logs status='ok'
+    On exception → logs status='error', re-raises so caller still sees the error
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                result = fn(*args, **kwargs)
+                _log(connector_name, "ok")
+                return result
+            except Exception as e:
+                _log(connector_name, "error", str(e)[:500])
+                raise
+        return wrapper
+    return decorator
+
+
+def _log(connector_name: str, status: str, details: str = "") -> None:
+    try:
+        from services.db import log_connector_call
+        log_connector_call(connector_name, status, details)
+    except Exception:
+        pass
+
 # Connectors we actively monitor
 MONITORED_CONNECTORS = [
+    # Market data / alternative data
     "barchart",
     "finnhub",
     "sec_insider",
@@ -24,6 +61,14 @@ MONITORED_CONNECTORS = [
     "quiver",
     "unusual_whales",
     "macro_fred",
+    # Core trading infrastructure
+    "alpaca_account",
+    "alpaca_positions",
+    "alpaca_orders",
+    "alpaca_market_data",
+    # AI + news
+    "claude_ai",
+    "news_api",
 ]
 
 _WARNING_THRESHOLD_PCT = 80   # % failure rate to trigger alert
@@ -149,6 +194,14 @@ def _disable_connector_weight(connector: str) -> None:
         "fmp_earnings": ["earnings_surprise_strong", "earnings_surprise_mild"],
         "quiver": [],  # institutional data — no direct signal weight
         "unusual_whales": ["options_flow_fallback"],
+        # Core infrastructure — no signal weight mapping; if these fail, bot can't trade at all
+        "alpaca_account": [],
+        "alpaca_positions": [],
+        "alpaca_orders": [],
+        "alpaca_market_data": [],
+        "claude_ai": [],
+        "news_api": [],
+        "macro_fred": [],
     }
     signals = _connector_to_signal.get(connector, [])
     if not signals:

@@ -9,6 +9,8 @@ from services.ai_client import ask_ai, ask_ai_pro, parse_ai_json
 
 logger = logging.getLogger(__name__)
 
+from services.connector_health import track_api
+
 def _get_watchlist() -> list[str]:
     from routers.watchlist import load_watchlist
     return load_watchlist()
@@ -84,6 +86,7 @@ Only return bullish/bearish if there is CLEAR directional evidence. Default to u
         return {"direction": "uncertain", "confidence": "low", "reasoning": "prediction failed"}
 
 
+@track_api("claude_ai")
 def analyze_and_decide(
     market_snapshot: dict,
     positions: list,

@@ -4,7 +4,10 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+from services.connector_health import track_api
 
+
+@track_api("macro_fred")
 def get_macro_context() -> dict:
     """
     Returns macro market signals:
