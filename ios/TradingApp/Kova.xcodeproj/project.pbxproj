@@ -15,6 +15,8 @@
 		2592C513492F5287BB2E6077 /* OrderRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 556A96BC36DB2577FEA68B16 /* OrderRowView.swift */; };
 		26E5F5AAD849E344B6E5A96C /* PortfolioChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02D08EB9752167470CF3074 /* PortfolioChartView.swift */; };
 		2B126CD370D52EEEEE17D076 /* DailyPicksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 483E5E2B8F5DC09AE452359C /* DailyPicksView.swift */; };
+		AA11BB22CC33DD44EE55FF66 /* SignalWeightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF67 /* SignalWeightsView.swift */; };
+		BB22CC33DD44EE55FF66AA11 /* ConnectorHealthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB22CC33DD44EE55FF66AA12 /* ConnectorHealthView.swift */; };
 		2CD13851BCF5F680F56D76F4 /* Prediction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC4F8BD3EA9C866D6693BFF /* Prediction.swift */; };
 		2CD79508EC4E15422342E422 /* PredictionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F2FD9F63FDC11769555DCB /* PredictionDetailView.swift */; };
 		30D361A60F026F0D1EBDE34C /* WatchlistEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13F2E87D7B52A1FEB042993B /* WatchlistEditorView.swift */; };
@@ -83,6 +85,8 @@
 		474475543D3F4B78AE9359F1 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NotificationService.swift; path = Sources/Services/NotificationService.swift; sourceTree = "<group>"; };
 		48281C88EDE2467CE635EE28 /* Performance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Performance.swift; path = Sources/Models/Performance.swift; sourceTree = "<group>"; };
 		483E5E2B8F5DC09AE452359C /* DailyPicksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DailyPicksView.swift; path = Sources/Views/Insights/DailyPicksView.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF67 /* SignalWeightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SignalWeightsView.swift; path = Sources/Views/Insights/SignalWeightsView.swift; sourceTree = "<group>"; };
+		BB22CC33DD44EE55FF66AA12 /* ConnectorHealthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConnectorHealthView.swift; path = Sources/Views/Insights/ConnectorHealthView.swift; sourceTree = "<group>"; };
 		4F053517D466107EC84CCE07 /* PortfolioHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PortfolioHistory.swift; path = Sources/Models/PortfolioHistory.swift; sourceTree = "<group>"; };
 		556A96BC36DB2577FEA68B16 /* OrderRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OrderRowView.swift; path = Sources/Views/Orders/OrderRowView.swift; sourceTree = "<group>"; };
 		5A1DFB31D36986CDAD442306 /* Order.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Order.swift; path = Sources/Models/Order.swift; sourceTree = "<group>"; };
@@ -217,6 +221,8 @@
 				483E5E2B8F5DC09AE452359C /* DailyPicksView.swift */,
 				2C661F21175C2DAF4306AD83 /* InsightsView.swift */,
 				65F2FD9F63FDC11769555DCB /* PredictionDetailView.swift */,
+				AA11BB22CC33DD44EE55FF67 /* SignalWeightsView.swift */,
+				BB22CC33DD44EE55FF66AA12 /* ConnectorHealthView.swift */,
 				AFE0F45C9B54B4CEC8AFDD7E /* NewsRowView.swift */,
 				296B9E41E949870FF3C92A49 /* NewsView.swift */,
 				556A96BC36DB2577FEA68B16 /* OrderRowView.swift */,
@@ -334,6 +340,8 @@
 				2B126CD370D52EEEEE17D076 /* DailyPicksView.swift in Sources */,
 				AC6B2F0E28A1E5667C7B1F52 /* InsightsView.swift in Sources */,
 				2CD79508EC4E15422342E422 /* PredictionDetailView.swift in Sources */,
+				AA11BB22CC33DD44EE55FF66 /* SignalWeightsView.swift in Sources */,
+				BB22CC33DD44EE55FF66AA11 /* ConnectorHealthView.swift in Sources */,
 				62B3995DBBD7599A6C845AE8 /* NewsRowView.swift in Sources */,
 				21D6A98300A2D1FF80794619 /* NewsView.swift in Sources */,
 				2592C513492F5287BB2E6077 /* OrderRowView.swift in Sources */,
