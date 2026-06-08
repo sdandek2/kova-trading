@@ -2365,7 +2365,7 @@ async def run_trading_cycle():
 
                 # ── Setup type classification ──────────────────────────────────
                 _sig_type_entry = getattr(decision, "signal_type", None) or ""
-                if trading_window in ("premarket", "afterhours"):
+                if _urgent_window in ("premarket", "afterhours"):
                     _setup_type = "extended_hours"
                 elif _sig_type_entry in ("mean_reversion", "oversold_bounce"):
                     _setup_type = "mean_reversion"
