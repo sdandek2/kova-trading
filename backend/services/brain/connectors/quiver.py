@@ -65,8 +65,10 @@ def get_darkpool_signal(symbol: str) -> dict:
 def _fetch_institutional_data(symbol: str) -> dict:
     try:
         import yfinance as yf
-    except ImportError:
-        return _unavailable("yfinance not installed — run: pip install yfinance")
+    except ImportError as e:
+        return _unavailable(f"yfinance import failed: {e}")
+    except Exception as e:
+        return _unavailable(f"yfinance load error: {type(e).__name__}: {e}")
 
     ticker = yf.Ticker(symbol)
     info = ticker.info or {}

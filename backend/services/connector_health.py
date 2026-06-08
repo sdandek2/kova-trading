@@ -13,9 +13,14 @@ Use @track_api("name") decorator to auto-log any function.
 """
 import logging
 import functools
+import time
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# Deduplicate connector_critical activity log entries — log at most once per hour per connector
+_last_critical_log: dict[str, float] = {}
+_CRITICAL_LOG_INTERVAL = 3600  # 1 hour
 
 
 def track_api(connector_name: str):
@@ -142,7 +147,11 @@ def check_and_alert(manager=None) -> list[dict]:
             logger.error(f"CONNECTOR_CRITICAL: {issue['message']}")
             _send_push(connector, "critical", issue["message"], manager)
             _disable_connector_weight(connector)
-            log_bot_activity("connector_critical", issue["message"])
+            # Deduplicate: only log to activity once per hour per connector
+            now = time.time()
+            if now - _last_critical_log.get(connector, 0) >= _CRITICAL_LOG_INTERVAL:
+                log_bot_activity("connector_critical", issue["message"])
+                _last_critical_log[connector] = now
             continue
 
         # Warning — 24hr failure

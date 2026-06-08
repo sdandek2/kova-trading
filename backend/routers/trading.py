@@ -117,6 +117,85 @@ async def trigger_eod_analysis():
         raise HTTPException(status_code=500, detail=f"EOD trigger failed: {e}")
 
 
+@router.get("/connectors/health")
+def get_connectors_health():
+    """
+    Live connector health check — tests each data source and reports status.
+    Use this to verify yfinance, Alpaca, news APIs are all reachable after deploy.
+    """
+    import time
+    results = {}
+
+    # yfinance / quiver
+    t0 = time.time()
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker("AAPL")
+        info = ticker.info or {}
+        inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100
+        results["yfinance"] = {
+            "status": "ok",
+            "detail": f"AAPL institutional hold: {inst_pct:.0f}%",
+            "latency_ms": round((time.time() - t0) * 1000),
+        }
+    except ImportError as e:
+        results["yfinance"] = {"status": "import_error", "detail": str(e)}
+    except Exception as e:
+        results["yfinance"] = {
+            "status": "error",
+            "detail": f"{type(e).__name__}: {e}",
+            "latency_ms": round((time.time() - t0) * 1000),
+        }
+
+    # Alpaca market data
+    t0 = time.time()
+    try:
+        from services.trading_engine import _get_trading_client
+        acct = _get_trading_client().get_account()
+        results["alpaca"] = {
+            "status": "ok",
+            "detail": f"account equity=${float(acct.equity):,.0f}",
+            "latency_ms": round((time.time() - t0) * 1000),
+        }
+    except Exception as e:
+        results["alpaca"] = {"status": "error", "detail": str(e)}
+
+    # DB
+    t0 = time.time()
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            results["database"] = {
+                "status": "ok",
+                "latency_ms": round((time.time() - t0) * 1000),
+            }
+        else:
+            results["database"] = {"status": "unavailable", "detail": "no connection"}
+    except Exception as e:
+        results["database"] = {"status": "error", "detail": str(e)}
+
+    # Connector failure rates from DB
+    try:
+        from services.db import get_connector_health
+        rows = get_connector_health(hours=1)
+        for row in rows:
+            name = row["connector_name"]
+            if name not in results:
+                results[name] = {
+                    "status": "ok" if row["failure_pct"] < 50 else "degraded",
+                    "failure_pct_1h": row["failure_pct"],
+                    "calls_1h": row["total_calls"],
+                }
+    except Exception:
+        pass
+
+    overall = "ok" if all(v.get("status") == "ok" for v in results.values()) else "degraded"
+    return {"overall": overall, "connectors": results}
+
+
 @router.get("/macro")
 def get_macro():
     from services.macro import get_macro_context, get_sector_rotation
