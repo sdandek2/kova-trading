@@ -101,11 +101,20 @@ def check_and_alert(manager=None) -> list[dict]:
         row_48 = health_48h.get(connector)
 
         # Key not configured — expected, not a failure. Show in dashboard but don't alert.
-        if row_48 and row_48.get("key_missing") and row_48.get("total_calls", 0) == 0:
+        # Also catches connectors that have never been called but key_missing rows exist in 24hr window.
+        key_missing = (row_48 and row_48.get("key_missing")) or (row_24 and row_24.get("key_missing"))
+        if key_missing:
             logger.debug(f"CONNECTOR_NO_KEY: {connector} — API key not set, skipping health check")
             continue
 
-        # Silent — connector not firing at all
+        # Alpaca connectors don't fire on weekends/holidays — skip silent check for them
+        _alpaca_connectors = {"alpaca_account", "alpaca_positions", "alpaca_orders", "alpaca_market_data"}
+        if connector in _alpaca_connectors:
+            now_utc = datetime.now(timezone.utc)
+            if now_utc.weekday() >= 5:  # Saturday=5, Sunday=6
+                continue
+
+        # Silent — connector not firing at all (and key IS configured)
         if not row_48 or row_48["total_calls"] == 0:
             issue = {
                 "connector": connector,
