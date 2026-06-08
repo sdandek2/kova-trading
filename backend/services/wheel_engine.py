@@ -1697,20 +1697,22 @@ def run_wheel_cycle():
             placed = 0
 
             if slots > 0:
-                if regime in ("bearish", "bear"):
-                    # Bearish regime → bear call spreads instead of puts
-                    logger.info(f"Wheel: bearish regime — scanning bear call spreads ({slots} slots)")
+                # Always place cash-secured puts — the core wheel strategy.
+                # Bear spreads are additive only (extra income on top), never replace puts.
+                # Reason: puts are the entry point for getting assigned shares cheaply.
+                # Without puts there is no wheel — bear spreads alone don't complete the cycle.
+                logger.info(f"Wheel: {regime} regime — scanning puts ({slots} slots)")
+                opps = scan_opportunities()
+                for opp in opps[:min(slots, MAX_ACTIVE_POSITIONS)]:
+                    if execute_put(opp):
+                        placed += 1
+
+                # In bearish regime, also place 1 bear spread if slots remain
+                if regime in ("bearish", "bear") and placed < slots:
+                    logger.info(f"Wheel: bearish regime — also scanning bear spreads ({slots - placed} extra slots)")
                     spreads = scan_bear_spreads()
-                    for spread in spreads[:min(2, slots)]:
+                    for spread in spreads[:1]:
                         if execute_bear_spread(spread):
-                            placed += 1
-                    logger.info(f"Wheel bear spreads: {placed} placed, {len(spreads)} found")
-                else:
-                    # Neutral/bullish → standard cash-secured puts
-                    logger.info(f"Wheel: {regime} regime — scanning puts ({slots} slots)")
-                    opps = scan_opportunities()
-                    for opp in opps[:min(2, slots)]:
-                        if execute_put(opp):
                             placed += 1
                     logger.info(f"Wheel puts: {placed} placed, {len(opps)} opportunities found")
             else:
