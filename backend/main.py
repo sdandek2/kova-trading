@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI):
     log_connector_status()
     trading_engine.start()
     logger.info("Trading bot auto-started on launch.")
+    # Wheel bot scheduler — runs independently alongside Kova
+    from services.wheel_scheduler import start_wheel_scheduler
+    start_wheel_scheduler()
+    logger.info("Wheel bot scheduler started.")
     yield
     trading_engine.stop()
     logger.info("Trading app backend shut down.")
@@ -84,6 +88,7 @@ app.include_router(eod.router)
 app.include_router(finance.router)
 app.include_router(prompt.router)
 app.include_router(model_settings.router)
+app.include_router(wheel.router)
 
 
 @app.get("/health")

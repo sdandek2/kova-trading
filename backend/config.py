@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     quiver_api_key: str = ""       # Quiver Quantitative — dark pool (legacy)
     finnhub_api_key: str = ""      # Finnhub — analyst recommendation trends
 
+    # Wheel Bot — separate Alpaca paper account (optional — falls back to main keys if not set)
+    alpaca_wheel_key: str = ""     # Alpaca API key for wheel paper account
+    alpaca_wheel_secret: str = ""  # Alpaca secret for wheel paper account
+
     class Config:
         env_file = ".env"
 

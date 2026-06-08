@@ -210,6 +210,35 @@ def _ensure_table(conn):
                 quantity        INTEGER
             )
         """)
+        # ── Wheel Bot: wheel_positions ──────────────────────────────────────
+        # Tracks each active wheel cycle: put → (assignment) → covered call → repeat.
+        # Completely separate from Kova trading. strategy tag = 'wheel'.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_positions (
+                id                  SERIAL PRIMARY KEY,
+                symbol              TEXT NOT NULL,
+                phase               TEXT NOT NULL DEFAULT 'scanning',
+                put_contract        TEXT,
+                put_strike          FLOAT,
+                put_expiry          DATE,
+                put_premium         FLOAT,
+                put_order_id        TEXT,
+                shares_qty          INTEGER DEFAULT 100,
+                cost_basis          FLOAT,
+                call_contract       TEXT,
+                call_strike         FLOAT,
+                call_expiry         DATE,
+                call_premium        FLOAT,
+                call_order_id       TEXT,
+                total_premium_collected FLOAT DEFAULT 0,
+                regime_at_open      TEXT,
+                opened_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                closed_at           TIMESTAMPTZ,
+                realized_pl         FLOAT,
+                status              TEXT NOT NULL DEFAULT 'active',
+                notes               TEXT
+            )
+        """)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
