@@ -13,13 +13,34 @@ Signal: top 10 institutional holders as % of float
 Note: this data is quarterly (SEC 13F), not real-time. Lower conviction than
 real dark pool data, but still useful for filtering out thinly-held stocks.
 Cache: 24 hours per symbol.
+
+Railway IP note: Yahoo Finance rate-limits cloud IPs (429). A daily circuit
+breaker stops all calls after the first 429, retrying the next calendar day.
 """
 import logging
 import time
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
+# Silence yfinance's own noisy internal logger — it logs every 429 retry as ERROR
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
 _CACHE_TTL = 86_400
+
+# Daily circuit breaker — stop calling Yahoo after first 429, reset next day
+_blocked_date: date | None = None
+
+_cache: dict[str, tuple[dict, float]] = {}
+
+_ETF_SUFFIXES = ("ETF", "ETN", "FUND")
+_KNOWN_ETFS = {
+    "SPY","QQQ","IWM","DIA","GLD","SLV","TLT","HYG","LQD","IEF",
+    "XLF","XLK","XLE","XLV","XLI","XLY","XLB","XLP","XLU","XLRE",
+    "TQQQ","SQQQ","SPXL","SPXS","SOXL","SOXS","UVXY","SVXY","ARKK",
+    "ARKW","ARKG","SMH","GDX","USO","IAU","IBIT","GBTC","VOO","VTI",
+    "AGG","SOXX","ARKF","ARKE","SCO","OIH","EWY","IUXX",
+}
 
 
 def _log_health(result: dict) -> None:
@@ -28,8 +49,7 @@ def _log_health(result: dict) -> None:
         status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
         log_connector_call("quiver", status, result.get("details", ""))
     except Exception:
-        pass  # 24 hours (quarterly data doesn't need frequent refresh)
-_cache: dict[str, tuple[dict, float]] = {}
+        pass
 
 
 def _unavailable(reason: str) -> dict:
@@ -47,24 +67,22 @@ def get_darkpool_signal(symbol: str) -> dict:
           "details": str
         }
     """
+    global _blocked_date
+
     cached = _cache.get(symbol)
     if cached and time.time() < cached[1]:
         return cached[0]
 
-    # ETFs and leveraged products have no institutional holder data on Yahoo Finance
-    # — skip immediately rather than making a doomed API call
-    _ETF_SUFFIXES = ("ETF", "ETN", "FUND")
-    _KNOWN_ETFS = {
-        "SPY","QQQ","IWM","DIA","GLD","SLV","TLT","HYG","LQD","IEF",
-        "XLF","XLK","XLE","XLV","XLI","XLY","XLB","XLP","XLU","XLRE",
-        "TQQQ","SQQQ","SPXL","SPXS","SOXL","SOXS","UVXY","SVXY","ARKK",
-        "ARKW","ARKG","SMH","GDX","USO","IAU","IBIT","GBTC","VOO","VTI",
-        "AGG","SOXX","ARKF","ARKE",
-    }
+    # ETFs and index products have no institutional holder data
     if symbol in _KNOWN_ETFS or any(symbol.endswith(s) for s in _ETF_SUFFIXES):
         result = _unavailable("ETF — no institutional holder data")
         _cache[symbol] = (result, time.time() + _CACHE_TTL)
         return result
+
+    # Daily circuit breaker — Yahoo rate-limits Railway IP after a burst
+    today = date.today()
+    if _blocked_date == today:
+        return _unavailable("Yahoo Finance rate-limited today — retry tomorrow")
 
     try:
         result = _fetch_institutional_data(symbol)
@@ -82,6 +100,8 @@ def get_darkpool_signal(symbol: str) -> dict:
 
 
 def _fetch_institutional_data(symbol: str) -> dict:
+    global _blocked_date
+
     try:
         import yfinance as yf
     except ImportError as e:
@@ -89,8 +109,16 @@ def _fetch_institutional_data(symbol: str) -> dict:
     except Exception as e:
         return _unavailable(f"yfinance load error: {type(e).__name__}: {e}")
 
-    ticker = yf.Ticker(symbol)
-    info = ticker.info or {}
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+    except Exception as e:
+        err = str(e)
+        if "429" in err or "Too Many Requests" in err:
+            _blocked_date = date.today()
+            logger.warning("yfinance: Yahoo Finance 429 — circuit breaker engaged for today")
+            return _unavailable("Yahoo Finance rate-limited (429) — blocked for today")
+        return _unavailable(f"yfinance fetch error: {err}")
 
     # institutionsPercentHeld is 0.0-1.0
     inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100

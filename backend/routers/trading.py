@@ -196,6 +196,26 @@ def get_connectors_health():
     return {"overall": overall, "connectors": results}
 
 
+@router.post("/connectors/reset-quiver")
+def reset_quiver_health():
+    """
+    Clear stale quiver/yfinance connector_health_log records.
+    Use once after fixing a connector to stop false connector_critical alerts.
+    """
+    from services.db import _get_conn
+    conn = _get_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM connector_health_log WHERE connector_name = 'quiver'")
+            deleted = cur.rowcount
+        conn.commit()
+        return {"status": "ok", "deleted_records": deleted, "message": "Quiver health history cleared — fresh start"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/macro")
 def get_macro():
     from services.macro import get_macro_context, get_sector_rotation
