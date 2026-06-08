@@ -53,8 +53,12 @@ def get_darkpool_signal(symbol: str) -> dict:
 
     try:
         result = _fetch_institutional_data(symbol)
+        if result.get("signal") != "unavailable":
+            logger.info("yfinance institutional %s: %s", symbol, result.get("details", "ok"))
+        else:
+            logger.warning("yfinance institutional %s unavailable: %s", symbol, result.get("details", ""))
     except Exception as e:
-        logger.debug("yfinance institutional %s: %s", symbol, e)
+        logger.error("yfinance institutional %s error: %s", symbol, e)
         result = _unavailable(str(e))
 
     _cache[symbol] = (result, time.time() + _CACHE_TTL)
