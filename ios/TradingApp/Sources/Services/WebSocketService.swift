@@ -96,6 +96,14 @@ class WebSocketService: ObservableObject {
                     userInfo: dayPl.map { ["day_pl_percent": $0] }
                 )
                 NotificationService.shared.notifyCircuitBreaker(reason: reason)
+            case "connector_alert":
+                let data = payload as? [String: Any]
+                let connector = data?["connector"] as? String ?? "unknown"
+                let severity  = data?["severity"]  as? String ?? "warning"
+                let body      = data?["body"]       as? String ?? "Connector issue detected"
+                NotificationService.shared.notifyConnectorAlert(
+                    connector: connector, severity: severity, body: body
+                )
             default:
                 break
             }

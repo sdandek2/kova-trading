@@ -1,5 +1,36 @@
 import Foundation
 
+// MARK: - Connector Health
+
+struct ConnectorHealth: Decodable, Identifiable {
+    var id: String { connectorName }
+    let connectorName: String
+    let totalCalls: Int
+    let failedCalls: Int
+    let failurePct: Int
+    let lastCalled: String?
+    let lastError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connectorName = "connector_name"
+        case totalCalls = "total_calls"
+        case failedCalls = "failed_calls"
+        case failurePct = "failure_pct"
+        case lastCalled = "last_called"
+        case lastError = "last_error"
+    }
+
+    var statusColor: String {
+        if failurePct >= 80 { return "red" }
+        if failurePct >= 40 { return "orange" }
+        return "green"
+    }
+
+    var displayName: String {
+        connectorName.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
 // MARK: - Signal Weights
 
 struct SignalWeightHistory: Decodable, Identifiable {

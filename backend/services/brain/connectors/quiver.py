@@ -19,7 +19,16 @@ import time
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL = 86_400  # 24 hours (quarterly data doesn't need frequent refresh)
+_CACHE_TTL = 86_400
+
+
+def _log_health(result: dict) -> None:
+    try:
+        from services.db import log_connector_call
+        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        log_connector_call("quiver", status, result.get("details", ""))
+    except Exception:
+        pass  # 24 hours (quarterly data doesn't need frequent refresh)
 _cache: dict[str, tuple[dict, float]] = {}
 
 
@@ -49,6 +58,7 @@ def get_darkpool_signal(symbol: str) -> dict:
         result = _unavailable(str(e))
 
     _cache[symbol] = (result, time.time() + _CACHE_TTL)
+    _log_health(result)
     return result
 
 

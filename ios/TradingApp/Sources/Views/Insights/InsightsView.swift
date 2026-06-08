@@ -74,6 +74,11 @@ struct InsightsView: View {
 
                 // Signal Intelligence — weight tracker
                 SignalWeightsView(vm: vm)
+
+                Divider().padding(.horizontal)
+
+                // Connector Health — failure rate monitor
+                ConnectorHealthView(vm: vm)
                     .padding(.vertical)
             }
             .navigationTitle("Insights")

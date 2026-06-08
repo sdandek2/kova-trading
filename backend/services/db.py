@@ -1301,6 +1301,17 @@ def ensure_session7_tables() -> None:
             adjustment_reason TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS connector_health_log (
+            id SERIAL PRIMARY KEY,
+            connector_name VARCHAR(50) NOT NULL,
+            status VARCHAR(20) NOT NULL,  -- 'ok' | 'unavailable' | 'error'
+            details TEXT,
+            called_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_connector_health_name_time
+            ON connector_health_log (connector_name, called_at DESC);
+
         CREATE TABLE IF NOT EXISTS signal_weight_history (
             id SERIAL PRIMARY KEY,
             signal_name VARCHAR(50) NOT NULL,
@@ -1608,6 +1619,64 @@ def update_signal_weight(signal_name: str, new_weight: int, reason: str,
         conn.commit()
     except Exception as e:
         logger.debug(f"update_signal_weight failed (non-fatal): {e}")
+
+
+def log_connector_call(connector_name: str, status: str, details: str = "") -> None:
+    """Log a connector call outcome. status: 'ok' | 'unavailable' | 'error'."""
+    if TEST_MODE:
+        return
+    try:
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO connector_health_log (connector_name, status, details)
+                VALUES (%s, %s, %s)
+            """, (connector_name, status, details[:500] if details else ""))
+        conn.commit()
+    except Exception as e:
+        logger.debug(f"log_connector_call failed (non-fatal): {e}")
+
+
+def get_connector_health(hours: int = 24) -> list[dict]:
+    """
+    Returns failure rate per connector over last N hours.
+    Used by health checker to decide when to alert.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    connector_name,
+                    COUNT(*) AS total_calls,
+                    SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS failed_calls,
+                    ROUND(SUM(CASE WHEN status != 'ok' THEN 1.0 ELSE 0 END) / COUNT(*) * 100) AS failure_pct,
+                    MAX(called_at) AS last_called,
+                    MAX(CASE WHEN status != 'ok' THEN details END) AS last_error
+                FROM connector_health_log
+                WHERE called_at >= NOW() - INTERVAL '%s hours'
+                GROUP BY connector_name
+                ORDER BY failure_pct DESC
+            """, (hours,))
+            rows = cur.fetchall()
+            return [
+                {
+                    "connector_name": r[0],
+                    "total_calls": r[1],
+                    "failed_calls": r[2],
+                    "failure_pct": int(r[3] or 0),
+                    "last_called": r[4].isoformat() if r[4] else None,
+                    "last_error": r[5],
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        logger.debug(f"get_connector_health failed (non-fatal): {e}")
+        return []
 
 
 def get_signal_win_rates(days: int = 30) -> list[dict]:

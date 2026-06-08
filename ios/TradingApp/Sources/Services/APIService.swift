@@ -362,6 +362,11 @@ class APIService {
         try await fetch("/api/strategy/signal-weights")
     }
 
+    // ── Connector Health ──
+    func getConnectorHealth() async throws -> [ConnectorHealth] {
+        try await fetch("/api/strategy/connector-health")
+    }
+
     // ── Session 7: Near-Miss Tracker + Sprint Review ──
     func getNearMisses() async throws -> NearMissReport {
         try await fetch("/api/performance/near-misses")

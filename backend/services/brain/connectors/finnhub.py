@@ -24,6 +24,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://finnhub.io/api/v1"
+
+
+def _log_health(result: dict) -> None:
+    try:
+        from services.db import log_connector_call
+        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        log_connector_call("finnhub", status, result.get("details", ""))
+    except Exception:
+        pass
 _CACHE_TTL = 86_400  # 24 hours — analyst ratings update monthly
 _cache: dict[str, dict] = {}
 
@@ -54,7 +63,9 @@ def get_recommendation_signal(symbol: str) -> dict:
 
     api_key = _get_api_key()
     if not api_key:
-        return {"signal": "unavailable", "conviction_boost": 0, "details": "FINNHUB_API_KEY not set"}
+        result = {"signal": "unavailable", "conviction_boost": 0, "details": "FINNHUB_API_KEY not set"}
+        _log_health(result)
+        return result
 
     try:
         resp = httpx.get(
@@ -116,4 +127,5 @@ def get_recommendation_signal(symbol: str) -> dict:
 
     result = {"signal": signal, "conviction_boost": boost, "details": detail}
     _cache[sym] = {**result, "_expires": time.time() + _CACHE_TTL}
+    _log_health(result)
     return result

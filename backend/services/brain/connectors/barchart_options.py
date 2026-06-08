@@ -99,6 +99,15 @@ _EXCLUDED_SYMBOLS = {
 }
 
 
+def _log_health(result: dict) -> None:
+    try:
+        from services.db import log_connector_call
+        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        log_connector_call("barchart", status, result.get("details", ""))
+    except Exception:
+        pass
+
+
 def _get_session() -> httpx.Client:
     """Return a valid Barchart session, refreshing if needed."""
     global _session, _session_refreshed_at
@@ -310,9 +319,12 @@ def get_options_flow(symbol: str) -> dict:
 
     result = _cache_data.get(symbol.upper().strip())
     if result:
+        _log_health(result)
         return result
 
-    return {"signal": "neutral", "conviction_boost": 0, "details": "no unusual options activity"}
+    neutral = {"signal": "neutral", "conviction_boost": 0, "details": "no unusual options activity"}
+    _log_health(neutral)
+    return neutral
 
 
 def get_all_unusual_symbols() -> list[str]:

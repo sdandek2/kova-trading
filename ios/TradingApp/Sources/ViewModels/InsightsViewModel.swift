@@ -6,10 +6,12 @@ class InsightsViewModel: ObservableObject {
     @Published var suggestions: [Suggestion] = []
     @Published var prediction: StockPrediction? = nil
     @Published var signalWeights: [SignalWeight] = []
+    @Published var connectorHealth: [ConnectorHealth] = []
     @Published var isLoadingDailyPicks = false
     @Published var isLoadingSuggestions = false
     @Published var isLoadingPrediction = false
     @Published var isLoadingSignalWeights = false
+    @Published var isLoadingConnectorHealth = false
     @Published var dailyPicksError: String? = nil
     @Published var suggestionsError: String? = nil
     @Published var predictionError: String? = nil
@@ -58,6 +60,16 @@ class InsightsViewModel: ObservableObject {
             predictionError = error.localizedDescription
         }
         isLoadingPrediction = false
+    }
+
+    func loadConnectorHealth() async {
+        isLoadingConnectorHealth = true
+        do {
+            connectorHealth = try await APIService.shared.getConnectorHealth()
+        } catch {
+            // Non-fatal
+        }
+        isLoadingConnectorHealth = false
     }
 
     func loadSignalWeights() async {

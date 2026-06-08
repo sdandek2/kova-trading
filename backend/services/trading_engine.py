@@ -2753,6 +2753,17 @@ async def _trading_loop():
         except Exception as _sr_err:
             logger.debug(f"Sprint review trigger (non-fatal): {_sr_err}")
 
+        # ── Connector health check: every hour ────────────────────────────────
+        try:
+            _ch_hour_key = f"connector_health_{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H')}"
+            if cache_get(_ch_hour_key) is None:
+                cache_set(_ch_hour_key, "done", 3600)
+                from services.connector_health import check_and_alert as _check_connectors
+                asyncio.get_running_loop().run_in_executor(None, lambda: _check_connectors(manager))
+                logger.debug("Connector health check triggered.")
+        except Exception as _ch_err:
+            logger.debug(f"Connector health check (non-fatal): {_ch_err}")
+
         # ── Weekly signal weight adjustment: every Sunday ─────────────────────
         try:
             from zoneinfo import ZoneInfo as _ZI_wa

@@ -25,6 +25,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _EDGAR_BASE = "https://data.sec.gov"
+
+
+def _log_health(result: dict) -> None:
+    try:
+        from services.db import log_connector_call
+        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        log_connector_call("sec_insider", status, result.get("details", ""))
+    except Exception:
+        pass
 _EDGAR_HEADERS = {"User-Agent": "Kova Trading kova@trading.com"}
 
 # Cache for the full company ticker → CIK mapping (large, refreshed weekly)
@@ -235,6 +244,7 @@ def get_insider_signal(symbol: str) -> dict:
 
     result = {"signal": signal, "conviction_boost": boost, "details": detail}
     _INSIDER_CACHE[sym] = {**result, "_expires": time.time() + _CACHE_TTL}
+    _log_health(result)
     return result
 
 

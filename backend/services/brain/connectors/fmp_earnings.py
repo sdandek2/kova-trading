@@ -21,6 +21,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://financialmodelingprep.com/stable"
+
+
+def _log_health(result: dict) -> None:
+    try:
+        from services.db import log_connector_call
+        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        log_connector_call("fmp_earnings", status, result.get("details", ""))
+    except Exception:
+        pass
 _CACHE_TTL = 86_400  # 24 hours — earnings data changes once/day at most
 
 # symbol → {beat_pct, beat_date, eps_actual, eps_estimate, direction}
@@ -204,8 +213,10 @@ def get_earnings_signal(symbol: str) -> dict:
               f"(actual {data['eps_actual']:.2f} vs est {data['eps_estimate']:.2f}) "
               f"on {data['beat_date']}")
 
-    return {
+    result = {
         "signal": direction if abs(boost) > 0 else "neutral",
         "conviction_boost": boost,
         "details": detail,
     }
+    _log_health(result)
+    return result

@@ -27,6 +27,16 @@ def set_strategy(key: str):
     return {"message": f"Strategy set to {key}"}
 
 
+@router.get("/connector-health")
+def get_connector_health():
+    """Returns connector health stats for the last 24hrs. Used by iOS dashboard."""
+    try:
+        from services.db import get_connector_health as _get_health
+        return _get_health(hours=24)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/signal-weights")
 def get_signal_weights():
     """
