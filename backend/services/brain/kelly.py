@@ -206,14 +206,17 @@ def get_trade_history_for_kelly(limit: int = 100) -> list[dict]:
             return []
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, action,
-                       CASE WHEN exit_price IS NOT NULL AND entry_price IS NOT NULL AND entry_price > 0
-                            THEN ((exit_price - entry_price) / entry_price * 100)
-                            ELSE NULL
-                       END as pl_pct
+                SELECT symbol,
+                       CASE WHEN side = 'short' THEN 'short' ELSE 'buy' END as action,
+                       COALESCE(realized_pl_pct,
+                           CASE WHEN exit_price IS NOT NULL AND entry_price IS NOT NULL AND entry_price > 0
+                                THEN ((exit_price - entry_price) / entry_price * 100)
+                                ELSE NULL
+                           END
+                       ) as pl_pct
                 FROM position_log
                 WHERE exit_price IS NOT NULL
-                ORDER BY closed_at DESC
+                ORDER BY exit_time DESC
                 LIMIT %s
             """, (limit,))
             rows = cur.fetchall()

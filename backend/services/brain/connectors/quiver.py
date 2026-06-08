@@ -28,8 +28,10 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 _CACHE_TTL = 86_400
 
-# Daily circuit breaker — stop calling Yahoo after first 429, reset next day
+# Daily circuit breaker — stop calling Yahoo after first 429 OR 5 consecutive empty-body errors
 _blocked_date: date | None = None
+_consecutive_empty: int = 0
+_EMPTY_CIRCUIT_LIMIT = 5  # engage after this many consecutive empty-body errors
 
 _cache: dict[str, tuple[dict, float]] = {}
 
@@ -67,7 +69,7 @@ def get_darkpool_signal(symbol: str) -> dict:
           "details": str
         }
     """
-    global _blocked_date
+    global _blocked_date, _consecutive_empty
 
     cached = _cache.get(symbol)
     if cached and time.time() < cached[1]:
@@ -79,10 +81,10 @@ def get_darkpool_signal(symbol: str) -> dict:
         _cache[symbol] = (result, time.time() + _CACHE_TTL)
         return result
 
-    # Daily circuit breaker — Yahoo rate-limits Railway IP after a burst
+    # Daily circuit breaker — Yahoo rate-limits Railway IP after a burst or consecutive empty bodies
     today = date.today()
     if _blocked_date == today:
-        return _unavailable("Yahoo Finance rate-limited today — retry tomorrow")
+        return _unavailable("Yahoo Finance blocked today — retry tomorrow")
 
     try:
         result = _fetch_institutional_data(symbol)
@@ -116,9 +118,23 @@ def _fetch_institutional_data(symbol: str) -> dict:
         err = str(e)
         if "429" in err or "Too Many Requests" in err:
             _blocked_date = date.today()
+            _consecutive_empty = 0
             logger.warning("yfinance: Yahoo Finance 429 — circuit breaker engaged for today")
             return _unavailable("Yahoo Finance rate-limited (429) — blocked for today")
+        # Empty body (Yahoo silently rejecting Railway IPs) — count consecutive failures
+        if "Expecting value" in err or "JSONDecodeError" in err:
+            _consecutive_empty += 1
+            if _consecutive_empty >= _EMPTY_CIRCUIT_LIMIT:
+                _blocked_date = date.today()
+                logger.warning(
+                    f"yfinance: {_consecutive_empty} consecutive empty-body errors — "
+                    f"circuit breaker engaged for today (Railway IP blocked by Yahoo)"
+                )
+                return _unavailable("Yahoo Finance empty-body circuit breaker — blocked for today")
         return _unavailable(f"yfinance fetch error: {err}")
+
+    # Successful fetch — reset consecutive empty counter
+    _consecutive_empty = 0
 
     # institutionsPercentHeld is 0.0-1.0
     inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100

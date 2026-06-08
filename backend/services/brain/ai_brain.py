@@ -271,6 +271,7 @@ Return valid JSON only — no markdown:
         analysis = trade.get("analysis", "")
         qty_suggestion = trade.get("quantity_suggestion")
 
+        candidate = None  # reset each iteration — sell branch never sets this
         if action in ("buy", "short"):
             # Find pre-scored candidate for this symbol
             candidate = next((c for c in scored_candidates if c.symbol == sym), None)

@@ -329,6 +329,9 @@ def _score_symbol(
     elif regime == "bear" and suggested_action == "short":
         breakdown["regime"] = 20
         regime_aligned = True
+    elif regime == "bear" and is_inverse and suggested_action == "buy":
+        breakdown["regime"] = 25  # inverse ETF is the ideal bear-regime instrument
+        regime_aligned = True
     elif regime == "bear" and suggested_action == "buy" and not is_inverse:
         breakdown["regime"] = -15  # buying longs in bear market
     elif regime == "chop" and signal_type == "oversold":
