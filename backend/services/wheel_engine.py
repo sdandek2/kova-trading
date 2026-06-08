@@ -302,7 +302,29 @@ def get_wheel_summary() -> dict:
             """)
             cols = [d[0] for d in cur.description]
             row = cur.fetchone()
-            result = dict(zip(cols, row)) if row else {}
+            raw = dict(zip(cols, row)) if row else {}
+            # Normalize keys to match Swift WheelSummary CodingKeys exactly
+            result = {
+                "total_premium_collected": float(raw.get("total_premium_ever", 0)),
+                "total_realized_pl":       float(raw.get("total_realized_pl", 0)),
+                "active_cycles":           int(raw.get("active_count", 0)),
+                "completed_cycles":        int(raw.get("completed_count", 0)),
+                "win_rate":                None,   # computed below if data exists
+                "avg_cycle_days":          None,
+                "active_premium":          float(raw.get("active_premium", 0)),
+            }
+            # Win rate: completed cycles with realized_pl > 0 / total completed
+            completed = result["completed_cycles"]
+            if completed > 0:
+                try:
+                    cur.execute("""
+                        SELECT COUNT(*) FROM wheel_positions
+                        WHERE status='completed' AND realized_pl > 0
+                    """)
+                    winners = (cur.fetchone() or [0])[0]
+                    result["win_rate"] = round(winners / completed * 100, 1)
+                except Exception:
+                    pass
             result["profit_reserve"] = _get_wheel_reserve()
             return result
     except Exception as e:
