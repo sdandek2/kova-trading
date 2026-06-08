@@ -191,6 +191,113 @@ def wheel_optimizer_run():
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+@router.get("/debug/scan")
+def wheel_debug_scan():
+    """
+    Debug endpoint — runs scan symbol-by-symbol and reports exactly why
+    each stock was skipped. Helps diagnose empty scan results.
+    """
+    try:
+        from datetime import date, timedelta
+        from services.wheel_engine import (
+            _get_current_regime, get_active_wheel_positions, get_active_wheel_positions,
+            MAX_ACTIVE_POSITIONS, MIN_DTE, MAX_DTE, TARGET_DTE, MIN_PREMIUM_YIELD,
+            MIN_IV_ABSOLUTE, _get_wheel_trading_client, _get_wheel_data_client,
+            _get_wheel_options_client, _market_is_open, _get_earnings_within_days,
+            _sector_allows, _active_sector_counts, _iv_passes_filter,
+        )
+        from services.wheel_universe import get_active_universe
+
+        results = {
+            "market_open": _market_is_open(),
+            "regime": _get_current_regime(),
+            "universe": get_active_universe(),
+            "active_positions": len(get_active_wheel_positions()),
+            "symbols": {}
+        }
+
+        if not results["market_open"]:
+            results["note"] = "Market closed — scan will not place orders"
+
+        universe = get_active_universe()
+        active = get_active_wheel_positions()
+        active_symbols = {p["symbol"] for p in active}
+        today = date.today()
+        expiry_min = today + timedelta(days=MIN_DTE)
+        expiry_max = today + timedelta(days=MAX_DTE)
+        sector_counts = _active_sector_counts()
+        earnings_within_14d = {}
+        try:
+            earnings_within_14d = _get_earnings_within_days(universe, days=14)
+        except Exception as e:
+            results["earnings_check_error"] = str(e)
+
+        trading_client = _get_wheel_trading_client()
+        data_client = _get_wheel_data_client()
+        opts_client = _get_wheel_options_client()
+
+        for symbol in universe[:5]:  # check first 5 to keep response fast
+            info = {"symbol": symbol, "passed": False, "reason": ""}
+            try:
+                if symbol in active_symbols:
+                    info["reason"] = "already in active position"
+                    results["symbols"][symbol] = info
+                    continue
+                if symbol in earnings_within_14d:
+                    info["reason"] = f"earnings within 14d: {earnings_within_14d[symbol]}"
+                    results["symbols"][symbol] = info
+                    continue
+                sector_ok, sector_reason = _sector_allows(symbol, sector_counts)
+                if not sector_ok:
+                    info["reason"] = sector_reason
+                    results["symbols"][symbol] = info
+                    continue
+                # Price check
+                try:
+                    from alpaca.data.requests import StockLatestQuoteRequest
+                    q = data_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=symbol)).get(symbol)
+                    stock_price = float((q.ask_price + q.bid_price) / 2) if q else 0
+                    info["stock_price"] = stock_price
+                    if stock_price <= 0:
+                        info["reason"] = "no price data"
+                        results["symbols"][symbol] = info
+                        continue
+                except Exception as e:
+                    info["reason"] = f"price fetch error: {e}"
+                    results["symbols"][symbol] = info
+                    continue
+                # Options contracts
+                try:
+                    from alpaca.trading.requests import GetOptionContractsRequest
+                    from alpaca.trading.enums import ContractType
+                    contracts_resp = trading_client.get_option_contracts(
+                        GetOptionContractsRequest(
+                            underlying_symbols=[symbol],
+                            type=ContractType.PUT,
+                            expiration_date_gte=str(expiry_min),
+                            expiration_date_lte=str(expiry_max),
+                        )
+                    )
+                    contract_count = len(contracts_resp.option_contracts) if contracts_resp and contracts_resp.option_contracts else 0
+                    info["contracts_found"] = contract_count
+                    if contract_count == 0:
+                        info["reason"] = f"no put contracts found in {MIN_DTE}-{MAX_DTE} DTE range"
+                        results["symbols"][symbol] = info
+                        continue
+                    info["passed"] = True
+                    info["reason"] = f"ok — {contract_count} contracts found"
+                except Exception as e:
+                    info["reason"] = f"options API error: {e}"
+                results["symbols"][symbol] = info
+            except Exception as e:
+                results["symbols"][symbol] = {"symbol": symbol, "error": str(e)}
+
+        return results
+    except Exception as e:
+        logger.error(f"GET /wheel/debug/scan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/config")
 def wheel_config():
     """
