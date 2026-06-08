@@ -16,9 +16,12 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""      # Finnhub — analyst recommendation trends
 
     # Wheel Bot — separate Alpaca account (completely isolated from Kova)
-    alpaca_wheel_key: str = ""       # Alpaca API key for wheel account
-    alpaca_wheel_secret: str = ""    # Alpaca secret for wheel account
-    alpaca_wheel_paper: str = "true" # "true" = paper trading, "false" = live. Change on Railway to go live.
+    alpaca_wheel_key: str = ""         # Alpaca API key for wheel account
+    alpaca_wheel_secret: str = ""      # Alpaca secret for wheel account
+    # Set this on Railway to switch paper ↔ live without any code change:
+    #   paper: https://paper-api.alpaca.markets
+    #   live:  https://api.alpaca.markets
+    alpaca_wheel_base_url: str = "https://paper-api.alpaca.markets"
 
     class Config:
         env_file = ".env"
