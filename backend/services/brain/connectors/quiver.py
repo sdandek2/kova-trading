@@ -16,7 +16,6 @@ Cache: 24 hours per symbol.
 """
 import logging
 import time
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +51,20 @@ def get_darkpool_signal(symbol: str) -> dict:
     if cached and time.time() < cached[1]:
         return cached[0]
 
-    # Small jittered delay to avoid Yahoo Finance 429 rate limits on burst calls
-    time.sleep(random.uniform(0.3, 0.8))
+    # ETFs and leveraged products have no institutional holder data on Yahoo Finance
+    # — skip immediately rather than making a doomed API call
+    _ETF_SUFFIXES = ("ETF", "ETN", "FUND")
+    _KNOWN_ETFS = {
+        "SPY","QQQ","IWM","DIA","GLD","SLV","TLT","HYG","LQD","IEF",
+        "XLF","XLK","XLE","XLV","XLI","XLY","XLB","XLP","XLU","XLRE",
+        "TQQQ","SQQQ","SPXL","SPXS","SOXL","SOXS","UVXY","SVXY","ARKK",
+        "ARKW","ARKG","SMH","GDX","USO","IAU","IBIT","GBTC","VOO","VTI",
+        "AGG","SOXX","ARKF","ARKE",
+    }
+    if symbol in _KNOWN_ETFS or any(symbol.endswith(s) for s in _ETF_SUFFIXES):
+        result = _unavailable("ETF — no institutional holder data")
+        _cache[symbol] = (result, time.time() + _CACHE_TTL)
+        return result
 
     try:
         result = _fetch_institutional_data(symbol)
