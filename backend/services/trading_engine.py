@@ -2739,7 +2739,7 @@ async def _trading_loop():
         try:
             from zoneinfo import ZoneInfo as _ZI_sr
             _now_et_sr = datetime.now(_ZI_sr("America/New_York"))
-            if _now_et_sr.hour > 16 or (_now_et_sr.hour == 16 and _now_et_sr.minute >= 30):
+            if _now_et_sr.weekday() < 5 and (_now_et_sr.hour > 16 or (_now_et_sr.hour == 16 and _now_et_sr.minute >= 30)):
                 _sr_date_key = "sprint_review_last_run_date"
                 _sr_today = _now_et_sr.date().isoformat()
                 if cache_get(_sr_date_key) != _sr_today:
