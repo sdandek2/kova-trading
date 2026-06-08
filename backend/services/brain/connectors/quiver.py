@@ -16,6 +16,7 @@ Cache: 24 hours per symbol.
 """
 import logging
 import time
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +52,17 @@ def get_darkpool_signal(symbol: str) -> dict:
     if cached and time.time() < cached[1]:
         return cached[0]
 
+    # Small jittered delay to avoid Yahoo Finance 429 rate limits on burst calls
+    time.sleep(random.uniform(0.3, 0.8))
+
     try:
         result = _fetch_institutional_data(symbol)
         if result.get("signal") != "unavailable":
             logger.info("yfinance institutional %s: %s", symbol, result.get("details", "ok"))
         else:
-            logger.warning("yfinance institutional %s unavailable: %s", symbol, result.get("details", ""))
+            logger.debug("yfinance institutional %s unavailable: %s", symbol, result.get("details", ""))
     except Exception as e:
-        logger.error("yfinance institutional %s error: %s", symbol, e)
+        logger.warning("yfinance institutional %s error: %s", symbol, e)
         result = _unavailable(str(e))
 
     _cache[symbol] = (result, time.time() + _CACHE_TTL)
