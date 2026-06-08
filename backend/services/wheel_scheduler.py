@@ -2,17 +2,17 @@
 wheel_scheduler.py — Wheel Bot cron scheduler
 
 Schedule (all times ET):
-  Monday    09:45  Full scan + place new puts
-  Wednesday 09:45  Mid-week scan (fill any open slots)
+  Sunday    20:00  Universe refresh — AI discovers next week's stocks
+  Monday    09:45  Full cycle: scan + place new puts
+  Wednesday 09:45  Mid-week scan — fill any open position slots
   Daily     09:45  Check assignments + expirations
-  Friday    16:30  End-of-week expiration cleanup
+  Friday    16:30  Optimizer run + EOW cleanup
 
-Runs in a background thread — completely separate from Kova's asyncio loop.
+Completely isolated from Kova's asyncio loop — runs as a daemon thread.
 """
 
 import logging
 import threading
-import time
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -20,75 +20,86 @@ logger = logging.getLogger(__name__)
 _scheduler_thread = None  # type: threading.Thread | None
 _stop_event = threading.Event()
 
-# ET offset from UTC (EST = -5, EDT = -4)
-# Using pytz-free approach: check approximate offset
+
 def _now_et() -> datetime:
-    """Current time in US/Eastern (approximate — handles DST roughly)."""
-    utc_now = datetime.now(timezone.utc)
-    # EDT = UTC-4 (Mar-Nov), EST = UTC-5 (Nov-Mar)
-    month = utc_now.month
-    et_offset = -4 if 3 <= month <= 11 else -5
-    return utc_now + timedelta(hours=et_offset)
+    """Approximate US/Eastern time (handles DST roughly: EDT Mar-Nov, EST Nov-Mar)."""
+    utc = datetime.now(timezone.utc)
+    offset = -4 if 3 <= utc.month <= 11 else -5
+    return utc + timedelta(hours=offset)
 
 
-def _should_run_cycle(now_et: datetime) -> tuple[bool, str]:
-    """
-    Determine if wheel cycle should run right now.
-    Returns (should_run, reason).
-    """
-    weekday = now_et.weekday()   # 0=Mon, 4=Fri
-    hour = now_et.hour
-    minute = now_et.minute
+def _should_fire(now_et: datetime) -> tuple[bool, str]:
+    """Return (should_fire, event_name) for the current moment."""
+    wd = now_et.weekday()  # 0=Mon, 6=Sun
+    h, m = now_et.hour, now_et.minute
 
-    # Daily assignment + expiration check: 9:45 AM ET any weekday
-    if weekday < 5 and hour == 9 and 45 <= minute <= 55:
-        return True, "daily_check"
+    # Sunday 8 PM — AI universe refresh
+    if wd == 6 and h == 20 and 0 <= m < 10:
+        return True, "universe_refresh"
 
-    # End-of-week cleanup: Friday 4:30 PM ET
-    if weekday == 4 and hour == 16 and 30 <= minute <= 40:
-        return True, "friday_cleanup"
+    # Daily 9:45 AM weekdays — assignments + expirations + (Mon/Wed) scan
+    if wd < 5 and h == 9 and 45 <= m < 55:
+        return True, "daily_cycle"
+
+    # Friday 4:30 PM — optimizer + EOW cleanup
+    if wd == 4 and h == 16 and 30 <= m < 40:
+        return True, "optimizer"
 
     return False, ""
 
 
-_last_run_date: str = ""  # "YYYY-MM-DD" — prevents double-firing within same day slot
+_last_fired: str = ""   # "YYYY-MM-DD_HH" — prevents double-firing in same slot
 
 
 def _scheduler_loop():
-    """Background thread: check every 5 minutes if it's time to run."""
-    global _last_run_date
+    global _last_fired
+    logger.info("Wheel scheduler: started (checks every 5 min)")
 
-    logger.info("Wheel scheduler: started")
     while not _stop_event.is_set():
         try:
             now_et = _now_et()
-            should_run, reason = _should_run_cycle(now_et)
+            should_fire, event = _should_fire(now_et)
+            slot_key = f"{now_et.date()}_{now_et.hour}_{event}"
 
-            # Key: only fire once per slot using date+hour as dedup key
-            slot_key = f"{now_et.date()}_{now_et.hour}"
-            if should_run and slot_key != _last_run_date:
-                _last_run_date = slot_key
-                logger.info(f"Wheel scheduler: firing cycle ({reason})")
-                try:
-                    from services.wheel_engine import run_wheel_cycle
-                    run_wheel_cycle()
-                except Exception as e:
-                    logger.error(f"Wheel cycle error: {e}", exc_info=True)
+            if should_fire and slot_key != _last_fired:
+                _last_fired = slot_key
+                logger.info(f"Wheel scheduler: firing [{event}]")
+
+                if event == "universe_refresh":
+                    try:
+                        from services.wheel_universe import refresh_universe
+                        result = refresh_universe()
+                        logger.info(f"Wheel universe refreshed: {len(result)} stocks selected")
+                    except Exception as e:
+                        logger.error(f"Wheel universe refresh failed: {e}", exc_info=True)
+
+                elif event == "daily_cycle":
+                    try:
+                        from services.wheel_engine import run_wheel_cycle
+                        run_wheel_cycle()
+                    except Exception as e:
+                        logger.error(f"Wheel daily cycle failed: {e}", exc_info=True)
+
+                elif event == "optimizer":
+                    try:
+                        from services.wheel_optimizer import run_optimizer
+                        report = run_optimizer()
+                        logger.info(f"Wheel optimizer: {report.get('total_completed_cycles', 0)} cycles, "
+                                    f"{report.get('overall_win_rate_pct', 0)}% win rate")
+                    except Exception as e:
+                        logger.error(f"Wheel optimizer failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Wheel scheduler loop error: {e}")
 
-        # Check every 5 minutes
-        _stop_event.wait(timeout=300)
+        _stop_event.wait(timeout=300)  # 5 min
 
     logger.info("Wheel scheduler: stopped")
 
 
 def start_wheel_scheduler():
-    """Start the wheel scheduler in a background daemon thread."""
     global _scheduler_thread
     if _scheduler_thread and _scheduler_thread.is_alive():
-        logger.info("Wheel scheduler already running")
         return
     _stop_event.clear()
     _scheduler_thread = threading.Thread(
@@ -101,8 +112,6 @@ def start_wheel_scheduler():
 
 
 def stop_wheel_scheduler():
-    """Stop the wheel scheduler gracefully."""
     _stop_event.set()
     if _scheduler_thread:
         _scheduler_thread.join(timeout=10)
-    logger.info("Wheel scheduler: stopped")

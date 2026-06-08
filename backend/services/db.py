@@ -210,6 +210,38 @@ def _ensure_table(conn):
                 quantity        INTEGER
             )
         """)
+        # ── Wheel Bot: wheel_universe ──────────────────────────────────────
+        # AI-discovered stocks approved for wheel trading.
+        # Refreshed weekly. No hardcoded watchlist.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_universe (
+                id              SERIAL PRIMARY KEY,
+                symbol          TEXT NOT NULL UNIQUE,
+                score           FLOAT DEFAULT 50,
+                ai_reason       TEXT,
+                iv_profile      TEXT,
+                price_range     TEXT,
+                added_by        TEXT DEFAULT 'ai',
+                active          BOOLEAN DEFAULT TRUE,
+                added_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_refreshed  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # ── Wheel Bot: wheel_symbol_stats ───────────────────────────────────
+        # Per-symbol performance stats — drives self-improvement.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS wheel_symbol_stats (
+                id              SERIAL PRIMARY KEY,
+                symbol          TEXT NOT NULL UNIQUE,
+                total_cycles    INTEGER DEFAULT 0,
+                winning_cycles  INTEGER DEFAULT 0,
+                win_rate        FLOAT DEFAULT 0,
+                avg_premium_yield FLOAT DEFAULT 0,
+                avg_realized_pl FLOAT DEFAULT 0,
+                total_premium   FLOAT DEFAULT 0,
+                last_updated    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
         # ── Wheel Bot: wheel_positions ──────────────────────────────────────
         # Tracks each active wheel cycle: put → (assignment) → covered call → repeat.
         # Completely separate from Kova trading. strategy tag = 'wheel'.
