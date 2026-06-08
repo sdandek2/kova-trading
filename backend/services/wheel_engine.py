@@ -522,12 +522,16 @@ def scan_opportunities() -> list[dict]:
                     if prem_yield < MIN_PREMIUM_YIELD:
                         continue
 
-                    # Get IV from greeks (real delta + IV instead of proxies)
+                    # Get IV + delta from greeks — optional, don't crash if missing
                     iv = 0.0
                     real_delta = None
-                    if snap.greeks:
-                        iv = float(snap.greeks.implied_volatility or 0)
-                        real_delta = abs(float(snap.greeks.delta or 0))
+                    try:
+                        greeks = getattr(snap, "greeks", None)
+                        if greeks:
+                            iv = float(getattr(greeks, "implied_volatility", 0) or 0)
+                            real_delta = abs(float(getattr(greeks, "delta", 0) or 0))
+                    except Exception:
+                        pass  # greeks unavailable — continue without IV rank filter
 
                     # Record IV for rank history (once per symbol per scan)
                     if iv > 0 and not atm_iv_recorded:
