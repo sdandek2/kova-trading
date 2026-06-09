@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # ── Price / volume config (Railway env-var overridable) ───────────────────────
 MIN_PRICE  = float(os.environ.get("WHEEL_MIN_PRICE",  "5.0"))
-MAX_PRICE  = float(os.environ.get("WHEEL_MAX_PRICE",  "120.0"))
+MAX_PRICE  = float(os.environ.get("WHEEL_MAX_PRICE",  "300.0"))
 MIN_VOLUME = int(os.environ.get("WHEEL_MIN_VOLUME",   "500000"))
 
 # ── Adaptive threshold defaults (overridden by DB cache if available) ─────────
@@ -112,11 +112,14 @@ def _get_dynamic_symbols(trading_client) -> list[str]:
         for a in (assets or []):
             sym = getattr(a, "symbol", "")
             # Basic sanity: tradable, valid ticker format, no OTC garbage
+            # NYSE/NASDAQ = individual stocks; ARCA/BATS = mostly ETFs
+            exchange = getattr(a, "exchange", "")
             if (
                 getattr(a, "tradable", False)
                 and sym
                 and sym.isalpha()
                 and len(sym) <= 5
+                and exchange in ("NYSE", "NASDAQ")
             ):
                 symbols.add(sym)
 
@@ -636,7 +639,7 @@ def _get_candidate_pool(data_client, trading_client=None, limit: int = 150) -> l
 
         filtered.sort(key=lambda x: x["volume_m"], reverse=True)
         logger.info(f"Wheel candidate pool: {len(filtered)} passed price/volume filter from {len(all_symbols)} screened")
-        return filtered[:limit]
+        return filtered
 
     except Exception as e:
         logger.error(f"Wheel candidate pool error: {e}")
