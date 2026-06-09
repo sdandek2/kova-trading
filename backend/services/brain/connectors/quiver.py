@@ -34,7 +34,7 @@ _blocked_date: date | None = None
 _cache: dict[str, tuple[dict, float]] = {}
 # Safety: if any error repeats 10+ times consecutively, back off for the day
 _consecutive_errors: int = 0
-_CONSECUTIVE_ERROR_LIMIT = 10
+_CONSECUTIVE_ERROR_LIMIT = 5
 
 _ETF_SUFFIXES = ("ETF", "ETN", "FUND")
 _KNOWN_ETFS = {
