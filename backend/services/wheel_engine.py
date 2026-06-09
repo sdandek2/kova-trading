@@ -273,7 +273,7 @@ def get_active_wheel_positions() -> list[dict]:
                        total_premium_collected, regime_at_open, opened_at,
                        realized_pl, status, notes
                 FROM wheel_positions
-                WHERE status = 'active'
+                WHERE status IN ('active', 'order_pending')
                 ORDER BY opened_at DESC
             """)
             cols = [d[0] for d in cur.description]
@@ -294,8 +294,8 @@ def get_wheel_summary() -> dict:
                 SELECT
                     COUNT(*) FILTER (WHERE status='active')    as active_count,
                     COUNT(*) FILTER (WHERE status='completed') as completed_count,
-                    COALESCE(SUM(total_premium_collected) FILTER (WHERE status='active'), 0)    as active_premium,
-                    COALESCE(SUM(total_premium_collected), 0)                                   as total_premium_ever,
+                    COALESCE(SUM(total_premium_collected) FILTER (WHERE status='active'), 0)           as active_premium,
+                    COALESCE(SUM(total_premium_collected) FILTER (WHERE status != 'order_pending'), 0) as total_premium_ever,
                     COALESCE(SUM(realized_pl) FILTER (WHERE status='completed'), 0)             as total_realized_pl,
                     COALESCE(AVG(realized_pl) FILTER (WHERE status='completed'), 0)             as avg_realized_pl
                 FROM wheel_positions
@@ -508,6 +508,11 @@ def scan_opportunities() -> list[dict]:
                     if not (0.75 <= ratio <= 0.97):
                         continue
 
+                    # Skip illiquid contracts — zero OI means no counterparty to fill us
+                    oi = int(getattr(contract, "open_interest", 0) or 0)
+                    if oi < 50:
+                        continue
+
                     snap = opts_client.get_option_snapshot(
                         OptionSnapshotRequest(symbol_or_symbols=contract.symbol)
                     ).get(contract.symbol)
@@ -561,6 +566,9 @@ def scan_opportunities() -> list[dict]:
                             "expiry": str(contract.expiration_date),
                             "dte": dte,
                             "premium": round(premium, 2),
+                            "bid": round(bid, 2),
+                            "ask": round(ask, 2),
+                            "open_interest": oi,
                             "premium_yield_pct": round(prem_yield * 100, 2),
                             "annual_yield_pct": round(annual_yield * 100, 1),
                             "collateral": round(strike * CONTRACTS_PER_TRADE * 100, 2),
@@ -616,7 +624,9 @@ def execute_put(opportunity: dict) -> Optional[dict]:
         except Exception as bp_err:
             logger.warning(f"Wheel buying power check failed ({bp_err}), proceeding anyway")
 
-        limit_px = round(opportunity["premium"] * 0.98, 2)
+        # Use bid price as limit — we're the seller, bid is what buyers pay us now.
+        # mid * 0.98 was below bid → never filled. Bid guarantees same-day fill.
+        limit_px = round(opportunity.get("bid", opportunity["premium"]), 2)
 
         order = _get_wheel_trading_client().submit_order(LimitOrderRequest(
             symbol=opportunity["contract"],
@@ -628,21 +638,21 @@ def execute_put(opportunity: dict) -> Optional[dict]:
         ))
         logger.info(
             f"Wheel PUT: {opportunity['symbol']} ${opportunity['strike']} exp {opportunity['expiry']} "
-            f"×{qty} contracts @ ${limit_px} | {order.id}"
+            f"×{qty} contracts @ ${limit_px} (bid) OI={opportunity.get('open_interest','?')} | {order.id}"
         )
 
+        # Record as order_pending — only promote to active after confirmed fill
         pos_id = _open_wheel_position(
             symbol=opportunity["symbol"],
             phase="put_open",
             put_contract=opportunity["contract"],
             put_strike=opportunity["strike"],
             put_expiry=opportunity["expiry"],
-            put_premium=opportunity["premium"],
+            put_premium=limit_px,  # use actual limit price, not mid
             put_order_id=str(order.id),
             regime=_get_current_regime(),
         )
-        # Store contracts_remaining in notes field (no schema change needed)
-        _update_wheel_position(pos_id, notes=f"contracts_remaining:{qty}")
+        _update_wheel_position(pos_id, status="order_pending", notes=f"contracts_remaining:{qty}")
         return {"order_id": str(order.id), "position_db_id": pos_id, "contracts": qty, **opportunity}
     except Exception as e:
         logger.error(f"Wheel execute_put: {e}")
@@ -1632,6 +1642,71 @@ def _check_regime_changed_and_refresh() -> bool:
     return False
 
 
+def _reconcile_pending_orders():
+    """
+    Check all order_pending positions against Alpaca order status.
+    - filled   → mark active, record actual fill price as total_premium_collected
+    - expired/cancelled → delete from DB (phantom position cleanup)
+    Called every cycle before scanning new opportunities.
+    """
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, symbol, put_order_id, put_strike
+                FROM wheel_positions
+                WHERE status = 'order_pending' AND put_order_id IS NOT NULL
+            """)
+            cols = [d[0] for d in cur.description]
+            pending = [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"Wheel reconcile fetch: {e}")
+        return
+
+    if not pending:
+        return
+
+    client = _get_wheel_trading_client()
+    for pos in pending:
+        try:
+            order = client.get_order_by_id(pos["put_order_id"])
+            status = str(order.status).lower()
+
+            if "filled" in status or status == "partially_filled":
+                fill_price = float(order.filled_avg_price or pos.get("put_strike", 0))
+                filled_qty = int(float(order.filled_qty or 0))
+                premium_collected = fill_price * 100 * filled_qty
+                _update_wheel_position(
+                    pos["id"],
+                    status="active",
+                    total_premium_collected=premium_collected,
+                )
+                logger.info(
+                    f"Wheel reconcile: {pos['symbol']} order FILLED "
+                    f"@ ${fill_price} ×{filled_qty} = ${premium_collected:.2f} premium → active"
+                )
+
+            elif status in ("expired", "cancelled", "canceled", "rejected"):
+                try:
+                    from services.db import _get_conn
+                    c2 = _get_conn()
+                    with c2.cursor() as cur:
+                        cur.execute("DELETE FROM wheel_positions WHERE id = %s", (pos["id"],))
+                    c2.commit()
+                    logger.info(
+                        f"Wheel reconcile: {pos['symbol']} order {status} — "
+                        f"removed phantom position {pos['id']}"
+                    )
+                except Exception as del_err:
+                    logger.error(f"Wheel reconcile delete {pos['id']}: {del_err}")
+
+        except Exception as e:
+            logger.warning(f"Wheel reconcile order {pos['put_order_id']}: {e}")
+
+
 def run_wheel_cycle():
     """
     Fully automatic. Called by scheduler Mon-Fri 9:45 AM ET.
@@ -1653,7 +1728,13 @@ def run_wheel_cycle():
     except Exception as e:
         logger.error(f"Wheel regime-change check: {e}")
 
-    # ── Step 1: Always check expirations (read-only DB, no orders) ───────────
+    # ── Step 1: Reconcile pending orders — confirm fills, remove expired ghosts ─
+    try:
+        _reconcile_pending_orders()
+    except Exception as e:
+        logger.error(f"Wheel reconcile: {e}")
+
+    # ── Step 2: Always check expirations (read-only DB, no orders) ────────────
     try:
         check_expirations()
     except Exception as e:
@@ -1664,31 +1745,31 @@ def run_wheel_cycle():
         logger.info(f"Wheel: market closed — skipping orders. Next open: {next_open}")
         return
 
-    # ── Step 2: Stop-loss on assigned shares (runs before anything else) ─────
+    # ── Step 3: Stop-loss on assigned shares (runs before anything else) ─────
     try:
         check_assignment_stop_loss()
     except Exception as e:
         logger.error(f"Wheel assignment stop-loss: {e}")
 
-    # ── Step 3: DTE force close (45→21 rule — must run before profit targets) ─
+    # ── Step 4: DTE force close (45→21 rule — must run before profit targets) ─
     try:
         check_dte_force_close()
     except Exception as e:
         logger.error(f"Wheel DTE force close: {e}")
 
-    # ── Step 4: Tiered profit targets (50% then 25%) ──────────────────────
+    # ── Step 5: Tiered profit targets (50% then 25%) ──────────────────────
     try:
         check_profit_targets()
     except Exception as e:
         logger.error(f"Wheel profit targets: {e}")
 
-    # ── Step 5: Check assignments → sell covered calls ─────────────────────
+    # ── Step 6: Check assignments → sell covered calls ─────────────────────
     try:
         check_assignments()
     except Exception as e:
         logger.error(f"Wheel assignments: {e}")
 
-    # ── Step 6: Open new positions on scan days ────────────────────────────
+    # ── Step 7: Open new positions on scan days ────────────────────────────
     if _should_scan_today():
         try:
             regime = _get_current_regime()
