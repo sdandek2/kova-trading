@@ -619,8 +619,10 @@ def scan_opportunities() -> list[dict]:
     # Regime delta ceiling — hard filter, not just logging
     regime_delta_max = _regime_adjusted_delta(regime) + DELTA_MAX_BUFFER
 
+    logger.info(f"Wheel scan: checking {len(universe)} universe symbols, {len(active_symbols)} already active")
     for symbol in universe:
         if symbol in active_symbols:
+            logger.info(f"Wheel skip {symbol}: already has active position")
             continue
 
         # ── Earnings avoidance ────────────────────────────────────────────────
