@@ -64,11 +64,10 @@ def _call_gemini(model: str, prompt: str, max_tokens: int) -> str:
         "responseMimeType": "application/json",  # cleaner output, fewer tokens billed
     }
 
-    # Flash: disable thinking entirely (thinkingBudget=0, valid range 0–24576).
-    # Pro: no thinkingConfig → dynamic thinking (Pro cannot disable it; range 128–32768).
-    # Letting Pro think freely is worth the cost for critical trade decisions.
-    if "flash" in model:
-        generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+    # Disable thinking on ALL Gemini models — thinking tokens are 11x more expensive
+    # and add no meaningful benefit for structured JSON trade decisions.
+    # Both Flash and Pro support thinkingBudget=0 as of 2025.
+    generation_config["thinkingConfig"] = {"thinkingBudget": 0}
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
