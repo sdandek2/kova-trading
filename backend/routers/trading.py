@@ -150,8 +150,8 @@ def get_connectors_health():
     # Alpaca market data
     t0 = time.time()
     try:
-        from services.trading_engine import _get_trading_client
-        acct = _get_trading_client().get_account()
+        from services.alpaca_service import trading_client
+        acct = trading_client.get_account()
         results["alpaca"] = {
             "status": "ok",
             "detail": f"account equity=${float(acct.equity):,.0f}",

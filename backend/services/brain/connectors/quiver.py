@@ -33,7 +33,7 @@ _CACHE_TTL = 86_400
 _blocked_date: date | None = None
 # Safety: if any error repeats 10+ times consecutively, back off for the day
 _consecutive_errors: int = 0
-_CONSECUTIVE_ERROR_LIMIT = 10
+_CONSECUTIVE_ERROR_LIMIT = 3
 
 _cache: dict[str, tuple[dict, float]] = {}
 
