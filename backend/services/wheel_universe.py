@@ -92,18 +92,40 @@ _STATIC_SEED = [
 
 def _get_dynamic_symbols(trading_client) -> list[str]:
     """
-    Build symbol list from static seed + historical winners.
-    Note: Alpaca's Asset model does not expose options_enabled as a queryable field,
-    so we rely on the curated static seed + DB winners as the primary source.
-    Options eligibility is verified at scoring time via GetOptionContractsRequest.
+    Build symbol list from Alpaca's full options-eligible universe.
+
+    Uses attributes='has_options' (confirmed working — 'options_enabled' returns 0).
+    Falls back to static seed if the API call fails.
     """
-    symbols = set(_STATIC_SEED)
+    symbols: set[str] = set()
 
-    # Always add historical winners from DB
-    logger.info(f"Wheel dynamic screener: using static seed ({len(symbols)} symbols) + DB winners")
+    # Source 1: Full Alpaca options-eligible universe via has_options attribute
+    try:
+        from alpaca.trading.requests import GetAssetsRequest
+        from alpaca.trading.enums import AssetClass, AssetStatus
 
-    # Source 2: Historical winners always stay eligible regardless of other filters
-    # If we made money on a stock before, never exclude it from consideration.
+        assets = trading_client.get_all_assets(GetAssetsRequest(
+            asset_class=AssetClass.US_EQUITY,
+            status=AssetStatus.ACTIVE,
+            attributes="has_options",
+        ))
+        for a in (assets or []):
+            sym = getattr(a, "symbol", "")
+            # Basic sanity: tradable, valid ticker format, no OTC garbage
+            if (
+                getattr(a, "tradable", False)
+                and sym
+                and sym.isalpha()
+                and len(sym) <= 5
+            ):
+                symbols.add(sym)
+
+        logger.info(f"Wheel dynamic screener: {len(symbols)} options-eligible symbols from Alpaca")
+    except Exception as e:
+        logger.warning(f"Wheel dynamic screener: Alpaca asset query failed ({e}) — using static seed")
+        symbols.update(_STATIC_SEED)
+
+    # Source 2: Historical winners always included regardless of other filters
     try:
         from services.db import _get_conn
         conn = _get_conn()
@@ -118,7 +140,7 @@ def _get_dynamic_symbols(trading_client) -> list[str]:
     except Exception:
         pass
 
-    # Merge with static seed as safety net — ensures known-good stocks never disappear
+    # Safety net: static seed always included so known-good stocks never disappear
     symbols.update(_STATIC_SEED)
 
     return list(symbols)
