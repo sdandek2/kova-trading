@@ -832,7 +832,8 @@ def scan_opportunities() -> list[dict]:
                             "regime":            regime,
                             "mode":              "paper" if _is_paper() else "live",
                         }
-                except Exception:
+                except Exception as ce:
+                    logger.info(f"Wheel skip {symbol} {contract.symbol}: contract error — {ce}")
                     continue
 
             if best:
