@@ -1665,8 +1665,8 @@ def get_signal_weights_full() -> dict[str, dict]:
 
 
 def update_signal_weight(signal_name: str, new_weight: int, reason: str,
-                         old_weight: int | None = None, win_rate: float | None = None,
-                         sample_count: int | None = None) -> None:
+                         old_weight: Optional[int] = None, win_rate: Optional[float] = None,
+                         sample_count: Optional[int] = None) -> None:
     """Update a signal's weight in the DB and append a history row."""
     if TEST_MODE:
         return
