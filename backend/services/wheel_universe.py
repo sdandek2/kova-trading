@@ -104,18 +104,24 @@ def _get_dynamic_symbols(trading_client) -> list[str]:
     try:
         from alpaca.trading.requests import GetAssetsRequest
         from alpaca.trading.enums import AssetClass, AssetStatus
+        # attributes="options_enabled" pre-filters on Alpaca's side to only return options-eligible equities
         assets = trading_client.get_all_assets(GetAssetsRequest(
             asset_class=AssetClass.US_EQUITY,
             status=AssetStatus.ACTIVE,
+            attributes="options_enabled",
         ))
         for a in assets:
-            # options_enabled is the key flag — no flag = no options chain
-            if (getattr(a, "options_enabled", False)
+            attrs = getattr(a, "attributes", None) or []
+            has_options = (
+                "options_enabled" in attrs
+                if isinstance(attrs, list)
+                else "options_enabled" in str(attrs)
+            )
+            if (has_options
                     and getattr(a, "tradable", False)
-                    and getattr(a, "fractionable", False)  # proxy for large-cap / liquid
                     and a.symbol not in _WHEEL_EXCLUSIONS
-                    and "/" not in a.symbol           # skip ADRs like BRK/B
-                    and "." not in a.symbol):          # skip preferred shares like BRK.B
+                    and "/" not in a.symbol
+                    and "." not in a.symbol):
                 symbols.add(a.symbol)
         logger.info(f"Wheel dynamic screener: {len(symbols)} options-eligible assets from Alpaca")
     except Exception as e:
@@ -274,12 +280,15 @@ def _get_price_metrics_batch(symbols: list[str], data_client) -> dict:
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed="iex",  # IEX feed works on paper accounts without premium data subscription
         ))
 
+        empty_count = 0
         for sym in symbols:
             try:
                 bars = bars_resp.get(sym, [])
-                if not bars or len(bars) < 10:
+                if not bars or len(bars) < 5:
+                    empty_count += 1
                     result[sym] = {"hv30": 0.0, "max_drawdown": 100.0}
                     continue
 
@@ -313,8 +322,12 @@ def _get_price_metrics_batch(symbols: list[str], data_client) -> dict:
                     "hv30":         round(hv30 * 100, 1),
                     "max_drawdown": round(max_dd * 100, 1),
                 }
-            except Exception:
+            except Exception as sym_err:
+                logger.debug(f"Wheel price metrics {sym}: {sym_err}")
                 result[sym] = {"hv30": 0.0, "max_drawdown": 100.0}
+
+        if empty_count > 0:
+            logger.warning(f"Wheel price metrics: {empty_count}/{len(symbols)} symbols had no bar data (empty_count)")
 
     except Exception as e:
         logger.warning(f"Wheel price metrics batch error: {e}")
@@ -856,14 +869,14 @@ def refresh_universe() -> list[dict]:
 
     # Step 4: Score all candidates
     logger.info(f"Wheel universe: scoring {len(candidates)} candidates...")
-    scored = _score_candidates(candidates, data_client, opts_client=opts_client)
+    scored = _score_candidates(candidates, data_client, opts_client=opts_client, trading_client=trading_client)
 
     # Step 5: Apply adaptive filters
     qualified = [
         s for s in scored
         if s.get("score", 0)        >= score_min
         and s.get("iv_hv_ratio", 0) >= iv_hv_min
-        and s.get("max_drawdown", 100) <= drawdown_max
+        and (s.get("max_drawdown", 100) <= drawdown_max or s.get("max_drawdown", 100) >= 100)
         and s.get("iv_rank", 0)     >= iv_rank_min
     ]
 
@@ -885,7 +898,7 @@ def refresh_universe() -> list[dict]:
             s for s in scored
             if s.get("score", 0)           >= score_min
             and s.get("iv_hv_ratio", 0)    >= iv_hv_min
-            and s.get("max_drawdown", 100) <= drawdown_max
+            and (s.get("max_drawdown", 100) <= drawdown_max or s.get("max_drawdown", 100) >= 100)
             and s.get("iv_rank", 0)        >= iv_rank_min
         ]
         logger.info(
