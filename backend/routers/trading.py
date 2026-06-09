@@ -130,19 +130,23 @@ def get_connectors_health():
     t0 = time.time()
     try:
         import yfinance as yf
+        version = getattr(yf, "__version__", "unknown")
         ticker = yf.Ticker("AAPL")
         info = ticker.info or {}
         inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100
         results["yfinance"] = {
             "status": "ok",
+            "version": version,
             "detail": f"AAPL institutional hold: {inst_pct:.0f}%",
             "latency_ms": round((time.time() - t0) * 1000),
         }
     except ImportError as e:
         results["yfinance"] = {"status": "import_error", "detail": str(e)}
     except Exception as e:
+        import yfinance as yf
         results["yfinance"] = {
             "status": "error",
+            "version": getattr(yf, "__version__", "unknown"),
             "detail": f"{type(e).__name__}: {e}",
             "latency_ms": round((time.time() - t0) * 1000),
         }
