@@ -635,14 +635,23 @@ def scan_opportunities() -> list[dict]:
             continue
 
         try:
-            from alpaca.data.requests import StockLatestQuoteRequest
-            q = data_client.get_stock_latest_quote(
-                StockLatestQuoteRequest(symbol_or_symbols=symbol)
-            ).get(symbol)
-            if not q:
-                continue
-            stock_price = float((q.ask_price + q.bid_price) / 2)
+            from alpaca.data.requests import StockLatestTradeRequest, StockLatestQuoteRequest
+            trades = data_client.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=symbol)
+            )
+            trade = trades.get(symbol) if trades else None
+            stock_price = float(trade.price) if trade and trade.price else 0.0
             if stock_price <= 0:
+                # fallback to quote mid
+                q = data_client.get_stock_latest_quote(
+                    StockLatestQuoteRequest(symbol_or_symbols=symbol)
+                ).get(symbol)
+                if not q:
+                    logger.info(f"Wheel skip {symbol}: no price data")
+                    continue
+                stock_price = float((q.ask_price + q.bid_price) / 2)
+            if stock_price <= 0:
+                logger.info(f"Wheel skip {symbol}: price is 0")
                 continue
 
             # ── Underlying trend filter ───────────────────────────────────────
@@ -660,7 +669,7 @@ def scan_opportunities() -> list[dict]:
                     "bear":    0.0,    # no MA20 filter in bear regime
                 }.get(regime, 0.95)
                 if ma20_threshold > 0 and stock_price < ma20 * ma20_threshold:
-                    logger.debug(f"Wheel skip {symbol}: price ${stock_price:.2f} < MA20×{ma20_threshold} ${ma20 * ma20_threshold:.2f} (regime={regime})")
+                    logger.info(f"Wheel skip {symbol}: price ${stock_price:.2f} < MA20×{ma20_threshold} ${ma20 * ma20_threshold:.2f} (regime={regime})")
                     continue
 
             from alpaca.trading.requests import GetOptionContractsRequest
@@ -674,6 +683,7 @@ def scan_opportunities() -> list[dict]:
                 )
             )
             if not contracts_resp or not contracts_resp.option_contracts:
+                logger.info(f"Wheel skip {symbol}: no option contracts in {MIN_DTE}-{MAX_DTE} DTE window")
                 continue
 
             # Sort: prefer contracts closest to TARGET_DTE (45 days)
@@ -716,14 +726,14 @@ def scan_opportunities() -> list[dict]:
                     # Wide spread = we give up too much on entry. Skip if > 30%.
                     spread_pct = (ask - bid) / ask
                     if spread_pct > MAX_SPREAD_PCT:
-                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: spread {spread_pct:.0%} > {MAX_SPREAD_PCT:.0%}")
+                        logger.info(f"Wheel skip {symbol} {contract.symbol}: spread {spread_pct:.0%} > {MAX_SPREAD_PCT:.0%}")
                         continue
 
                     # ── Option volume filter ──────────────────────────────────
                     # Zero volume today = nobody trading it → our order moves the market.
                     opt_vol = int(getattr(snap.daily_bar, "volume", 0) or 0) if snap.daily_bar else 0
                     if opt_vol < MIN_OPTION_VOLUME:
-                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: option volume {opt_vol} < {MIN_OPTION_VOLUME}")
+                        logger.info(f"Wheel skip {symbol} {contract.symbol}: option volume {opt_vol} < {MIN_OPTION_VOLUME}")
                         continue
 
                     premium = (ask + bid) / 2
@@ -733,7 +743,7 @@ def scan_opportunities() -> list[dict]:
                     # Commission + slippage erases the profit.
                     dollar_premium = premium * 100
                     if dollar_premium < MIN_DOLLAR_PREMIUM:
-                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: dollar premium ${dollar_premium:.0f} < ${MIN_DOLLAR_PREMIUM:.0f}")
+                        logger.info(f"Wheel skip {symbol} {contract.symbol}: dollar premium ${dollar_premium:.0f} < ${MIN_DOLLAR_PREMIUM:.0f}")
                         continue
 
                     prem_yield = premium / strike
@@ -755,7 +765,7 @@ def scan_opportunities() -> list[dict]:
                     # High delta = nearly ATM = high assignment probability.
                     # Cap at regime_delta + buffer (e.g. neutral: 0.25+0.10 = 0.35 max).
                     if real_delta and real_delta > regime_delta_max:
-                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: delta {real_delta:.2f} > {regime_delta_max:.2f}")
+                        logger.info(f"Wheel skip {symbol} {contract.symbol}: delta {real_delta:.2f} > {regime_delta_max:.2f}")
                         continue
 
                     # Record IV for rank history (once per symbol per scan)
