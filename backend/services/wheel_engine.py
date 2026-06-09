@@ -448,11 +448,13 @@ def _get_ma20_batch(symbols: list[str], data_client) -> dict[str, float]:
         from alpaca.data.timeframe import TimeFrame
         end   = datetime.now(timezone.utc)
         start = end - timedelta(days=35)
+        from alpaca.data.enums import DataFeed
         bars  = data_client.get_stock_bars(StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed=DataFeed.IEX,
         ))
         for sym in symbols:
             try:
@@ -1587,7 +1589,7 @@ def scan_bear_spreads() -> list:
         return []
 
     from services.wheel_universe import get_active_universe
-    universe = [s["symbol"] for s in get_active_universe()]
+    universe = get_active_universe()  # already returns list[str]
     active_symbols = {p["symbol"] for p in get_active_wheel_positions()}
     today = date.today()
     expiry_min = today + timedelta(days=MIN_DTE)
