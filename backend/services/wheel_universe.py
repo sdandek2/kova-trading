@@ -63,12 +63,97 @@ SAFE_FALLBACK_UNIVERSE = [
     {"symbol": "JPM", "score": 71, "reason": "Largest US bank, deep options market, premium IV in bear regime",     "iv_profile": "high"},
 ]
 
-# ── ETF exclusions ────────────────────────────────────────────────────────────
+# ── ETF / structured product exclusions ──────────────────────────────────────
+# Broad-market ETFs, bond ETFs, leveraged ETFs, inverse ETFs, commodity ETFs,
+# single-stock leveraged ETFs (AAPD, AMZD, TSLL, etc.) — none belong in wheel.
 _WHEEL_EXCLUSIONS = {
-    "SPY","QQQ","IWM","DIA","VOO","VTI","GLD","SLV","USO","TLT","IEF",
-    "LQD","HYG","AGG","XLF","XLK","XLE","XLV","XLY","XLI","SMH","SOXX",
-    "SOXL","SOXS","TQQQ","SQQQ","SPXL","SPXS","UVXY","SVXY","GBTC",
-    "IBIT","ARKK","ARKW","GDX","GDXJ","IAU",
+    # Broad market
+    "SPY","QQQ","IWM","DIA","VOO","VTI","RSP","SCHB","ITOT","IVV",
+    # Sector ETFs
+    "XLF","XLK","XLE","XLV","XLY","XLI","XLU","XLB","XLP","XLRE",
+    "SMH","SOXX","KRE","KBE","IBB","XBI","HACK","CLOU",
+    # Leveraged / inverse broad
+    "TQQQ","SQQQ","SPXL","SPXS","UPRO","SPXU","TNA","TZA","UDOW","SDOW",
+    "SOXL","SOXS","LABU","LABD","FNGU","FNGD","TECL","TECS",
+    # Single-stock leveraged/inverse (pattern: end in L/S/D/U + known)
+    "AAPD","AAPU","AMZD","AMZU","TSLL","TSLS","NVDL","NVDS","MSFU","MSFD",
+    "GOGL","GOGLL","METD","METU","NFLXD","NFLXU","GGLS","GGLL",
+    # Volatility products
+    "UVXY","SVXY","VXX","VIXY","VIXM",
+    # Crypto ETFs
+    "GBTC","IBIT","BITO","ETHE","BITB",
+    # Bond ETFs
+    "TLT","IEF","LQD","HYG","AGG","BND","VCIT","VCSH","EMB","JNK",
+    "BNDX","MUB","SHY","IEI","GOVT","BWX","TIP","VTIP",
+    # Commodity ETFs
+    "GLD","SLV","USO","UNG","DBA","PDBC","IAU","GDX","GDXJ","SIL",
+    # Thematic / active ETFs
+    "ARKK","ARKW","ARKG","ARKF","ARKQ","ARKX","SPDN",
+}
+
+# ── Sector map — used for diversification in scoring and AI prompt ────────────
+_SECTOR_MAP = {
+    # Tech
+    "AAPL":"tech","MSFT":"tech","NVDA":"tech","AMD":"tech","INTC":"tech",
+    "MU":"tech","SMCI":"tech","AVGO":"tech","QCOM":"tech","TXN":"tech",
+    "AMAT":"tech","LRCX":"tech","KLAC":"tech","ASML":"tech","MRVL":"tech",
+    "PLTR":"tech","CRWD":"tech","PANW":"tech","ZS":"tech","OKTA":"tech",
+    "NET":"tech","DDOG":"tech","SNOW":"tech","MDB":"tech","GTLB":"tech",
+    "META":"tech","GOOGL":"tech","GOOG":"tech","AMZN":"tech",
+    "PYPL":"tech","SQ":"tech","SOFI":"tech","ANET":"tech","HPE":"tech",
+    "STM":"tech","ON":"tech","WOLF":"tech","SWKS":"tech","MCHP":"tech",
+    # Crypto / blockchain
+    "MARA":"crypto","COIN":"crypto","RIOT":"crypto","CLSK":"crypto",
+    "MSTR":"crypto","HUT":"crypto","BTBT":"crypto","CIFR":"crypto",
+    # Consumer / retail
+    "AMZN":"retail","WMT":"retail","TGT":"retail","COST":"retail",
+    "HD":"retail","LOW":"retail","BBY":"retail","ETSY":"retail",
+    "KO":"consumer","PEP":"consumer","PG":"consumer","MCD":"consumer",
+    "SBUX":"consumer","YUM":"consumer","CMG":"consumer","DPZ":"consumer",
+    "NKE":"consumer","LULU":"consumer","GPS":"consumer",
+    "SNAP":"consumer","PINS":"consumer","UBER":"consumer","LYFT":"consumer",
+    "ABNB":"consumer","BKNG":"consumer","EXPE":"consumer",
+    "NFLX":"media","DIS":"media","WBD":"media","PARA":"media",
+    "CMCSA":"telecom","T":"telecom","VZ":"telecom","TMUS":"telecom",
+    # Banks / financials
+    "JPM":"bank","BAC":"bank","WFC":"bank","C":"bank","GS":"bank",
+    "MS":"bank","USB":"bank","PNC":"bank","TFC":"bank","KEY":"bank",
+    "BK":"bank","STT":"bank","CFG":"bank","HBAN":"bank","RF":"bank",
+    "SCHW":"bank","HOOD":"bank","SYF":"bank","COF":"bank","AXP":"bank",
+    # Healthcare / pharma / biotech
+    "JNJ":"health","PFE":"health","MRK":"health","ABBV":"health",
+    "LLY":"health","BMY":"health","AMGN":"health","GILD":"health",
+    "BIIB":"health","REGN":"health","VRTX":"health","MRNA":"health",
+    "BNTX":"health","CVS":"health","WBA":"health","MCK":"health",
+    "CAH":"health","ABC":"health","UNH":"health","HUM":"health",
+    "CI":"health","CVS":"health","TDOC":"health","HLN":"health",
+    "GSK":"health","NVO":"health","AZN":"health","SNY":"health",
+    # Energy
+    "XOM":"energy","CVX":"energy","OXY":"energy","SLB":"energy",
+    "HAL":"energy","BKR":"energy","MRO":"energy","DVN":"energy",
+    "FANG":"energy","PXD":"energy","EOG":"energy","COP":"energy",
+    "PTEN":"energy","RIG":"energy","HP":"energy","NOV":"energy",
+    # Materials / mining
+    "FCX":"materials","AA":"materials","CLF":"materials","NUE":"materials",
+    "X":"materials","VALE":"materials","RIO":"materials","SCCO":"materials",
+    "BTI":"consumer","PM":"consumer","MO":"consumer",
+    # Industrials / auto
+    "CAT":"industrial","GE":"industrial","MMM":"industrial","HON":"industrial",
+    "DE":"industrial","EMR":"industrial","ETN":"industrial","PH":"industrial",
+    "F":"auto","GM":"auto","TSLA":"auto","RIVN":"auto","LCID":"auto",
+    # International ADRs
+    "BABA":"tech","BIDU":"tech","JD":"retail","PDD":"retail",
+    "MELI":"retail","SE":"tech","GRAB":"tech",
+    "PBR":"energy","YMM":"tech","INFY":"tech","WIT":"tech",
+    "LYG":"bank","NWG":"bank","HSBC":"bank","ING":"bank","SAN":"bank",
+    "NOK":"tech","ERIC":"tech","BB":"tech",
+    "NU":"bank","CPNG":"retail","VALE":"materials",
+    # REITs
+    "HST":"reit","PLD":"reit","AMT":"reit","CCI":"reit","EQIX":"reit",
+    "O":"reit","SPG":"reit","WPC":"reit","VICI":"reit","MPW":"reit",
+    # Other
+    "KDP":"consumer","MDLZ":"consumer","GIS":"consumer","K":"consumer",
+    "WBD":"media","AAL":"airline","DAL":"airline","UAL":"airline","LUV":"airline",
 }
 
 # ── Static seed — used only if dynamic screener fails ────────────────────────
@@ -777,7 +862,7 @@ def _ai_rank_universe(top_candidates: list[dict], regime: str) -> list[dict]:
         f"drawdown={c.get('max_drawdown', 0):.0f}% | "
         f"HV30={c.get('hv30', 0):.0f}% | "
         f"price=${c.get('price', 0):.2f} | "
-        f"vol={c.get('volume_m', 0):.1f}M"
+        f"sector={_SECTOR_MAP.get(c['symbol'], 'other')}"
         for c in top_candidates
     ])
 
