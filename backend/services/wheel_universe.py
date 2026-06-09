@@ -397,6 +397,8 @@ def _get_live_iv_batch(symbols: list[str], trading_client, opts_client, data_cli
                     type=ContractType.PUT,
                     expiration_date_gte=str(target_exp_start),
                     expiration_date_lte=str(target_exp_end),
+                    strike_price_gte=str(round(stock_price * 0.85, 2)),
+                    strike_price_lte=str(round(stock_price * 1.15, 2)),
                 ))
                 contracts = getattr(contracts_resp, "option_contracts", None) or []
                 if not contracts:
