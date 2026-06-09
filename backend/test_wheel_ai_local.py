@@ -93,7 +93,11 @@ while len(qualified) < _MIN_CANDIDATES and relax < 4:
 if len(qualified) < _MIN_CANDIDATES:
     qualified = scored[:_MIN_CANDIDATES]
 
-top20 = qualified[:20]
+# Hard pre-filter: yield/cycle > 30% = binary event trap
+safe = [c for c in qualified if c.get("expected_yield_pct", 0) <= 30.0]
+if len(safe) < 8:
+    safe = qualified  # fallback if universe is thin
+top20 = safe[:20]
 
 try:
     from services.wheel_engine import _get_current_regime
@@ -240,6 +244,7 @@ Select 8-10 stocks. Rules:
 - Prefer IV/HV > 1.3x
 - In BEAR regime: weight stability (low drawdown) heavily
 - In BULL/NEUTRAL regime: weight yield/cycle and IV/HV ratio
+- REJECT any stock with yield/cycle > 30% — this signals a binary event (FDA, earnings, trial readout) not a premium edge. These are traps: the stock gaps down 60-80% if the event fails.
 
 Return ONLY a valid JSON array, no other text:
 [{{"symbol":"KO","reason":"IV/HV 1.82x strong edge, yield 5.7%/cycle, drawdown 8% safe if assigned"}}]"""

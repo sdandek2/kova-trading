@@ -1038,7 +1038,11 @@ def refresh_universe() -> list[dict]:
         qualified = scored[:_MIN_CANDIDATES]
 
     # Step 8: Pass top 20 to AI for final selection
-    top20 = qualified[:20]
+    # Hard pre-filter: yield/cycle > 30% = binary event trap (FDA/earnings gap risk)
+    safe = [c for c in qualified if c.get("expected_yield_pct", 0) <= 30.0]
+    if len(safe) < 8:
+        safe = qualified  # fallback: don't starve the AI if universe is thin
+    top20 = safe[:20]
     universe = _ai_rank_universe(top20, regime)
 
     if not universe:
