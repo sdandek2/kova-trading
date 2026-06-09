@@ -115,7 +115,7 @@ struct AnalyticsView: View {
             Text("If all positions move 1 ATR against you simultaneously")
                 .font(.caption).foregroundStyle(.secondary)
 
-            if let v = varData, v.varDollars != nil || v.grossDollars != nil {
+            if let v = varData, (v.varDollars ?? 0) > 0 || (v.grossDollars ?? 0) > 0 {
                 HStack(spacing: 0) {
                     VarStatView(
                         label: "Value at Risk",

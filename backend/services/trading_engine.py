@@ -766,7 +766,7 @@ async def run_trading_cycle():
                     _previous_positions.get(p.symbol, {}).get("entry_time")
                     or datetime.now(timezone.utc)
                 ),
-                "exit_reason": "unknown",
+                "exit_reason": _previous_positions.get(p.symbol, {}).get("exit_reason", "unknown"),
                 "side": p.side,
             }
             for p in positions

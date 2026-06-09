@@ -71,36 +71,77 @@ _WHEEL_EXCLUSIONS = {
     "IBIT","ARKK","ARKW","GDX","GDXJ","IAU",
 }
 
-# ── Candidate pool — 90 stocks across all regimes ────────────────────────────
-# Intentionally diverse: AI + scoring will narrow to best 8-12
-_ALL_CANDIDATES = [
-    # Defensive / regime-neutral (stable, liquid, survive bear)
+# ── Static seed — used only if dynamic screener fails ────────────────────────
+# Kept as a reliable fallback, not the primary source.
+_STATIC_SEED = [
     "T", "VZ", "KO", "WMT", "MCD", "PG", "JNJ", "PEP", "COST", "HD",
-    # Large-cap financials (liquid options, elevated IV)
     "JPM", "BAC", "WFC", "C", "GS", "MS",
-    # Healthcare / pharma (defensive, high IV)
     "CVS", "WBA", "TDOC", "PFE", "ABBV", "MRK",
-    # Energy (high IV, cyclical premium)
     "XOM", "CVX", "OXY", "SLB",
-    # Industrials (moderate IV, stable)
     "CAT", "GE", "MMM", "HON",
-    # Auto (high IV, liquid)
     "F", "GM",
-    # Telecom / media (defensive yield)
     "CMCSA", "DIS",
-    # Tech (high IV — only large-cap stable ones)
     "AAPL", "MSFT", "GOOGL", "META", "AMZN",
-    # Semis (high IV — only when regime allows)
     "INTC", "QCOM", "MU", "AMD", "NVDA", "AVGO",
-    # Fintech / consumer (high IV)
     "PYPL", "SQ", "SOFI",
-    # Growth (high IV — regime dependent)
     "NFLX", "UBER", "ABNB", "SNAP",
-    # Retail
     "MELI", "BABA",
-    # Commodities
     "FCX", "AA", "CLF",
 ]
+
+
+def _get_dynamic_symbols(trading_client) -> list[str]:
+    """
+    Pull all options-eligible US equity symbols from Alpaca dynamically.
+    Merges with historical winners from DB so proven stocks always stay eligible.
+
+    Returns a deduplicated list of symbols ready for price/volume filtering.
+    Falls back to _STATIC_SEED if Alpaca fetch fails.
+    """
+    symbols = set()
+
+    # Source 1: Alpaca options-eligible assets
+    try:
+        from alpaca.trading.requests import GetAssetsRequest
+        from alpaca.trading.enums import AssetClass, AssetStatus
+        assets = trading_client.get_all_assets(GetAssetsRequest(
+            asset_class=AssetClass.US_EQUITY,
+            status=AssetStatus.ACTIVE,
+        ))
+        for a in assets:
+            # options_enabled is the key flag — no flag = no options chain
+            if (getattr(a, "options_enabled", False)
+                    and getattr(a, "tradable", False)
+                    and getattr(a, "fractionable", False)  # proxy for large-cap / liquid
+                    and a.symbol not in _WHEEL_EXCLUSIONS
+                    and "/" not in a.symbol           # skip ADRs like BRK/B
+                    and "." not in a.symbol):          # skip preferred shares like BRK.B
+                symbols.add(a.symbol)
+        logger.info(f"Wheel dynamic screener: {len(symbols)} options-eligible assets from Alpaca")
+    except Exception as e:
+        logger.warning(f"Wheel dynamic screener: Alpaca fetch failed ({e}) — using static seed")
+        return _STATIC_SEED
+
+    # Source 2: Historical winners always stay eligible regardless of other filters
+    # If we made money on a stock before, never exclude it from consideration.
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT symbol FROM wheel_symbol_stats
+                    WHERE win_rate > 0.5 AND total_cycles >= 2
+                """)
+                for row in cur.fetchall():
+                    symbols.add(row[0])
+    except Exception:
+        pass
+
+    # Merge with static seed as safety net — ensures known-good stocks never disappear
+    symbols.update(_STATIC_SEED)
+
+    return list(symbols)
 
 
 # ── Adaptive threshold management ────────────────────────────────────────────
@@ -324,13 +365,26 @@ def _get_iv_ranks(symbols: list[str]) -> dict:
 
 def _score_candidates(candidates: list[dict], data_client) -> list[dict]:
     """
-    Score all candidates quantitatively.
+    Score all candidates quantitatively, optimized for maximum premium income.
 
-    Score = IV_rank(30%) + IV/HV_ratio(30%) + stability(20%) + liquidity(20%)
+    Score = expected_yield(35%) + IV/HV_ratio(25%) + IV_rank(20%) + stability(15%) + liquidity(5%)
 
-    IV/HV ratio is the key alpha signal:
-      > 1.5x = options significantly overpriced vs actual moves → SELL premium
-      < 1.0x = options cheap vs realized vol → avoid (stock moves more than priced)
+    Primary metric is EXPECTED PREMIUM YIELD — the actual dollars we expect to collect
+    per dollar of collateral over 45 days. This is what we're here to maximize.
+
+    expected_yield = stock_price × IV × sqrt(45/365) × 0.4 / strike_price
+      (Black-Scholes ATM approximation for 45-DTE, 0.25-delta put)
+      Annualized: × (365/45) → comparable across all stocks
+
+    IV/HV ratio is the edge signal: are options overpriced vs actual moves?
+      > 1.5x = options 50% more expensive than stock actually moves = IDEAL
+      < 1.0x = stock moves more than priced = dangerous, avoid
+
+    IV rank: is IV elevated vs its own history?
+      High IV rank = options are expensive right now = more premium than usual
+
+    Stability: drawdown protection — limits assignment catastrophe risk.
+    Liquidity: just a tiebreaker — all candidates already passed volume filter.
 
     Returns candidates list with score + metrics added, sorted best first.
     """
@@ -354,45 +408,69 @@ def _score_candidates(candidates: list[dict], data_client) -> list[dict]:
         hv30         = pm["hv30"]         # realized vol % annualized
         max_drawdown = pm["max_drawdown"] # worst 6-month drop %
         iv_rank      = iv["iv_rank"]      # 0-100 percentile
-        iv_current   = iv["iv_current"]   # raw IV (0-1 scale)
+        iv_current   = iv["iv_current"]   # raw IV (0-1 scale, e.g. 0.35 = 35%)
+        price        = c.get("price", 0)
 
-        # IV/HV ratio — core metric
-        # iv_current is on 0-1 scale, hv30 is on % scale → normalize
-        iv_pct = iv_current * 100  # convert to % for comparison
-        iv_hv_ratio = (iv_pct / hv30) if hv30 > 5 else 1.0  # avoid div by zero on very stable stocks
+        iv_pct = iv_current * 100  # convert to % for comparison with hv30
+
+        # IV/HV ratio — edge signal
+        iv_hv_ratio = (iv_pct / hv30) if hv30 > 5 else 1.0
+
+        # ── Expected premium yield (primary metric) ───────────────────────────
+        # Black-Scholes ATM approximation: ATM straddle ≈ 0.8 × IV × sqrt(T)
+        # 0.25-delta put ≈ 50% of ATM straddle premium
+        # So 45-DTE put premium ≈ price × IV × sqrt(45/365) × 0.4
+        # Yield = premium / (strike ≈ 0.95 × price) → premium_yield = IV × sqrt(45/365) × 0.4 / 0.95
+        if iv_current > 0 and price > 0:
+            expected_premium = price * iv_current * math.sqrt(45 / 365) * 0.4
+            expected_yield_pct = (expected_premium / (price * 0.95)) * 100   # % of collateral
+            annual_yield_pct   = expected_yield_pct * (365 / 45)             # annualized
+            # Score: 20% annual yield = 100 points (excellent), 5% = 25 points
+            yield_score = min(annual_yield_pct * 5, 100)
+        else:
+            expected_yield_pct = 0.0
+            annual_yield_pct   = 0.0
+            yield_score        = 30.0  # neutral when no IV data yet
 
         # Component scores (all 0-100)
         iv_rank_score   = min(iv_rank, 100)
-        iv_hv_score     = min(iv_hv_ratio * 40, 100)    # 2.5x ratio = perfect 100
-        stability_score = max(0, 100 - (max_drawdown * 2.5))  # 40% drawdown = 0
-        liquidity_score = min(c.get("volume_m", 0) * 10, 100) # 10M vol = 100
+        iv_hv_score     = min(iv_hv_ratio * 40, 100)        # 2.5x ratio = perfect 100
+        stability_score = max(0, 100 - (max_drawdown * 2.5)) # 40% drawdown = 0
+        liquidity_score = min(c.get("volume_m", 0) * 5, 100) # 20M vol = 100 (tiebreaker only)
 
-        # Performance bonus: if we've traded this before and won
+        # Performance bonus/penalty: if we've traded this before
         perf_bonus = 0.0
         if sym in perf:
-            wr = perf[sym].get("win_rate", 50)
+            wr  = perf[sym].get("win_rate", 50)
+            avg_yield = perf[sym].get("avg_yield", 0)
             if wr > 80:
-                perf_bonus = 5.0
-            elif wr < 60:
-                perf_bonus = -5.0
+                perf_bonus = 8.0    # proven winner — boost it
+            elif wr < 50:
+                perf_bonus = -10.0  # losing stock — penalize hard
+            # Extra bonus if actual yield consistently beat expectation
+            if avg_yield > 1.5:
+                perf_bonus += 3.0
 
         total = (
-            iv_rank_score   * 0.30 +
-            iv_hv_score     * 0.30 +
-            stability_score * 0.20 +
-            liquidity_score * 0.20 +
+            yield_score     * 0.35 +
+            iv_hv_score     * 0.25 +
+            iv_rank_score   * 0.20 +
+            stability_score * 0.15 +
+            liquidity_score * 0.05 +
             perf_bonus
         )
 
         scored.append({
             **c,
-            "iv_rank":        round(iv_rank, 1),
-            "iv_current_pct": round(iv_pct, 1),
-            "hv30":           round(hv30, 1),
-            "iv_hv_ratio":    round(iv_hv_ratio, 2),
-            "max_drawdown":   round(max_drawdown, 1),
-            "stability_score":round(stability_score, 1),
-            "score":          round(min(total, 100), 1),
+            "iv_rank":            round(iv_rank, 1),
+            "iv_current_pct":     round(iv_pct, 1),
+            "hv30":               round(hv30, 1),
+            "iv_hv_ratio":        round(iv_hv_ratio, 2),
+            "max_drawdown":       round(max_drawdown, 1),
+            "expected_yield_pct": round(expected_yield_pct, 2),  # per 45-DTE cycle
+            "annual_yield_pct":   round(annual_yield_pct, 1),    # annualized
+            "stability_score":    round(stability_score, 1),
+            "score":              round(min(total, 100), 1),
         })
 
     scored.sort(key=lambda x: x["score"], reverse=True)
@@ -401,19 +479,27 @@ def _score_candidates(candidates: list[dict], data_client) -> list[dict]:
 
 # ── Candidate pool ────────────────────────────────────────────────────────────
 
-def _get_candidate_pool(data_client, limit: int = 80) -> list[dict]:
+def _get_candidate_pool(data_client, trading_client=None, limit: int = 150) -> list[dict]:
     """
-    Filter _ALL_CANDIDATES by price and volume. Returns list of valid candidates.
-    Uses batch snapshots. Includes error recovery per batch.
+    Build candidate pool dynamically from Alpaca's full options-eligible universe.
+    Filters by price ($5-$120) and volume (>500k) via batch snapshots.
+
+    Dynamic > hardcoded: discovers ANY liquid options stock, not just the 57 we knew about.
+    Historical winners always included regardless of filters.
     """
     try:
         from alpaca.data.requests import StockSnapshotRequest
 
-        filtered = []
-        batch_size = 20
+        # Get dynamic symbol list (Alpaca options-eligible + historical winners + static seed)
+        all_symbols = _get_dynamic_symbols(trading_client) if trading_client else _STATIC_SEED
+        all_symbols = [s for s in all_symbols if s not in _WHEEL_EXCLUSIONS]
+        logger.info(f"Wheel candidate pool: screening {len(all_symbols)} symbols...")
 
-        for i in range(0, len(_ALL_CANDIDATES), batch_size):
-            batch = [s for s in _ALL_CANDIDATES[i:i+batch_size] if s not in _WHEEL_EXCLUSIONS]
+        filtered = []
+        batch_size = 100  # Alpaca snapshot supports large batches
+
+        for i in range(0, len(all_symbols), batch_size):
+            batch = all_symbols[i:i+batch_size]
             if not batch:
                 continue
             try:
@@ -440,7 +526,7 @@ def _get_candidate_pool(data_client, limit: int = 80) -> list[dict]:
                 continue
 
         filtered.sort(key=lambda x: x["volume_m"], reverse=True)
-        logger.info(f"Wheel candidate pool: {len(filtered)} passed price/volume filter")
+        logger.info(f"Wheel candidate pool: {len(filtered)} passed price/volume filter from {len(all_symbols)} screened")
         return filtered[:limit]
 
     except Exception as e:
@@ -573,6 +659,7 @@ def _ai_rank_universe(top_candidates: list[dict], regime: str) -> list[dict]:
     """
     candidate_text = "\n".join([
         f"{c['symbol']}: score={c['score']:.0f} | "
+        f"yield={c.get('expected_yield_pct', 0):.1f}%/cycle ({c.get('annual_yield_pct', 0):.0f}%/yr) | "
         f"IV_rank={c.get('iv_rank', 0):.0f}% | "
         f"IV/HV={c.get('iv_hv_ratio', 0):.2f}x | "
         f"drawdown={c.get('max_drawdown', 0):.0f}% | "
@@ -591,17 +678,20 @@ Pre-scored candidates (quantitative filters already applied):
 {candidate_text}
 
 Key metrics explained:
-- IV/HV ratio: options price vs actual moves. >1.5x = options overpriced = IDEAL for selling premium
-- IV rank: 0-100 percentile. Higher = more expensive options = more income
-- Drawdown: worst 6-month drop. Lower = safer for assignment
+- yield/cycle: expected premium as % of collateral per 45-day cycle — PRIMARY metric, maximize this
+- annual yield: same annualized — target > 20%/yr for meaningful income
+- IV/HV ratio: options priced vs actual moves. >1.5x = options overpriced = we have edge
+- IV rank: 0-100. Higher = options more expensive vs own history = more income now
+- Drawdown: worst 6-month drop. Lower = safer if assigned
 - HV30: how much stock actually moves. Lower = less assignment risk
 
 Select 8-10 stocks. Rules:
+- Maximize TOTAL expected yield across the portfolio
 - Max 2 per sector (telecom, banks, tech, healthcare, auto, etc.)
-- In BEAR regime: drawdown < 25% preferred, weight stability
-- In BULL regime: IV/HV ratio and premium weight more
-- No more than 2 stocks with drawdown > 25%
-- Prefer stocks where IV/HV > 1.3x (options genuinely overpriced)
+- In BEAR regime: drawdown < 25% preferred, weight stability heavily
+- In BULL regime: weight yield/cycle and IV/HV ratio, accept higher drawdown
+- No more than 2 stocks with drawdown > 30%
+- Prefer stocks where IV/HV > 1.3x — we need edge, not just high IV
 
 Return ONLY valid JSON array:
 [{{"symbol":"T","score":85,"reason":"Telecom defensive, IV/HV 1.8x means options 80% overpriced vs realized vol, drawdown only 12% makes assignment safe","iv_profile":"moderate-high"}}]"""
@@ -685,16 +775,17 @@ def refresh_universe() -> list[dict]:
     except Exception:
         regime = "neutral"
 
-    # Step 3: Get candidate pool
+    # Step 3: Get candidate pool (dynamic — all Alpaca options-eligible stocks)
     try:
-        from services.wheel_engine import _get_wheel_data_client
-        data_client = _get_wheel_data_client()
+        from services.wheel_engine import _get_wheel_data_client, _get_wheel_trading_client
+        data_client    = _get_wheel_data_client()
+        trading_client = _get_wheel_trading_client()
     except Exception as e:
         logger.error(f"Wheel universe: cannot get data client ({e}) — using safe fallback")
         _save_universe(SAFE_FALLBACK_UNIVERSE, source="emergency_fallback")
         return SAFE_FALLBACK_UNIVERSE
 
-    candidates = _get_candidate_pool(data_client, limit=80)
+    candidates = _get_candidate_pool(data_client, trading_client=trading_client, limit=150)
     if not candidates:
         logger.error("Wheel universe: empty candidate pool — using safe fallback")
         _save_universe(SAFE_FALLBACK_UNIVERSE, source="emergency_fallback")

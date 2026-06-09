@@ -67,6 +67,27 @@ MIN_IV_ABSOLUTE = float(_os.environ.get("WHEEL_MIN_IV_ABS",      "0.25")) # fall
 
 # Sector diversification
 MAX_PER_SECTOR  = int(_os.environ.get("WHEEL_MAX_PER_SECTOR",    "2"))
+
+# Scan quality filters
+MAX_SPREAD_PCT      = float(_os.environ.get("WHEEL_MAX_SPREAD_PCT",    "0.30"))  # skip if bid-ask spread > 30%
+MIN_OPTION_VOLUME   = int(_os.environ.get("WHEEL_MIN_OPTION_VOLUME",   "10"))    # skip if 0 contracts traded today
+MIN_DOLLAR_PREMIUM  = float(_os.environ.get("WHEEL_MIN_DOLLAR_PREMIUM","50.0"))  # skip if < $50/contract
+DELTA_MAX_BUFFER    = float(_os.environ.get("WHEEL_DELTA_BUFFER",      "0.10"))  # max delta = TARGET_DELTA + buffer
+
+# Capital protection
+WEEKLY_LOSS_CAP_PCT = float(_os.environ.get("WHEEL_WEEKLY_LOSS_CAP",   "0.03"))  # pause new trades if week loss > 3%
+
+# Assignment bounce-wait
+BOUNCE_WAIT_DROP_PCT  = float(_os.environ.get("WHEEL_BOUNCE_WAIT_DROP", "0.03")) # wait 1 day if drop 3-10%
+STRUCTURAL_DROP_PCT   = float(_os.environ.get("WHEEL_STRUCTURAL_DROP",  "0.10")) # fetch news + AI if drop > 10%
+
+# VIX-based position sizing
+_VIX_SIZING = {
+    "extreme_fear": {"contracts": 1, "max_positions": 3},
+    "elevated":     {"contracts": 1, "max_positions": 5},
+    "normal":       {"contracts": 2, "max_positions": 5},
+    "low_fear":     {"contracts": 2, "max_positions": 5},
+}
 SECTOR_MAP = {
     "SOFI": "fintech",   "HOOD": "fintech",   "PYPL": "fintech",
     "AFRM": "fintech",   "DAVE": "fintech",   "BILL": "fintech",
@@ -414,6 +435,138 @@ Only flag ones you are confident about."""
     return result
 
 
+# ── MA20 batch fetch ─────────────────────────────────────────────────────────
+
+def _get_ma20_batch(symbols: list[str], data_client) -> dict[str, float]:
+    """
+    Fetch 25-day daily bars for all symbols in one call.
+    Returns {symbol: ma20} — 0.0 if data unavailable (treated as neutral, not blocked).
+    """
+    result = {s: 0.0 for s in symbols}
+    try:
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        end   = datetime.now(timezone.utc)
+        start = end - timedelta(days=35)
+        bars  = data_client.get_stock_bars(StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+        ))
+        for sym in symbols:
+            try:
+                closes = [float(b.close) for b in (bars.get(sym) or [])]
+                if len(closes) >= 20:
+                    result[sym] = sum(closes[-20:]) / 20
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Wheel MA20 batch error: {e}")
+    return result
+
+
+# ── Weekly loss cap ───────────────────────────────────────────────────────────
+
+def _get_weekly_realized_loss() -> float:
+    """
+    Sum of realized losses (negative P&L only) from positions closed this week (Mon–today).
+    Returns a negative number or 0.0. Used to pause new trades if loss > WEEKLY_LOSS_CAP_PCT.
+    """
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return 0.0
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(SUM(realized_pl), 0)
+                FROM wheel_positions
+                WHERE status IN ('completed', 'stop_loss')
+                  AND realized_pl < 0
+                  AND closed_at >= date_trunc('week', NOW())
+            """)
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+    except Exception as e:
+        logger.warning(f"Wheel weekly loss fetch: {e}")
+        return 0.0
+
+
+# ── VIX-aware cycle sizing ────────────────────────────────────────────────────
+
+def _get_vix_sizing() -> dict:
+    """
+    Read vix_level from macro cache. Return contracts-per-trade and max-positions
+    for this cycle based on current fear level.
+    Never blocks a stock — just sizes down in high-fear environments.
+    """
+    try:
+        from services.db import cache_get
+        macro = cache_get("premarket_scan") or {}
+        vix_level = macro.get("vix_level", "normal") or "normal"
+        sizing = _VIX_SIZING.get(vix_level.lower(), _VIX_SIZING["normal"])
+        if vix_level != "normal":
+            logger.info(f"Wheel VIX sizing: vix_level={vix_level} → {sizing['contracts']} contracts, max {sizing['max_positions']} positions")
+        return sizing
+    except Exception:
+        return _VIX_SIZING["normal"]
+
+
+# ── AI assignment decision ────────────────────────────────────────────────────
+
+def _ai_assignment_decision(symbol: str, cost_basis: float, current_price: float) -> str:
+    """
+    Called only when stock drops > STRUCTURAL_DROP_PCT (10%) from cost basis at assignment.
+    Fetches last 3 Benzinga headlines, asks AI: temporary or structural drop?
+
+    Returns:
+      "structural" → stop-loss now (don't write covered call into falling knife)
+      "temporary"  → wait 1 day for bounce, then sell call
+      "normal"     → proceed with covered call immediately (AI unsure / no news)
+    """
+    try:
+        from services.alpaca_service import get_news
+        from services.ai_client import ask_ai, parse_ai_json
+
+        headlines = get_news(symbols=[symbol], limit=3)
+        if not headlines:
+            return "normal"
+
+        headline_text = "\n".join(
+            f"- {h.get('title', '')} ({h.get('source', '')})"
+            for h in headlines[:3]
+        )
+        drop_pct = (cost_basis - current_price) / cost_basis * 100
+
+        prompt = f"""Wheel options bot. We sold a cash-secured put on {symbol} and got assigned at ${cost_basis:.2f}.
+Current price: ${current_price:.2f} (down {drop_pct:.1f}% from our cost basis).
+
+Recent news:
+{headline_text}
+
+Question: Is this drop STRUCTURAL (company-specific bad news: earnings miss, guidance cut, fraud, bankruptcy, secondary offering, legal issues) or TEMPORARY (market-wide sell-off, sector rotation, sympathy move, overreaction)?
+
+Return ONLY valid JSON: {{"decision": "structural"}} or {{"decision": "temporary"}} or {{"decision": "normal"}}
+
+Rules:
+- structural: company-specific news that permanently impairs the stock
+- temporary: macro/sector/emotional event, stock likely recovers
+- normal: no clear news or ambiguous — default to selling covered call"""
+
+        raw    = ask_ai(prompt, max_tokens=100)
+        parsed = parse_ai_json(raw)
+        decision = str(parsed.get("decision", "normal")).lower()
+        if decision not in ("structural", "temporary", "normal"):
+            decision = "normal"
+        logger.info(f"Wheel AI assignment decision: {symbol} drop={drop_pct:.1f}% → {decision}")
+        return decision
+
+    except Exception as e:
+        logger.warning(f"Wheel AI assignment decision failed ({e}) — defaulting to normal")
+        return "normal"
+
+
 # ── Scanner ───────────────────────────────────────────────────────────────────
 
 def scan_opportunities() -> list[dict]:
@@ -446,21 +599,34 @@ def scan_opportunities() -> list[dict]:
     data_client = _get_wheel_data_client()
     opts_client = _get_wheel_options_client()
 
+    # otm_depth: upper bound for strike/price ratio. Optimizer adjusts 0.92–0.97
+    # based on win rate — lower when too many assignments, higher when doing well.
+    try:
+        from services.db import cache_get as _cg3
+        _otm_depth = float((_cg3("wheel:adaptive_thresholds") or {}).get("otm_depth", 0.95))
+        _otm_depth = max(0.88, min(0.97, _otm_depth))  # hard bounds
+    except Exception:
+        _otm_depth = 0.95
+
     # Pre-fetch earnings dates for the whole universe in one AI call (cheap)
     earnings_within_14d = _get_earnings_within_days(universe, days=14)
+
+    # Pre-fetch MA20 for all symbols in one batch call — trend filter
+    ma20_map = _get_ma20_batch(universe, data_client)
+
+    # Regime delta ceiling — hard filter, not just logging
+    regime_delta_max = _regime_adjusted_delta(regime) + DELTA_MAX_BUFFER
 
     for symbol in universe:
         if symbol in active_symbols:
             continue
 
-        # ── Must-do #7: Earnings avoidance ───────────────────────────────────
-        # Never open a new put within 14 days of earnings.
-        # Stock can gap ±20% overnight on earnings — put assignment risk is severe.
+        # ── Earnings avoidance ────────────────────────────────────────────────
         if symbol in earnings_within_14d:
             logger.info(f"Wheel skip {symbol}: earnings within 14 days ({earnings_within_14d[symbol]})")
             continue
 
-        # Sector diversification check
+        # ── Sector diversification ────────────────────────────────────────────
         sector_ok, sector_reason = _sector_allows(symbol, sector_counts)
         if not sector_ok:
             logger.debug(f"Wheel scan skip {symbol}: {sector_reason}")
@@ -475,6 +641,14 @@ def scan_opportunities() -> list[dict]:
                 continue
             stock_price = float((q.ask_price + q.bid_price) / 2)
             if stock_price <= 0:
+                continue
+
+            # ── Underlying trend filter — stock must be above 20-day MA ──────
+            # Selling puts on a downtrending stock = almost certain assignment.
+            # MA20 = 0.0 means no data → treat as neutral, don't block.
+            ma20 = ma20_map.get(symbol, 0.0)
+            if ma20 > 0 and stock_price < ma20:
+                logger.debug(f"Wheel skip {symbol}: price ${stock_price:.2f} < MA20 ${ma20:.2f} (downtrend)")
                 continue
 
             from alpaca.trading.requests import GetOptionContractsRequest
@@ -499,16 +673,18 @@ def scan_opportunities() -> list[dict]:
             best = None
             best_score = 0.0
             atm_iv_recorded = False
+            # Track IV at ~30-DTE and ~45-DTE for term structure check
+            iv_by_dte: dict[str, float] = {}   # "30" or "45" → iv value
 
             from alpaca.data.requests import OptionSnapshotRequest
             for contract in sorted_contracts:
                 try:
                     strike = float(contract.strike_price)
                     ratio = strike / stock_price
-                    if not (0.75 <= ratio <= 0.97):
+                    if not (0.75 <= ratio <= _otm_depth):
                         continue
 
-                    # Skip illiquid contracts — zero OI means no counterparty to fill us
+                    # ── OI filter ─────────────────────────────────────────────
                     oi = int(getattr(contract, "open_interest", 0) or 0)
                     if oi < 50:
                         continue
@@ -518,16 +694,41 @@ def scan_opportunities() -> list[dict]:
                     ).get(contract.symbol)
                     if not snap or not snap.latest_quote:
                         continue
+
                     ask = float(snap.latest_quote.ask_price or 0)
                     bid = float(snap.latest_quote.bid_price or 0)
                     if ask <= 0 or bid <= 0:
                         continue
+
+                    # ── Bid-ask spread filter ─────────────────────────────────
+                    # Wide spread = we give up too much on entry. Skip if > 30%.
+                    spread_pct = (ask - bid) / ask
+                    if spread_pct > MAX_SPREAD_PCT:
+                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: spread {spread_pct:.0%} > {MAX_SPREAD_PCT:.0%}")
+                        continue
+
+                    # ── Option volume filter ──────────────────────────────────
+                    # Zero volume today = nobody trading it → our order moves the market.
+                    opt_vol = int(getattr(snap.daily_bar, "volume", 0) or 0) if snap.daily_bar else 0
+                    if opt_vol < MIN_OPTION_VOLUME:
+                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: option volume {opt_vol} < {MIN_OPTION_VOLUME}")
+                        continue
+
                     premium = (ask + bid) / 2
+
+                    # ── Minimum dollar premium filter ─────────────────────────
+                    # Low-priced stocks can have good % yield but tiny dollar premium.
+                    # Commission + slippage erases the profit.
+                    dollar_premium = premium * 100
+                    if dollar_premium < MIN_DOLLAR_PREMIUM:
+                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: dollar premium ${dollar_premium:.0f} < ${MIN_DOLLAR_PREMIUM:.0f}")
+                        continue
+
                     prem_yield = premium / strike
                     if prem_yield < MIN_PREMIUM_YIELD:
                         continue
 
-                    # Get IV + delta from greeks — optional, don't crash if missing
+                    # Get IV + delta from greeks
                     iv = 0.0
                     real_delta = None
                     try:
@@ -536,12 +737,27 @@ def scan_opportunities() -> list[dict]:
                             iv = float(getattr(greeks, "implied_volatility", 0) or 0)
                             real_delta = abs(float(getattr(greeks, "delta", 0) or 0))
                     except Exception:
-                        pass  # greeks unavailable — continue without IV rank filter
+                        pass
+
+                    # ── Delta hard filter ─────────────────────────────────────
+                    # High delta = nearly ATM = high assignment probability.
+                    # Cap at regime_delta + buffer (e.g. neutral: 0.25+0.10 = 0.35 max).
+                    if real_delta and real_delta > regime_delta_max:
+                        logger.debug(f"Wheel skip {symbol} {contract.symbol}: delta {real_delta:.2f} > {regime_delta_max:.2f}")
+                        continue
 
                     # Record IV for rank history (once per symbol per scan)
                     if iv > 0 and not atm_iv_recorded:
                         _record_iv(symbol, iv)
                         atm_iv_recorded = True
+
+                    # Track IV by DTE bucket for term structure check
+                    dte = (contract.expiration_date - today).days
+                    if iv > 0:
+                        if 25 <= dte <= 35 and "30" not in iv_by_dte:
+                            iv_by_dte["30"] = iv
+                        elif 40 <= dte <= 50 and "45" not in iv_by_dte:
+                            iv_by_dte["45"] = iv
 
                     # IV rank filter
                     iv_ok, iv_reason = _iv_passes_filter(symbol, iv)
@@ -549,36 +765,48 @@ def scan_opportunities() -> list[dict]:
                         logger.debug(f"Wheel scan skip {symbol}: {iv_reason}")
                         continue
 
-                    dte = (contract.expiration_date - today).days
                     annual_yield = prem_yield * (365 / max(dte, 1))
 
                     # Score = annual yield weighted by DTE proximity to 45
-                    dte_penalty = abs(dte - TARGET_DTE) / TARGET_DTE  # 0 = perfect
+                    dte_penalty = abs(dte - TARGET_DTE) / TARGET_DTE
                     score = annual_yield * (1 - dte_penalty * 0.2)
+
+                    # ── IV term structure soft penalty ────────────────────────
+                    # Backwardation (30-DTE IV > 45-DTE IV × 1.05) means premium
+                    # decays faster than expected. Penalize 20% — don't block entirely,
+                    # only skip if something better is available.
+                    if iv_by_dte.get("30") and iv_by_dte.get("45"):
+                        if iv_by_dte["30"] > iv_by_dte["45"] * 1.05:
+                            score *= 0.80
+                            logger.debug(f"Wheel {symbol}: IV backwardation (30d={iv_by_dte['30']:.2f} > 45d={iv_by_dte['45']:.2f}) — score penalized 20%")
 
                     if score > best_score:
                         best_score = score
                         best = {
-                            "symbol": symbol,
-                            "stock_price": round(stock_price, 2),
-                            "contract": contract.symbol,
-                            "strike": strike,
-                            "expiry": str(contract.expiration_date),
-                            "dte": dte,
-                            "premium": round(premium, 2),
-                            "bid": round(bid, 2),
-                            "ask": round(ask, 2),
-                            "open_interest": oi,
+                            "symbol":            symbol,
+                            "stock_price":       round(stock_price, 2),
+                            "ma20":              round(ma20, 2),
+                            "contract":          contract.symbol,
+                            "strike":            strike,
+                            "expiry":            str(contract.expiration_date),
+                            "dte":               dte,
+                            "premium":           round(premium, 2),
+                            "bid":               round(bid, 2),
+                            "ask":               round(ask, 2),
+                            "spread_pct":        round(spread_pct * 100, 1),
+                            "open_interest":     oi,
+                            "option_volume":     opt_vol,
+                            "dollar_premium":    round(dollar_premium, 2),
                             "premium_yield_pct": round(prem_yield * 100, 2),
-                            "annual_yield_pct": round(annual_yield * 100, 1),
-                            "collateral": round(strike * CONTRACTS_PER_TRADE * 100, 2),
-                            "contracts": CONTRACTS_PER_TRADE,
-                            "iv": round(iv * 100, 1) if iv else None,
-                            "delta": round(real_delta, 3) if real_delta else None,
-                            "iv_reason": iv_reason,
-                            "sector": SECTOR_MAP.get(symbol, "other"),
-                            "regime": regime,
-                            "mode": "paper" if _is_paper() else "live",
+                            "annual_yield_pct":  round(annual_yield * 100, 1),
+                            "collateral":        round(strike * CONTRACTS_PER_TRADE * 100, 2),
+                            "contracts":         CONTRACTS_PER_TRADE,
+                            "iv":                round(iv * 100, 1) if iv else None,
+                            "delta":             round(real_delta, 3) if real_delta else None,
+                            "iv_reason":         iv_reason,
+                            "sector":            SECTOR_MAP.get(symbol, "other"),
+                            "regime":            regime,
+                            "mode":              "paper" if _is_paper() else "live",
                         }
                 except Exception:
                     continue
@@ -588,8 +816,9 @@ def scan_opportunities() -> list[dict]:
                 logger.info(
                     f"Wheel opp: {symbol} ${best['strike']} put exp {best['expiry']} "
                     f"DTE={best['dte']} | ${best['premium']}×{CONTRACTS_PER_TRADE} "
-                    f"({best['premium_yield_pct']}% / {best['annual_yield_pct']}% annual) "
-                    f"IV={best['iv']}% delta={best['delta']} sector={best['sector']}"
+                    f"(${best['dollar_premium']:.0f}/contract | {best['premium_yield_pct']}% / {best['annual_yield_pct']}% annual) "
+                    f"IV={best['iv']}% delta={best['delta']} spread={best['spread_pct']}% "
+                    f"OI={best['open_interest']} vol={best['option_volume']} sector={best['sector']}"
                 )
         except Exception as e:
             logger.error(f"Wheel scan {symbol}: {e}")
@@ -600,13 +829,28 @@ def scan_opportunities() -> list[dict]:
 
 # ── Order execution ───────────────────────────────────────────────────────────
 
-def execute_put(opportunity: dict) -> Optional[dict]:
-    """Place cash-secured put order — CONTRACTS_PER_TRADE (2) contracts per position."""
+def execute_put(opportunity: dict, cycle_contracts: Optional[int] = None) -> Optional[dict]:
+    """
+    Place cash-secured put order.
+
+    cycle_contracts: VIX-based override from run_wheel_cycle (1 in high-fear).
+                     Takes priority over optimizer's contracts_override.
+                     Falls back to optimizer value, then CONTRACTS_PER_TRADE default.
+    """
     try:
         from alpaca.trading.requests import LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
 
-        qty = CONTRACTS_PER_TRADE  # 2 contracts per trade (tiered close strategy)
+        # Priority: VIX cycle override > optimizer adaptive > default
+        if cycle_contracts and 1 <= cycle_contracts <= 3:
+            qty = cycle_contracts
+        else:
+            try:
+                from services.db import cache_get as _cg2
+                _co = (_cg2("wheel:adaptive_thresholds") or {}).get("contracts_override")
+                qty = int(_co) if _co and 1 <= int(_co) <= 3 else CONTRACTS_PER_TRADE
+            except Exception:
+                qty = CONTRACTS_PER_TRADE
 
         # ── Bug #1 fix: buying power check ───────────────────────────────────
         # Each put requires strike × 100 × qty in cash collateral.
@@ -624,9 +868,17 @@ def execute_put(opportunity: dict) -> Optional[dict]:
         except Exception as bp_err:
             logger.warning(f"Wheel buying power check failed ({bp_err}), proceeding anyway")
 
-        # Use bid price as limit — we're the seller, bid is what buyers pay us now.
-        # mid * 0.98 was below bid → never filled. Bid guarantees same-day fill.
-        limit_px = round(opportunity.get("bid", opportunity["premium"]), 2)
+        # Limit price: bid by default (patient); optimizer sets "ask" when fill_rate < 70%.
+        try:
+            from services.db import cache_get as _cg
+            _adaptive = _cg("wheel:adaptive_thresholds") or {}
+            _bias = _adaptive.get("limit_price_bias", "bid")
+        except Exception:
+            _bias = "bid"
+        if _bias == "ask":
+            limit_px = round(opportunity.get("ask", opportunity["premium"]), 2)
+        else:
+            limit_px = round(opportunity.get("bid", opportunity["premium"]), 2)
 
         order = _get_wheel_trading_client().submit_order(LimitOrderRequest(
             symbol=opportunity["contract"],
@@ -788,7 +1040,7 @@ def check_assignment_stop_loss():
         return
 
     active = get_active_wheel_positions()
-    assigned = [p for p in active if p["phase"] == "assigned" and p.get("cost_basis")]
+    assigned = [p for p in active if p["phase"] in ("assigned", "assigned_waiting") and p.get("cost_basis")]
     if not assigned:
         return
 
@@ -864,8 +1116,27 @@ def check_assignment_stop_loss():
 # ── Assignment + expiration + profit targets ──────────────────────────────────
 
 def check_assignments():
-    """Detect put assignments → sell covered calls immediately."""
+    """
+    Detect put assignments and decide next action based on drop severity.
+
+    drop < BOUNCE_WAIT_DROP_PCT (3%)  → sell covered call immediately (normal path)
+    drop 3–STRUCTURAL_DROP_PCT (10%)  → wait 1 day for bounce, then sell call
+    drop > STRUCTURAL_DROP_PCT (10%)  → fetch news, AI decides:
+                                         structural → stop-loss now
+                                         temporary  → wait 1 day
+                                         normal     → sell call immediately
+
+    Also handles "assigned_waiting" positions — second-day check.
+    """
     active = get_active_wheel_positions()
+
+    # ── Second-day check: positions that waited yesterday for a bounce ────────
+    waiting = [p for p in active if p["phase"] == "assigned_waiting"]
+    for wp in waiting:
+        # Always sell the covered call now — bounce window has passed
+        logger.info(f"Wheel ASSIGNED-WAIT resolved: {wp['symbol']} — selling covered call now")
+        execute_covered_call(wp)
+
     put_open = [p for p in active if p["phase"] == "put_open"]
     if not put_open:
         return
@@ -880,19 +1151,80 @@ def check_assignments():
         logger.error(f"Wheel check_assignments: {e}")
         return
 
+    try:
+        from alpaca.data.requests import StockLatestQuoteRequest
+        data_client = _get_wheel_data_client()
+    except Exception:
+        data_client = None
+
     for wp in put_open:
-        if wp["symbol"] in held:
-            cost = held[wp["symbol"]]
-            logger.info(f"Wheel ASSIGNED: {wp['symbol']} @ ${cost:.2f}")
-            prev = float(wp.get("total_premium_collected") or 0)
-            put_prem = float(wp.get("put_premium") or 0)
-            _update_wheel_position(
-                wp["id"],
-                phase="assigned",
-                cost_basis=cost,
-                total_premium_collected=prev + put_prem * 100,
+        if wp["symbol"] not in held:
+            continue
+
+        cost = held[wp["symbol"]]
+        symbol = wp["symbol"]
+        logger.info(f"Wheel ASSIGNED: {symbol} @ ${cost:.2f}")
+
+        prev     = float(wp.get("total_premium_collected") or 0)
+        put_prem = float(wp.get("put_premium") or 0)
+        _update_wheel_position(
+            wp["id"],
+            phase="assigned",
+            cost_basis=cost,
+            total_premium_collected=prev + put_prem * 100,
+        )
+        wp["cost_basis"] = cost
+
+        # Get current price to measure drop
+        current_price = cost  # default: assume no drop (safe fallback)
+        if data_client:
+            try:
+                q = data_client.get_stock_latest_quote(
+                    StockLatestQuoteRequest(symbol_or_symbols=symbol)
+                ).get(symbol)
+                if q:
+                    current_price = float((q.ask_price + q.bid_price) / 2)
+            except Exception:
+                pass
+
+        drop_pct = (cost - current_price) / cost if cost > 0 else 0.0
+
+        # ── Decision tree ─────────────────────────────────────────────────────
+        if drop_pct >= STRUCTURAL_DROP_PCT:
+            # Sharp drop → check news → AI decides
+            decision = _ai_assignment_decision(symbol, cost, current_price)
+            if decision == "structural":
+                # Don't write a covered call into a falling knife — stop-loss fires
+                logger.warning(
+                    f"Wheel ASSIGNMENT AI: {symbol} drop={drop_pct:.1%} structural → "
+                    f"skipping covered call, stop-loss will handle exit"
+                )
+                # Stop-loss will catch this on next check_assignment_stop_loss() run
+                # Mark phase so we don't keep trying to sell a call
+                _update_wheel_position(wp["id"], notes="ai_structural_drop:skip_call")
+                continue
+            elif decision == "temporary":
+                logger.info(
+                    f"Wheel ASSIGNMENT AI: {symbol} drop={drop_pct:.1%} temporary → "
+                    f"waiting 1 day for bounce"
+                )
+                _update_wheel_position(wp["id"], phase="assigned_waiting")
+                continue
+            else:
+                # "normal" — AI unsure, proceed with covered call
+                logger.info(f"Wheel ASSIGNMENT AI: {symbol} → normal, selling call now")
+                execute_covered_call(wp)
+
+        elif drop_pct >= BOUNCE_WAIT_DROP_PCT:
+            # Moderate drop → wait 1 day — intraday/next-day bounces are common
+            logger.info(
+                f"Wheel ASSIGNMENT: {symbol} drop={drop_pct:.1%} (3–10%) → "
+                f"waiting 1 day for bounce before selling call"
             )
-            wp["cost_basis"] = cost
+            _update_wheel_position(wp["id"], phase="assigned_waiting")
+
+        else:
+            # Normal assignment (< 3% drop) → sell covered call immediately
             execute_covered_call(wp)
 
 
@@ -1773,19 +2105,43 @@ def run_wheel_cycle():
     if _should_scan_today():
         try:
             regime = _get_current_regime()
+
+            # ── Weekly loss cap — pause new trades if we've lost too much this week ──
+            try:
+                weekly_loss   = _get_weekly_realized_loss()
+                account_value = 25000.0  # fallback
+                try:
+                    account_value = float(_get_wheel_trading_client().get_account().portfolio_value)
+                except Exception:
+                    pass
+                loss_cap = account_value * WEEKLY_LOSS_CAP_PCT
+                if weekly_loss < -loss_cap:
+                    logger.warning(
+                        f"Wheel: weekly loss cap hit (${weekly_loss:.0f} > "
+                        f"-${loss_cap:.0f} / {WEEKLY_LOSS_CAP_PCT:.0%} of ${account_value:.0f}) "
+                        f"— pausing new positions this week"
+                    )
+                    return
+            except Exception as cap_err:
+                logger.warning(f"Wheel weekly loss cap check failed ({cap_err}) — continuing")
+
+            # ── VIX-aware sizing — size down contracts in high-fear, never block stocks ──
+            vix_sizing      = _get_vix_sizing()
+            cycle_contracts = vix_sizing["contracts"]
+            max_pos_vix     = vix_sizing["max_positions"]
+
             active_count = len(get_active_wheel_positions())
-            slots = MAX_ACTIVE_POSITIONS - active_count
+            slots = min(MAX_ACTIVE_POSITIONS, max_pos_vix) - active_count
             placed = 0
 
             if slots > 0:
-                # Always place cash-secured puts — the core wheel strategy.
-                # Bear spreads are additive only (extra income on top), never replace puts.
-                # Reason: puts are the entry point for getting assigned shares cheaply.
-                # Without puts there is no wheel — bear spreads alone don't complete the cycle.
-                logger.info(f"Wheel: {regime} regime — scanning puts ({slots} slots)")
+                logger.info(
+                    f"Wheel: {regime} regime — scanning puts "
+                    f"({slots} slots, {cycle_contracts} contracts/trade)"
+                )
                 opps = scan_opportunities()
                 for opp in opps[:min(slots, MAX_ACTIVE_POSITIONS)]:
-                    if execute_put(opp):
+                    if execute_put(opp, cycle_contracts=cycle_contracts):
                         placed += 1
 
                 # In bearish regime, also place 1 bear spread if slots remain

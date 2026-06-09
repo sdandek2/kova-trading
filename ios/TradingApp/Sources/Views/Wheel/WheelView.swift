@@ -299,7 +299,7 @@ private struct WheelControlsCard: View {
             // Schedule info
             Divider()
             VStack(alignment: .leading, spacing: 4) {
-                Label("Auto-runs Mon + Wed 9:45 AM ET", systemImage: "clock.fill")
+                Label("Auto-runs Mon–Fri 9:45 AM ET", systemImage: "clock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Label("Universe refresh: Sunday 8 PM ET", systemImage: "sparkles")
