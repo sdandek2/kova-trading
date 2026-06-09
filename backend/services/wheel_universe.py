@@ -104,18 +104,18 @@ def _get_dynamic_symbols(trading_client) -> list[str]:
     try:
         from alpaca.trading.requests import GetAssetsRequest
         from alpaca.trading.enums import AssetClass, AssetStatus
-        # attributes="options_enabled" pre-filters on Alpaca's side to only return options-eligible equities
         assets = trading_client.get_all_assets(GetAssetsRequest(
             asset_class=AssetClass.US_EQUITY,
             status=AssetStatus.ACTIVE,
-            attributes="options_enabled",
         ))
         for a in assets:
-            attrs = getattr(a, "attributes", None) or []
+            # Check options_enabled — may be a boolean field or in attributes list
+            opts_bool = getattr(a, "options_enabled", None)
+            attrs     = getattr(a, "attributes", None) or []
             has_options = (
-                "options_enabled" in attrs
-                if isinstance(attrs, list)
-                else "options_enabled" in str(attrs)
+                bool(opts_bool)
+                if opts_bool is not None
+                else ("options_enabled" in attrs if isinstance(attrs, list) else "options_enabled" in str(attrs))
             )
             if (has_options
                     and getattr(a, "tradable", False)
@@ -280,7 +280,6 @@ def _get_price_metrics_batch(symbols: list[str], data_client) -> dict:
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
-            feed="iex",  # IEX feed works on paper accounts without premium data subscription
         ))
 
         empty_count = 0
@@ -386,27 +385,27 @@ def _get_live_iv_batch(symbols: list[str], trading_client, opts_client) -> dict:
         return result
     try:
         from alpaca.trading.requests import GetOptionContractsRequest
+        from alpaca.trading.enums import ContractType
         from alpaca.data.requests import OptionSnapshotRequest
         from datetime import date, timedelta
 
-        target_exp_start = date.today() + timedelta(days=30)
-        target_exp_end   = date.today() + timedelta(days=60)
+        today = date.today()
+        target_exp_start = today + timedelta(days=30)
+        target_exp_end   = today + timedelta(days=60)
 
         for sym in symbols:
             try:
                 contracts_resp = trading_client.get_option_contracts(GetOptionContractsRequest(
                     underlying_symbols=[sym],
-                    type="put",
+                    type=ContractType.PUT,
                     expiration_date_gte=str(target_exp_start),
                     expiration_date_lte=str(target_exp_end),
-                    limit=5,
                 ))
                 contracts = getattr(contracts_resp, "option_contracts", None) or []
                 if not contracts:
                     continue
 
                 # Pick contract closest to 45 DTE
-                today = date.today()
                 contracts = sorted(
                     contracts,
                     key=lambda c: abs((c.expiration_date - today).days - 45)
