@@ -361,9 +361,62 @@ def _get_iv_ranks(symbols: list[str]) -> dict:
     return result
 
 
+def _get_live_iv_batch(symbols: list[str], trading_client, opts_client) -> dict:
+    """
+    Fetch live ATM IV for symbols missing DB history.
+    trading_client: used to list option contracts (GetOptionContractsRequest)
+    opts_client:    used to fetch snapshot greeks (OptionSnapshotRequest)
+    Returns {symbol: float} — raw IV (0-1 scale).
+    """
+    result = {}
+    if not symbols or not trading_client or not opts_client:
+        return result
+    try:
+        from alpaca.trading.requests import GetOptionContractsRequest
+        from alpaca.data.requests import OptionSnapshotRequest
+        from datetime import date, timedelta
+
+        target_exp_start = date.today() + timedelta(days=30)
+        target_exp_end   = date.today() + timedelta(days=60)
+
+        for sym in symbols:
+            try:
+                contracts_resp = trading_client.get_option_contracts(GetOptionContractsRequest(
+                    underlying_symbols=[sym],
+                    type="put",
+                    expiration_date_gte=str(target_exp_start),
+                    expiration_date_lte=str(target_exp_end),
+                    limit=5,
+                ))
+                contracts = getattr(contracts_resp, "option_contracts", None) or []
+                if not contracts:
+                    continue
+
+                # Pick contract closest to 45 DTE
+                today = date.today()
+                contracts = sorted(
+                    contracts,
+                    key=lambda c: abs((c.expiration_date - today).days - 45)
+                )
+                contract_sym = contracts[0].symbol
+                snap = opts_client.get_option_snapshot(
+                    OptionSnapshotRequest(symbol_or_symbols=contract_sym)
+                ).get(contract_sym)
+                if snap:
+                    greeks = getattr(snap, "greeks", None)
+                    iv = float(getattr(greeks, "implied_volatility", 0) or 0) if greeks else 0.0
+                    if iv > 0.01:
+                        result[sym] = round(iv, 4)
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"Wheel live IV batch error: {e}")
+    return result
+
+
 # ── Composite scorer ──────────────────────────────────────────────────────────
 
-def _score_candidates(candidates: list[dict], data_client) -> list[dict]:
+def _score_candidates(candidates: list[dict], data_client, opts_client=None, trading_client=None) -> list[dict]:
     """
     Score all candidates quantitatively, optimized for maximum premium income.
 
@@ -393,8 +446,17 @@ def _score_candidates(candidates: list[dict], data_client) -> list[dict]:
     # Batch fetch — one API call for all price metrics
     price_metrics = _get_price_metrics_batch(symbols, data_client)
 
-    # IV ranks from DB
+    # IV ranks from DB history
     iv_data = _get_iv_ranks(symbols)
+
+    # For symbols with no DB history yet, fetch live IV from options chain
+    missing_iv = [s for s in symbols if iv_data.get(s, {}).get("iv_current", 0.0) == 0.0]
+    if missing_iv and opts_client and trading_client:
+        logger.info(f"Wheel scorer: fetching live IV for {len(missing_iv)} symbols with no DB history")
+        live_ivs = _get_live_iv_batch(missing_iv, trading_client, opts_client)
+        for sym, iv_val in live_ivs.items():
+            iv_data[sym] = {"iv_rank": 50.0, "iv_current": iv_val}  # rank=50 (neutral) until history builds
+        logger.info(f"Wheel scorer: got live IV for {len(live_ivs)}/{len(missing_iv)} symbols")
 
     # Historical performance context
     perf = _get_symbol_performance_context()
@@ -777,9 +839,10 @@ def refresh_universe() -> list[dict]:
 
     # Step 3: Get candidate pool (dynamic — all Alpaca options-eligible stocks)
     try:
-        from services.wheel_engine import _get_wheel_data_client, _get_wheel_trading_client
+        from services.wheel_engine import _get_wheel_data_client, _get_wheel_trading_client, _get_wheel_options_client
         data_client    = _get_wheel_data_client()
         trading_client = _get_wheel_trading_client()
+        opts_client    = _get_wheel_options_client()
     except Exception as e:
         logger.error(f"Wheel universe: cannot get data client ({e}) — using safe fallback")
         _save_universe(SAFE_FALLBACK_UNIVERSE, source="emergency_fallback")
@@ -793,7 +856,7 @@ def refresh_universe() -> list[dict]:
 
     # Step 4: Score all candidates
     logger.info(f"Wheel universe: scoring {len(candidates)} candidates...")
-    scored = _score_candidates(candidates, data_client)
+    scored = _score_candidates(candidates, data_client, opts_client=opts_client)
 
     # Step 5: Apply adaptive filters
     qualified = [
