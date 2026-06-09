@@ -19,7 +19,6 @@ breaker stops all calls after the first 429, retrying the next calendar day.
 yfinance 0.2.54+ fixes the 429 bug that affected earlier versions.
 """
 import logging
-import time
 from datetime import date
 
 logger = logging.getLogger(__name__)
@@ -27,15 +26,11 @@ logger = logging.getLogger(__name__)
 # Silence yfinance's own noisy internal logger — it logs every 429 retry as ERROR
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-_CACHE_TTL = 86_400
-
 # Daily circuit breaker — stop calling Yahoo after first 429, reset next day
 _blocked_date: date | None = None
 # Safety: if any error repeats 10+ times consecutively, back off for the day
 _consecutive_errors: int = 0
 _CONSECUTIVE_ERROR_LIMIT = 10
-
-_cache: dict[str, tuple[dict, float]] = {}
 
 _ETF_SUFFIXES = ("ETF", "ETN", "FUND")
 _KNOWN_ETFS = {
@@ -73,15 +68,9 @@ def get_darkpool_signal(symbol: str) -> dict:
     """
     global _blocked_date, _consecutive_errors
 
-    cached = _cache.get(symbol)
-    if cached and time.time() < cached[1]:
-        return cached[0]
-
     # ETFs and index products have no institutional holder data
     if symbol in _KNOWN_ETFS or any(symbol.endswith(s) for s in _ETF_SUFFIXES):
-        result = _unavailable("ETF — no institutional holder data")
-        _cache[symbol] = (result, time.time() + _CACHE_TTL)
-        return result
+        return _unavailable("ETF — no institutional holder data")
 
     # Daily circuit breaker — Yahoo rate-limits Railway IP after a burst
     today = date.today()
@@ -107,7 +96,6 @@ def get_darkpool_signal(symbol: str) -> dict:
         logger.warning("yfinance institutional %s error: %s", symbol, e)
         result = _unavailable(str(e))
 
-    _cache[symbol] = (result, time.time() + _CACHE_TTL)
     _log_health(result)
     return result
 
