@@ -889,6 +889,7 @@ Select 8-10 stocks. Rules:
 - In BULL regime: weight yield/cycle and IV/HV ratio, accept higher drawdown
 - No more than 2 stocks with drawdown > 30%
 - Prefer stocks where IV/HV > 1.3x — we need edge, not just high IV
+- REJECT any stock with yield/cycle > 30% — this signals a binary event (FDA, earnings, trial readout) not a premium edge. These are traps: the stock gaps down 60-80% if the event fails.
 
 Return ONLY valid JSON array:
 [{{"symbol":"T","score":85,"reason":"Telecom defensive, IV/HV 1.8x means options 80% overpriced vs realized vol, drawdown only 12% makes assignment safe","iv_profile":"moderate-high"}}]"""
