@@ -645,13 +645,23 @@ def scan_opportunities() -> list[dict]:
             if stock_price <= 0:
                 continue
 
-            # ── Underlying trend filter — stock must be above 20-day MA ──────
-            # Selling puts on a downtrending stock = almost certain assignment.
+            # ── Underlying trend filter ───────────────────────────────────────
+            # Bull: must be above MA20 (strict)
+            # Neutral: allow up to 5% below MA20
+            # Bear: skip filter — in broad bear markets almost everything is
+            #       below MA20. IV/HV + drawdown cap already protect against
+            #       stocks in freefall.
             # MA20 = 0.0 means no data → treat as neutral, don't block.
             ma20 = ma20_map.get(symbol, 0.0)
-            if ma20 > 0 and stock_price < ma20:
-                logger.debug(f"Wheel skip {symbol}: price ${stock_price:.2f} < MA20 ${ma20:.2f} (downtrend)")
-                continue
+            if ma20 > 0:
+                ma20_threshold = {
+                    "bull":    1.00,   # must be at or above MA20
+                    "neutral": 0.95,   # allow up to 5% below MA20
+                    "bear":    0.0,    # no MA20 filter in bear regime
+                }.get(regime, 0.95)
+                if ma20_threshold > 0 and stock_price < ma20 * ma20_threshold:
+                    logger.debug(f"Wheel skip {symbol}: price ${stock_price:.2f} < MA20×{ma20_threshold} ${ma20 * ma20_threshold:.2f} (regime={regime})")
+                    continue
 
             from alpaca.trading.requests import GetOptionContractsRequest
             from alpaca.trading.enums import ContractType
