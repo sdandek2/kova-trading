@@ -858,11 +858,12 @@ def execute_put(opportunity: dict, cycle_contracts: Optional[int] = None) -> Opt
         collateral_needed = opportunity["strike"] * 100 * qty
         try:
             account = _get_wheel_trading_client().get_account()
-            buying_power = float(account.buying_power)
-            if collateral_needed > buying_power * 0.90:
+            # Use cash (not buying_power — paper accounts return 4× cash as buying_power)
+            available_cash = float(account.cash)
+            if collateral_needed > available_cash * 0.90:
                 logger.warning(
                     f"Wheel skip {opportunity['symbol']}: collateral ${collateral_needed:,.0f} "
-                    f"> 90% of buying power ${buying_power:,.0f}"
+                    f"> 90% of cash ${available_cash:,.0f}"
                 )
                 return None
         except Exception as bp_err:

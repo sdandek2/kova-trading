@@ -42,9 +42,7 @@ logger = logging.getLogger(__name__)
 MIN_PRICE      = float(os.environ.get("WHEEL_MIN_PRICE",    "5.0"))
 MAX_PRICE      = float(os.environ.get("WHEEL_MAX_PRICE",    "300.0"))
 MIN_VOLUME     = int(os.environ.get("WHEEL_MIN_VOLUME",     "500000"))
-ACCOUNT_SIZE   = float(os.environ.get("WHEEL_ACCOUNT_SIZE", "25000"))
-# Max collateral per single contract = 25% of account (scales as account grows)
-MAX_CONTRACT_COLLATERAL = ACCOUNT_SIZE * 0.25  # e.g. $6,250 on $25k → max price $62.50
+ACCOUNT_SIZE   = float(os.environ.get("WHEEL_ACCOUNT_SIZE", "25000"))  # fallback only
 
 # ── Adaptive threshold defaults (overridden by DB cache if available) ─────────
 _DEFAULT_IV_HV_MIN     = 1.0   # options must be at least as expensive as realized vol
@@ -690,6 +688,15 @@ def _get_candidate_pool(data_client, trading_client=None, limit: int = 150) -> l
     try:
         from alpaca.data.requests import StockSnapshotRequest
 
+        # Max collateral per contract = 25% of portfolio value (not buying_power — that's 4x on paper)
+        try:
+            acct = trading_client.get_account() if trading_client else None
+            portfolio_value = float(getattr(acct, "portfolio_value", None) or ACCOUNT_SIZE)
+        except Exception:
+            portfolio_value = ACCOUNT_SIZE
+        max_price_from_pv = (portfolio_value * 0.25) / 100
+        logger.info(f"Wheel portfolio value: ${portfolio_value:,.0f} → max price per contract ${max_price_from_pv:.2f}")
+
         # Get dynamic symbol list (Alpaca options-eligible + historical winners + static seed)
         all_symbols = _get_dynamic_symbols(trading_client) if trading_client else _STATIC_SEED
         all_symbols = [s for s in all_symbols if s not in _WHEEL_EXCLUSIONS]
@@ -711,8 +718,8 @@ def _get_candidate_pool(data_client, trading_client=None, limit: int = 150) -> l
                         price = float(snap.latest_trade.price) if snap.latest_trade else 0
                         if not (MIN_PRICE <= price <= MAX_PRICE):
                             continue
-                        # Skip if 1 contract would consume >25% of account
-                        if price * 100 > MAX_CONTRACT_COLLATERAL:
+                        # Skip if 1 contract would consume >25% of portfolio value
+                        if price > max_price_from_pv:
                             continue
                         vol = float(snap.daily_bar.volume) if snap.daily_bar else 0
                         if vol < MIN_VOLUME:
