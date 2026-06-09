@@ -88,26 +88,8 @@ _VIX_SIZING = {
     "normal":       {"contracts": 2, "max_positions": 5},
     "low_fear":     {"contracts": 2, "max_positions": 5},
 }
-SECTOR_MAP = {
-    "SOFI": "fintech",   "HOOD": "fintech",   "PYPL": "fintech",
-    "AFRM": "fintech",   "DAVE": "fintech",   "BILL": "fintech",
-    "COIN": "crypto",    "MSTR": "crypto",
-    "BAC":  "banks",     "C":    "banks",      "WFC":  "banks",
-    "JPM":  "banks",     "GS":   "banks",      "MS":   "banks",
-    "NVDA": "semis",     "AMD":  "semis",      "MU":   "semis",
-    "INTC": "semis",     "QCOM": "semis",      "AVGO": "semis",
-    "SMCI": "tech",      "CRM":  "tech",       "SNOW": "tech",
-    "SNAP": "social",    "PINS": "social",     "RBLX": "social",
-    "RIVN": "ev",        "LCID": "ev",         "NIO":  "ev",
-    "XPEV": "ev",        "LI":   "ev",
-    "F":    "auto",      "GM":   "auto",
-    "T":    "telecom",   "VZ":   "telecom",
-    "WBA":  "healthcare","CVS":  "healthcare", "TDOC": "healthcare",
-    "FCX":  "materials", "AA":   "materials",  "CLF":  "materials",
-    "UBER": "gig",       "LYFT": "gig",        "DASH": "gig",
-    "PENN": "gaming",    "DKNG": "gaming",     "MGM":  "gaming",
-    "PLTR": "data",      "TSLA": "ev",
-}
+# Single source of truth — import from wheel_universe to avoid stale duplicates
+from services.wheel_universe import _SECTOR_MAP as SECTOR_MAP
 
 # Cache key for wheel profit reserve (separate from Kova's reserve)
 _WHEEL_RESERVE_KEY = "wheel:reserved_cash"
