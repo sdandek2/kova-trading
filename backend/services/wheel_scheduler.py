@@ -67,7 +67,19 @@ def _scheduler_loop():
 
                 if event == "universe_refresh":
                     try:
-                        from services.wheel_universe import refresh_universe
+                        # Step 1: Sprint report — log last week's performance
+                        from services.wheel_universe import get_wheel_sprint_report, refresh_universe
+                        from services.db import cache_set
+                        report = get_wheel_sprint_report()
+                        cache_set("wheel:last_sprint_report", report, 8 * 24 * 3600)
+                        wr   = report.get("win_rate_30d", {}).get("win_rate_pct")
+                        fr   = report.get("fill_rate_14d", {}).get("fill_rate_pct")
+                        prem = report.get("summary", {}).get("collected_premium", 0)
+                        logger.info(
+                            f"Wheel sprint report: win_rate={wr}% | "
+                            f"fill_rate={fr}% | premium_collected=${prem:.2f}"
+                        )
+                        # Step 2: Refresh universe (auto-adjusts thresholds inside)
                         result = refresh_universe()
                         logger.info(f"Wheel universe refreshed: {len(result)} stocks selected")
                     except Exception as e:

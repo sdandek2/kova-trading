@@ -423,13 +423,22 @@ def wheel_config():
 @router.get("/sprint-report")
 def wheel_sprint_report():
     """
-    Weekly performance report for Sunday sprint review.
-    Shows win rate, fill rate, per-symbol P&L, adaptive thresholds.
-    Run this every Sunday before universe refresh to see what's working.
+    Weekly performance report — auto-generated every Sunday before universe refresh.
+    Also available on-demand anytime. Cached for 8 days.
+    Shows: win rate, fill rate, per-symbol P&L, adaptive thresholds.
     """
     try:
+        from services.db import cache_get
         from services.wheel_universe import get_wheel_sprint_report
-        return get_wheel_sprint_report()
+        # Return cached version if available (generated automatically Sunday 8 PM)
+        cached = cache_get("wheel:last_sprint_report")
+        if cached and isinstance(cached, dict) and "summary" in cached:
+            cached["_source"] = "auto_sunday"
+            return cached
+        # Generate fresh if not cached
+        report = get_wheel_sprint_report()
+        report["_source"] = "on_demand"
+        return report
     except Exception as e:
         logger.error(f"GET /wheel/sprint-report: {e}")
         raise HTTPException(status_code=500, detail=str(e))
