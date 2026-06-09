@@ -1592,7 +1592,7 @@ def _should_scan_today() -> bool:
 
     # Normal schedule: Mon (0) and Wed (2)
     weekday = datetime.now(timezone.utc).weekday()
-    return weekday in (0, 2)
+    return weekday in (0, 1, 2, 3, 4)  # scan every market day
 
 
 def _record_scan_date():

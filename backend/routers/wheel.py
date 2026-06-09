@@ -418,3 +418,18 @@ def wheel_config():
     except Exception as e:
         logger.error(f"GET /wheel/config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sprint-report")
+def wheel_sprint_report():
+    """
+    Weekly performance report for Sunday sprint review.
+    Shows win rate, fill rate, per-symbol P&L, adaptive thresholds.
+    Run this every Sunday before universe refresh to see what's working.
+    """
+    try:
+        from services.wheel_universe import get_wheel_sprint_report
+        return get_wheel_sprint_report()
+    except Exception as e:
+        logger.error(f"GET /wheel/sprint-report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
