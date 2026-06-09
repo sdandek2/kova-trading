@@ -92,41 +92,15 @@ _STATIC_SEED = [
 
 def _get_dynamic_symbols(trading_client) -> list[str]:
     """
-    Pull all options-eligible US equity symbols from Alpaca dynamically.
-    Merges with historical winners from DB so proven stocks always stay eligible.
-
-    Returns a deduplicated list of symbols ready for price/volume filtering.
-    Falls back to _STATIC_SEED if Alpaca fetch fails.
+    Build symbol list from static seed + historical winners.
+    Note: Alpaca's Asset model does not expose options_enabled as a queryable field,
+    so we rely on the curated static seed + DB winners as the primary source.
+    Options eligibility is verified at scoring time via GetOptionContractsRequest.
     """
-    symbols = set()
+    symbols = set(_STATIC_SEED)
 
-    # Source 1: Alpaca options-eligible assets
-    try:
-        from alpaca.trading.requests import GetAssetsRequest
-        from alpaca.trading.enums import AssetClass, AssetStatus
-        assets = trading_client.get_all_assets(GetAssetsRequest(
-            asset_class=AssetClass.US_EQUITY,
-            status=AssetStatus.ACTIVE,
-        ))
-        for a in assets:
-            # Check options_enabled — may be a boolean field or in attributes list
-            opts_bool = getattr(a, "options_enabled", None)
-            attrs     = getattr(a, "attributes", None) or []
-            has_options = (
-                bool(opts_bool)
-                if opts_bool is not None
-                else ("options_enabled" in attrs if isinstance(attrs, list) else "options_enabled" in str(attrs))
-            )
-            if (has_options
-                    and getattr(a, "tradable", False)
-                    and a.symbol not in _WHEEL_EXCLUSIONS
-                    and "/" not in a.symbol
-                    and "." not in a.symbol):
-                symbols.add(a.symbol)
-        logger.info(f"Wheel dynamic screener: {len(symbols)} options-eligible assets from Alpaca")
-    except Exception as e:
-        logger.warning(f"Wheel dynamic screener: Alpaca fetch failed ({e}) — using static seed")
-        return _STATIC_SEED
+    # Always add historical winners from DB
+    logger.info(f"Wheel dynamic screener: using static seed ({len(symbols)} symbols) + DB winners")
 
     # Source 2: Historical winners always stay eligible regardless of other filters
     # If we made money on a stock before, never exclude it from consideration.
@@ -275,17 +249,22 @@ def _get_price_metrics_batch(symbols: list[str], data_client) -> dict:
         end   = datetime.now(timezone.utc)
         start = end - timedelta(days=190)  # 6 months + buffer
 
+        from alpaca.data.enums import DataFeed
         bars_resp = data_client.get_stock_bars(StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
             start=start,
             end=end,
+            feed=DataFeed.IEX,
         ))
+
+        # BarSet uses .data dict, not .get()
+        bar_data = getattr(bars_resp, "data", {}) or {}
 
         empty_count = 0
         for sym in symbols:
             try:
-                bars = bars_resp.get(sym, [])
+                bars = bar_data.get(sym, [])
                 if not bars or len(bars) < 5:
                     empty_count += 1
                     result[sym] = {"hv30": 0.0, "max_drawdown": 100.0}
@@ -373,11 +352,12 @@ def _get_iv_ranks(symbols: list[str]) -> dict:
     return result
 
 
-def _get_live_iv_batch(symbols: list[str], trading_client, opts_client) -> dict:
+def _get_live_iv_batch(symbols: list[str], trading_client, opts_client, data_client=None) -> dict:
     """
-    Fetch live ATM IV for symbols missing DB history.
-    trading_client: used to list option contracts (GetOptionContractsRequest)
-    opts_client:    used to fetch snapshot greeks (OptionSnapshotRequest)
+    Fetch live IV via ATM put bid/ask approximation.
+    Greeks are not available on paper accounts, so we back-compute IV from:
+      iv ≈ mid_price / (stock_price × sqrt(dte/365) × 0.4)
+    This is the ATM straddle approximation (Brenner-Subrahmanyam), accurate for ATM puts.
     Returns {symbol: float} — raw IV (0-1 scale).
     """
     result = {}
@@ -386,15 +366,32 @@ def _get_live_iv_batch(symbols: list[str], trading_client, opts_client) -> dict:
     try:
         from alpaca.trading.requests import GetOptionContractsRequest
         from alpaca.trading.enums import ContractType
-        from alpaca.data.requests import OptionSnapshotRequest
+        from alpaca.data.requests import OptionSnapshotRequest, StockLatestQuoteRequest
         from datetime import date, timedelta
 
         today = date.today()
         target_exp_start = today + timedelta(days=30)
         target_exp_end   = today + timedelta(days=60)
 
+        # Batch fetch current stock prices
+        quotes = {}
+        if data_client:
+            try:
+                quotes = data_client.get_stock_latest_quote(
+                    StockLatestQuoteRequest(symbol_or_symbols=symbols)
+                ) or {}
+            except Exception:
+                pass
+
         for sym in symbols:
             try:
+                # Get stock price
+                q = quotes.get(sym) if quotes else None
+                stock_price = float((getattr(q, "ask_price", 0) or getattr(q, "bid_price", 0)) or 0) if q else 0
+                if stock_price <= 0:
+                    continue
+
+                # Get ATM put contracts (closest to stock_price for best IV approximation)
                 contracts_resp = trading_client.get_option_contracts(GetOptionContractsRequest(
                     underlying_symbols=[sym],
                     type=ContractType.PUT,
@@ -405,20 +402,34 @@ def _get_live_iv_batch(symbols: list[str], trading_client, opts_client) -> dict:
                 if not contracts:
                     continue
 
-                # Pick contract closest to 45 DTE
+                # Sort: prefer 45 DTE, then closest strike to ATM
                 contracts = sorted(
                     contracts,
-                    key=lambda c: abs((c.expiration_date - today).days - 45)
+                    key=lambda c: (abs((c.expiration_date - today).days - 45),
+                                   abs(float(c.strike_price) - stock_price))
                 )
-                contract_sym = contracts[0].symbol
+                best = contracts[0]
+                dte = (best.expiration_date - today).days
+                if dte <= 0:
+                    continue
+
+                # Get bid/ask for this contract
                 snap = opts_client.get_option_snapshot(
-                    OptionSnapshotRequest(symbol_or_symbols=contract_sym)
-                ).get(contract_sym)
-                if snap:
-                    greeks = getattr(snap, "greeks", None)
-                    iv = float(getattr(greeks, "implied_volatility", 0) or 0) if greeks else 0.0
-                    if iv > 0.01:
-                        result[sym] = round(iv, 4)
+                    OptionSnapshotRequest(symbol_or_symbols=best.symbol)
+                ).get(best.symbol)
+                if not snap or not snap.latest_quote:
+                    continue
+
+                bid = float(snap.latest_quote.bid_price or 0)
+                ask = float(snap.latest_quote.ask_price or 0)
+                mid = (bid + ask) / 2
+                if mid <= 0:
+                    continue
+
+                # Back-compute IV: ATM put ≈ stock_price × iv × sqrt(dte/365) × 0.4
+                iv = mid / (stock_price * math.sqrt(dte / 365) * 0.4)
+                if 0.01 < iv < 5.0:  # sanity check (1% to 500% IV)
+                    result[sym] = round(iv, 4)
             except Exception:
                 continue
     except Exception as e:
@@ -465,7 +476,7 @@ def _score_candidates(candidates: list[dict], data_client, opts_client=None, tra
     missing_iv = [s for s in symbols if iv_data.get(s, {}).get("iv_current", 0.0) == 0.0]
     if missing_iv and opts_client and trading_client:
         logger.info(f"Wheel scorer: fetching live IV for {len(missing_iv)} symbols with no DB history")
-        live_ivs = _get_live_iv_batch(missing_iv, trading_client, opts_client)
+        live_ivs = _get_live_iv_batch(missing_iv, trading_client, opts_client, data_client=data_client)
         for sym, iv_val in live_ivs.items():
             iv_data[sym] = {"iv_rank": 50.0, "iv_current": iv_val}  # rank=50 (neutral) until history builds
         logger.info(f"Wheel scorer: got live IV for {len(live_ivs)}/{len(missing_iv)} symbols")
