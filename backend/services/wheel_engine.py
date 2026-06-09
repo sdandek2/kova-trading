@@ -858,12 +858,12 @@ def execute_put(opportunity: dict, cycle_contracts: Optional[int] = None) -> Opt
         collateral_needed = opportunity["strike"] * 100 * qty
         try:
             account = _get_wheel_trading_client().get_account()
-            # Use cash (not buying_power — paper accounts return 4× cash as buying_power)
-            available_cash = float(account.cash)
-            if collateral_needed > available_cash * 0.90:
+            # options_buying_power is the correct field for options collateral checks
+            options_bp = float(getattr(account, "options_buying_power", None) or account.cash)
+            if collateral_needed > options_bp * 0.90:
                 logger.warning(
                     f"Wheel skip {opportunity['symbol']}: collateral ${collateral_needed:,.0f} "
-                    f"> 90% of cash ${available_cash:,.0f}"
+                    f"> 90% of options buying power ${options_bp:,.0f}"
                 )
                 return None
         except Exception as bp_err:
@@ -1586,7 +1586,8 @@ def scan_bear_spreads() -> list:
         logger.debug(f"Bear spreads: regime={regime} — skipping (not bearish)")
         return []
 
-    universe = _get_active_universe_symbols()
+    from services.wheel_universe import get_active_universe
+    universe = [s["symbol"] for s in get_active_universe()]
     active_symbols = {p["symbol"] for p in get_active_wheel_positions()}
     today = date.today()
     expiry_min = today + timedelta(days=MIN_DTE)

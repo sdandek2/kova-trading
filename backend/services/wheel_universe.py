@@ -688,14 +688,15 @@ def _get_candidate_pool(data_client, trading_client=None, limit: int = 150) -> l
     try:
         from alpaca.data.requests import StockSnapshotRequest
 
-        # Max collateral per contract = 25% of portfolio value (not buying_power — that's 4x on paper)
+        # Max collateral per contract = 25% of options_buying_power (correct field for options)
         try:
             acct = trading_client.get_account() if trading_client else None
-            portfolio_value = float(getattr(acct, "portfolio_value", None) or ACCOUNT_SIZE)
+            options_bp = float(getattr(acct, "options_buying_power", None) or
+                               getattr(acct, "portfolio_value", None) or ACCOUNT_SIZE)
         except Exception:
-            portfolio_value = ACCOUNT_SIZE
-        max_price_from_pv = (portfolio_value * 0.25) / 100
-        logger.info(f"Wheel portfolio value: ${portfolio_value:,.0f} → max price per contract ${max_price_from_pv:.2f}")
+            options_bp = ACCOUNT_SIZE
+        max_price_from_pv = (options_bp * 0.25) / 100
+        logger.info(f"Wheel options buying power: ${options_bp:,.0f} → max price per contract ${max_price_from_pv:.2f}")
 
         # Get dynamic symbol list (Alpaca options-eligible + historical winners + static seed)
         all_symbols = _get_dynamic_symbols(trading_client) if trading_client else _STATIC_SEED
