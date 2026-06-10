@@ -206,3 +206,63 @@ def ask_ai(prompt: str, max_tokens: int = 600) -> str:
         logger.warning(f"{fallback} fallback also failed ({exc}).")
 
     raise RuntimeError(f"Both {primary} and {fallback} failed.")
+
+
+# ── Tier 3: Pure-AI trader — Claude with server-side web search ─────────────
+# Used ONLY by the pure-AI experiment (services/pureai_engine.py).
+# The model runs its own web searches mid-reasoning; we never curate context.
+
+def ask_ai_with_search(prompt: str, max_tokens: int = 8000,
+                       max_searches: int = 8) -> tuple[str, list[str]]:
+    """
+    Single-turn call where Claude can search the web before answering.
+    Returns (response_text, search_queries_used).
+
+    Notes:
+      - web_search_20260209 is a server-side tool: Anthropic executes the
+        searches; we just declare the tool and handle pause_turn continuations.
+      - No structured-output mode: search citations are incompatible with it,
+        so the caller parses JSON from text via parse_ai_json (json-repair).
+      - No sampling params: removed on Opus 4.7+ (400 if sent).
+    """
+    from config import settings as _settings
+
+    model = getattr(_settings, "pureai_model", "claude-opus-4-8")
+    tools = [{
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": max_searches,
+    }]
+    messages = [{"role": "user", "content": prompt}]
+    searches: list[str] = []
+    response = None
+
+    # Server-side tool loop can pause at its iteration limit (stop_reason
+    # "pause_turn") — re-send to let it resume. Cap continuations at 5.
+    for _ in range(5):
+        response = _anthropic.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            thinking={"type": "adaptive"},
+            tools=tools,
+            messages=messages,
+        )
+        for block in response.content:
+            if getattr(block, "type", "") == "server_tool_use" and \
+               getattr(block, "name", "") == "web_search":
+                q = (getattr(block, "input", None) or {}).get("query")
+                if q:
+                    searches.append(q)
+        if response.stop_reason != "pause_turn":
+            break
+        messages = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": response.content},
+        ]
+
+    text = "".join(
+        block.text for block in (response.content if response else [])
+        if getattr(block, "type", "") == "text"
+    ).strip()
+    logger.info(f"ask_ai_with_search: {model}, {len(searches)} searches, stop={getattr(response, 'stop_reason', '?')}")
+    return text, searches

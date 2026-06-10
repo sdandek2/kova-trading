@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     #   live:  https://api.alpaca.markets
     alpaca_wheel_base_url: str = "https://paper-api.alpaca.markets"
 
+    # Pure-AI experiment — third Alpaca paper account, fully AI-driven trading.
+    # No signal pipeline: the AI researches via web search and decides alone.
+    # 30-day ablation test vs Kova (pipeline+AI) — see project phase plan.
+    alpaca_pureai_key: str = ""
+    alpaca_pureai_secret: str = ""
+    alpaca_pureai_base_url: str = "https://paper-api.alpaca.markets"
+    pureai_model: str = "claude-opus-4-8"   # the AI IS the system — best brain by default
+
     class Config:
         env_file = ".env"
 
