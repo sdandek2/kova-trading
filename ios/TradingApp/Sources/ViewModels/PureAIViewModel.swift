@@ -103,7 +103,10 @@ final class PureAIViewModel: ObservableObject {
     // ── Display helpers ───────────────────────────────────────────────────────
     var equityDisplay: String {
         guard let eq = status?.equity, eq > 0 else { return "--" }
-        return String(format: "$%,.0f", eq)
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        fmt.maximumFractionDigits = 0
+        return "$" + (fmt.string(from: NSNumber(value: eq)) ?? String(Int(eq)))
     }
 
     var realizedPlDisplay: String {
