@@ -370,15 +370,26 @@ def run_pureai_cycle(force: bool = False) -> dict:
                     executed.append({"action": "buy", "symbol": sym,
                                      "status": "rejected", "why": "position cap"})
                     continue
-            qty = round(dollars / px, 4)
+            # Cash guard — don't attempt if clearly insufficient
+            if dollars > state["cash"] * 1.01:
+                dollars = min(dollars, state["cash"] * 0.99)
+                if dollars < 100:
+                    executed.append({"action": "buy", "symbol": sym,
+                                     "status": "rejected", "why": "insufficient cash"})
+                    continue
+            dollars = round(dollars, 2)
+            est_qty = round(dollars / px, 4) if px > 0 else 0
             try:
+                # Use notional (dollar-based) orders — avoids fractional-share
+                # account restrictions and works correctly after market close
+                # (fills at next open). GTC so after-hours manual runs still execute.
                 order = client.submit_order(MarketOrderRequest(
-                    symbol=sym, qty=qty, side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY))
+                    symbol=sym, notional=dollars, side=OrderSide.BUY,
+                    time_in_force=TimeInForce.GTC))
                 if not is_add:
-                    _log_position_open(sym, qty, px, b.get("thesis", ""))
+                    _log_position_open(sym, est_qty, px, b.get("thesis", ""))
                 executed.append({"action": "add" if is_add else "buy",
-                                 "symbol": sym, "qty": qty, "dollars": dollars,
+                                 "symbol": sym, "qty": est_qty, "dollars": dollars,
                                  "status": "submitted", "order_id": str(order.id),
                                  "thesis": b.get("thesis", "")})
             except Exception as e:
