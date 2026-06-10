@@ -63,7 +63,7 @@ final class PureAIViewModel: ObservableObject {
         isRunning = true
         defer { isRunning = false }
         do {
-            cycleResult = try await api.fetch("/pureai/run", method: "POST", timeout: 120)
+            cycleResult = try await api.fetch("/pureai/run", method: "POST", timeout: 300)
             showCycleSheet = true
             await loadStatus()
             await loadDecisions()

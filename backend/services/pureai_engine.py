@@ -380,12 +380,11 @@ def run_pureai_cycle(force: bool = False) -> dict:
             dollars = round(dollars, 2)
             est_qty = round(dollars / px, 4) if px > 0 else 0
             try:
-                # Use notional (dollar-based) orders — avoids fractional-share
-                # account restrictions and works correctly after market close
-                # (fills at next open). GTC so after-hours manual runs still execute.
+                # Notional (dollar-based) orders avoid fractional-share account
+                # restrictions. Alpaca requires DAY for all notional orders.
                 order = client.submit_order(MarketOrderRequest(
                     symbol=sym, notional=dollars, side=OrderSide.BUY,
-                    time_in_force=TimeInForce.GTC))
+                    time_in_force=TimeInForce.DAY))
                 if not is_add:
                     _log_position_open(sym, est_qty, px, b.get("thesis", ""))
                 executed.append({"action": "add" if is_add else "buy",
