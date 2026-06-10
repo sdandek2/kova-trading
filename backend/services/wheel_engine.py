@@ -32,6 +32,7 @@ Take profit (early close):
 """
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -1174,13 +1175,16 @@ def check_assignments():
         symbol = wp["symbol"]
         logger.info(f"Wheel ASSIGNED: {symbol} @ ${cost:.2f}")
 
+        # Put premium was already recorded by reconcile_pending_orders at fill
+        # time — adding it again here double-counts income. Only backfill if
+        # the fill reconciliation never ran (prev == 0).
         prev     = float(wp.get("total_premium_collected") or 0)
         put_prem = float(wp.get("put_premium") or 0)
         _update_wheel_position(
             wp["id"],
             phase="assigned",
             cost_basis=cost,
-            total_premium_collected=prev + put_prem * 100,
+            total_premium_collected=prev if prev > 0 else put_prem * 100,
         )
         wp["cost_basis"] = cost
 
@@ -1237,6 +1241,19 @@ def check_assignments():
             execute_covered_call(wp)
 
 
+def _expiry_from_occ(contract: Optional[str]) -> Optional[date]:
+    """Parse expiry from an OCC option symbol, e.g. WULF260717P00024000 → 2026-07-17."""
+    if not contract:
+        return None
+    try:
+        m = re.search(r"(\d{6})[CP]\d{8}$", contract)
+        if m:
+            return datetime.strptime(m.group(1), "%y%m%d").date()
+    except Exception:
+        pass
+    return None
+
+
 def check_expirations():
     """Mark expired puts/calls as completed. Log P&L. Add to profit reserve."""
     today = date.today()
@@ -1245,11 +1262,20 @@ def check_expirations():
 
     for pos in active:
         try:
-            if pos["phase"] == "put_open" and pos.get("put_expiry"):
-                expiry = pos["put_expiry"] if isinstance(pos["put_expiry"], date) \
-                         else date.fromisoformat(str(pos["put_expiry"]))
+            if pos["phase"] == "put_open":
+                # put_expiry can be null in the DB — fall back to the expiry
+                # encoded in the OCC contract symbol (e.g. WULF260717P00024000),
+                # otherwise the position can never expire and stays open forever.
+                expiry = pos.get("put_expiry") or _expiry_from_occ(pos.get("put_contract"))
+                if not expiry:
+                    continue
+                if not isinstance(expiry, date):
+                    expiry = date.fromisoformat(str(expiry))
                 if expiry < today:
-                    prem = float(pos.get("put_premium") or 0) * 100
+                    # Use the qty-aware total recorded at fill; per-contract
+                    # put_premium * 100 is only a single-contract fallback.
+                    prem = float(pos.get("total_premium_collected") or 0) \
+                           or float(pos.get("put_premium") or 0) * 100
                     logger.info(f"Wheel PUT expired worthless: {pos['symbol']} +${prem:.2f}")
                     _add_to_profit_reserve_if_configured(prem)
                     _update_wheel_position(
@@ -1998,7 +2024,7 @@ def _reconcile_pending_orders():
             return
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, symbol, put_order_id, put_strike
+                SELECT id, symbol, put_order_id, put_strike, put_premium
                 FROM wheel_positions
                 WHERE status = 'order_pending' AND put_order_id IS NOT NULL
             """)
@@ -2018,7 +2044,9 @@ def _reconcile_pending_orders():
             status = str(order.status).lower()
 
             if "filled" in status or status == "partially_filled":
-                fill_price = float(order.filled_avg_price or pos.get("put_strike", 0))
+                # Fall back to the limit premium, never the strike — strike is the
+                # collateral price, not the premium, and inflates income 10-40x.
+                fill_price = float(order.filled_avg_price or pos.get("put_premium") or 0)
                 filled_qty = int(float(order.filled_qty or 0))
                 premium_collected = fill_price * 100 * filled_qty
                 _update_wheel_position(

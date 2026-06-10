@@ -634,7 +634,8 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                        entry_price: float = None, quantity: int = None,
-                       entry_time: datetime = None, side: str = "long") -> None:
+                       entry_time: datetime = None, side: str = "long",
+                       market_regime: str = None) -> None:
     """
     Update the most recent open position_log row for *symbol* with exit data.
     Also handles the case where no open row exists (logs a standalone closed row).
@@ -690,10 +691,11 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                         realized_pl       = %s,
                         realized_pl_pct   = %s,
                         hold_duration_mins = %s,
-                        exit_reason       = %s
+                        exit_reason       = %s,
+                        market_regime     = COALESCE(market_regime, %s)
                     WHERE id = %s
                 """, (now, exit_price, realized_pl, realized_pl_pct,
-                      hold_mins, exit_reason, pos_id))
+                      hold_mins, exit_reason, market_regime, pos_id))
             else:
                 # No open row — insert a closed record directly
                 ep = entry_price or 0

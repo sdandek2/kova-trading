@@ -678,6 +678,7 @@ async def run_trading_cycle():
                 # Position was closed — determine exit price from Alpaca orders
                 exit_price = prev.get("avg_entry_price", 0)  # fallback
                 is_prev_short = prev.get("side") == "short"
+                inferred_reason = None
                 try:
                     recent_orders = alpaca_service.get_orders(limit=20)
                     # Longs close via a sell order; shorts close via a buy-to-cover order
@@ -685,17 +686,31 @@ async def run_trading_cycle():
                     for o in recent_orders:
                         if o.symbol == sym and o.side == close_side and o.filled_avg_price:
                             exit_price = float(o.filled_avg_price)
+                            # Broker-side fills bypass engine exit paths (and restarts
+                            # wipe in-memory exit_reason) — infer from the order type
+                            # so attribution queries don't see 'unknown'.
+                            otype = str(getattr(o, "order_type", None)
+                                        or getattr(o, "type", "")).lower()
+                            if "stop" in otype:
+                                inferred_reason = "stop_loss_order"
+                            elif "limit" in otype:
+                                inferred_reason = "take_profit_order"
+                            elif "market" in otype:
+                                inferred_reason = "manual_or_engine_market"
                             break
                 except Exception:
                     pass
+                _known_reason = prev.get("exit_reason", "unknown")
                 log_position_close(
                     symbol=sym,
                     exit_price=exit_price,
-                    exit_reason=prev.get("exit_reason", "unknown"),
+                    exit_reason=_known_reason if _known_reason != "unknown"
+                                else (inferred_reason or "unknown"),
                     entry_price=prev.get("avg_entry_price"),
                     quantity=prev.get("qty"),
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
+                    market_regime=macro.get("market_regime") if macro else None,
                 )
                 # Log signal performance for weekly weight adjustment
                 try:
@@ -1614,6 +1629,21 @@ async def run_trading_cycle():
                 timestamp=_last_analysis_at,
             )
             cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
+            # ── Risk/reward floor: take_profit ≥ 1.5× stop_loss ─────────────
+            # Live data (2026-06: avg loss -$59 vs avg win +$35) showed AI-chosen
+            # exits needed a ~63% win rate to break even. Raise the target only —
+            # never tighten the stop — so entries and stop-outs are unchanged.
+            if decision.action in ("buy", "short"):
+                _sl = decision.stop_loss_pct or _risk_settings["stop_loss_pct"]
+                _tp = decision.take_profit_pct or _risk_settings["take_profit_pct"]
+                _min_tp = round(_sl * 1.5, 4)
+                if _tp < _min_tp:
+                    logger.info(
+                        f"R/R floor: {decision.symbol} TP raised {_tp:.3f} → {_min_tp:.3f} "
+                        f"(stop {_sl:.3f}, ratio was {_tp/_sl:.2f}:1)"
+                    )
+                    decision.take_profit_pct = _min_tp
+                    decision.stop_loss_pct = _sl
             _rsn_up = (decision.reasoning or "").upper()
             _conf_val = "high" if "[HIGH]" in _rsn_up else ("low" if "[LOW]" in _rsn_up else "medium")
             log_trade_decision({
@@ -2576,13 +2606,17 @@ async def _save_eod_snapshot():
         # Get SPY close price
         spy_close = None
         try:
+            from alpaca.data.enums import DataFeed
             data_client = StockHistoricalDataClient(_settings.alpaca_api_key, _settings.alpaca_secret_key)
             end = datetime.now(timezone.utc)
-            start = end - timedelta(days=2)
+            # 5-day window so weekends/holidays still yield a prior close
+            start = end - timedelta(days=5)
             bars = data_client.get_stock_bars(StockBarsRequest(
-                symbol_or_symbols=["SPY"], timeframe=TimeFrame.Day, start=start, end=end
+                symbol_or_symbols=["SPY"], timeframe=TimeFrame.Day, start=start, end=end,
+                feed=DataFeed.IEX,  # SIP requires a paid data plan
             ))
-            spy_bars = bars.get("SPY", [])
+            # BarSet has no .get() — access the underlying dict
+            spy_bars = bars.data.get("SPY", []) if hasattr(bars, "data") else []
             if spy_bars:
                 spy_close = float(spy_bars[-1].close)
         except Exception as e:

@@ -289,7 +289,7 @@ def _score_symbol(
 
     if is_inverse:
         signal_type = "inverse_etf"
-        suggested_action = "buy" if regime in ("bear", "chop") else "skip"
+        suggested_action = "buy" if regime == "bear" else "skip"
     elif is_leveraged:
         signal_type = "momentum"
         suggested_action = "buy" if (regime_result and regime_result.allows_leveraged_etfs) else "skip"
@@ -334,6 +334,8 @@ def _score_symbol(
         regime_aligned = True
     elif regime == "bear" and suggested_action == "buy" and not is_inverse:
         breakdown["regime"] = -15  # buying longs in bear market
+    elif regime == "chop" and is_inverse:
+        breakdown["regime"] = -15  # inverse ETFs decay in sideways markets
     elif regime == "chop" and signal_type == "oversold":
         breakdown["regime"] = 10   # mean reversion works in chop
         regime_aligned = True

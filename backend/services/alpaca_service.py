@@ -656,6 +656,8 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
 
             symbol_bars = bars_dict.get(symbol, [])
             closing_prices = [float(b.close) for b in symbol_bars]
+            high_prices = [float(b.high) for b in symbol_bars]
+            low_prices = [float(b.low) for b in symbol_bars]
             five_day_change = None
             if closing_prices and len(closing_prices) >= 6:
                 oldest_5d = closing_prices[-6]
@@ -691,6 +693,8 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
                 "current_price": current_price,
                 "five_day_change_pct": five_day_change,
                 "closing_prices": closing_prices,  # included for RSI/MACD computation in Step 1
+                "high_prices": high_prices,
+                "low_prices": low_prices,
                 "volume": volume,
                 "avg_volume": avg_volume,
                 "relative_volume": relative_volume,
