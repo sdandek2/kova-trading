@@ -39,7 +39,14 @@ _DEFAULT_SETTINGS = {
     "cycle_interval_minutes": 60,   # hourly during market hours
     "max_position_pct": 0.15,       # hard cap per position
     "max_searches_per_cycle": 8,
+    "model": "claude-opus-4-8",     # app-configurable; env var is the hard default
 }
+
+PUREAI_MODEL_OPTIONS = [
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+]
 
 
 def get_pureai_settings() -> dict:
@@ -288,7 +295,8 @@ def run_pureai_cycle(force: bool = False) -> dict:
         return {"status": "skipped", "reason": "market closed"}
 
     _ensure_tables()
-    model = getattr(settings, "pureai_model", "claude-opus-4-8")
+    # Model: DB-stored setting takes priority over env var (so app can override)
+    model = cfg.get("model") or getattr(settings, "pureai_model", "claude-opus-4-8")
     executed: list[dict] = []
     raw, searches, decision, error = "", [], None, None
 
@@ -298,7 +306,7 @@ def run_pureai_cycle(force: bool = False) -> dict:
 
         from services.ai_client import ask_ai_with_search, parse_ai_json
         raw, searches = ask_ai_with_search(
-            prompt, max_searches=int(cfg["max_searches_per_cycle"]))
+            prompt, model=model, max_searches=int(cfg["max_searches_per_cycle"]))
         decision = parse_ai_json(raw)
 
         client = _get_trading_client()

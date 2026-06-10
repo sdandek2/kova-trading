@@ -15,6 +15,7 @@ class PureAISettings(BaseModel):
     cycle_interval_minutes: Optional[int] = None
     max_position_pct: Optional[float] = None
     max_searches_per_cycle: Optional[int] = None
+    model: Optional[str] = None
 
 
 @router.get("/status")
@@ -24,7 +25,9 @@ def status():
 
 @router.get("/config")
 def get_config():
-    return pureai_engine.get_pureai_settings()
+    cfg = pureai_engine.get_pureai_settings()
+    cfg["model_options"] = pureai_engine.PUREAI_MODEL_OPTIONS
+    return cfg
 
 
 @router.post("/config")

@@ -212,7 +212,8 @@ def ask_ai(prompt: str, max_tokens: int = 600) -> str:
 # Used ONLY by the pure-AI experiment (services/pureai_engine.py).
 # The model runs its own web searches mid-reasoning; we never curate context.
 
-def ask_ai_with_search(prompt: str, max_tokens: int = 8000,
+def ask_ai_with_search(prompt: str, model: str = "claude-opus-4-8",
+                       max_tokens: int = 8000,
                        max_searches: int = 8) -> tuple[str, list[str]]:
     """
     Single-turn call where Claude can search the web before answering.
@@ -225,9 +226,6 @@ def ask_ai_with_search(prompt: str, max_tokens: int = 8000,
         so the caller parses JSON from text via parse_ai_json (json-repair).
       - No sampling params: removed on Opus 4.7+ (400 if sent).
     """
-    from config import settings as _settings
-
-    model = getattr(_settings, "pureai_model", "claude-opus-4-8")
     tools = [{
         "type": "web_search_20260209",
         "name": "web_search",
