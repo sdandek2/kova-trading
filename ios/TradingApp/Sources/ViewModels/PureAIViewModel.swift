@@ -102,7 +102,7 @@ final class PureAIViewModel: ObservableObject {
 
     // ── Display helpers ───────────────────────────────────────────────────────
     var equityDisplay: String {
-        guard let eq = status?.equity else { return "--" }
+        guard let eq = status?.equity, eq > 0 else { return "--" }
         return String(format: "$%,.0f", eq)
     }
 
