@@ -237,13 +237,17 @@ def ask_ai_with_search(prompt: str, model: str = "claude-opus-4-8",
 
     # Server-side tool loop can pause at its iteration limit (stop_reason
     # "pause_turn") — re-send to let it resume. Cap continuations at 5.
+    # Adaptive thinking only supported on Opus and Sonnet, not Haiku
+    _supports_thinking = any(x in model for x in ("opus", "sonnet"))
+    _kwargs = {"thinking": {"type": "adaptive"}} if _supports_thinking else {}
+
     for _ in range(5):
         response = _anthropic.messages.create(
             model=model,
             max_tokens=max_tokens,
-            thinking={"type": "adaptive"},
             tools=tools,
             messages=messages,
+            **_kwargs,
         )
         for block in response.content:
             if getattr(block, "type", "") == "server_tool_use" and \
