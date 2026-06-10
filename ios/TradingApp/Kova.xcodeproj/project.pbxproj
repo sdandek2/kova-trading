@@ -73,6 +73,9 @@
 		WH03AA04BB05CC06DD07EE08 /* WheelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH13AA14BB15CC16DD17EE18 /* WheelView.swift */; };
 		WH04AA05BB06CC07DD08EE09 /* WheelPositionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */; };
 		WH05AA06BB07CC08DD09EE10 /* WheelUniverseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */; };
+		PA01AA02BB03CC04DD05EE06 /* PureAIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */; };
+		PA02AA03BB04CC05DD06EE07 /* PureAIViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */; };
+		PA03AA04BB05CC06DD07EE08 /* PureAIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -144,6 +147,9 @@
 		WH13AA14BB15CC16DD17EE18 /* WheelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelView.swift; path = Sources/Views/Wheel/WheelView.swift; sourceTree = "<group>"; };
 		WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelPositionRowView.swift; path = Sources/Views/Wheel/WheelPositionRowView.swift; sourceTree = "<group>"; };
 		WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WheelUniverseView.swift; path = Sources/Views/Wheel/WheelUniverseView.swift; sourceTree = "<group>"; };
+		PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIModels.swift; path = Sources/Models/PureAIModels.swift; sourceTree = "<group>"; };
+		PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIViewModel.swift; path = Sources/ViewModels/PureAIViewModel.swift; sourceTree = "<group>"; };
+		PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIView.swift; path = Sources/Views/PureAI/PureAIView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -242,6 +248,9 @@
 				WH13AA14BB15CC16DD17EE18 /* WheelView.swift */,
 				WH14AA15BB16CC17DD18EE19 /* WheelPositionRowView.swift */,
 				WH15AA16BB17CC18DD19EE20 /* WheelUniverseView.swift */,
+				PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */,
+				PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */,
+				PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */,
 				9788A1872451B15183194D45 /* Sources/Assets.xcassets */,
 				3B61BFC59B1D49ED7380B5EB /* Sources/Info.plist */,
 			);
@@ -384,6 +393,9 @@
 				WH03AA04BB05CC06DD07EE08 /* WheelView.swift in Sources */,
 				WH04AA05BB06CC07DD08EE09 /* WheelPositionRowView.swift in Sources */,
 				WH05AA06BB07CC08DD09EE10 /* WheelUniverseView.swift in Sources */,
+				PA01AA02BB03CC04DD05EE06 /* PureAIModels.swift in Sources */,
+				PA02AA03BB04CC05DD06EE07 /* PureAIViewModel.swift in Sources */,
+				PA03AA04BB05CC06DD07EE08 /* PureAIView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

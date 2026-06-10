@@ -90,6 +90,11 @@ struct ContentView: View {
                         Label("Wheel", systemImage: "arrow.2.circlepath")
                     }
 
+                PureAIView()
+                    .tabItem {
+                        Label("Pure AI", systemImage: "brain.head.profile")
+                    }
+
                 SettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gearshape.fill")
