@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import os as _os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -30,7 +31,8 @@ _RISK_DEFAULTS = {
     "daily_loss_limit_pct": 4.0,   # halt new buys after 4% daily drawdown (was 6%)
     "stop_loss_pct": 0.04,          # 4% trailing stop fallback (Claude overrides per trade)
     "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
-    "min_daily_trades": 3,          # afternoon pressure if fewer than 3 trades by cutoff
+    "min_daily_trades": 0,          # 0 = no trade quota. Forced trades are the lowest-conviction
+                                    # trades by construction; edge appears on conditions, not schedule.
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM ET
     "max_trades_per_cycle": 5,      # max new buys/shorts per cycle; sells/covers/trailing stops never blocked
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
@@ -62,7 +64,15 @@ def _load_risk_settings() -> dict:
     cached = cache_get(_RISK_CACHE_KEY)
     if isinstance(cached, dict):
         # Merge with defaults so new keys are always present
-        return {**_RISK_DEFAULTS, **cached}
+        merged = {**_RISK_DEFAULTS, **cached}
+        # One-time migration (2026-06): retire the daily trade quota. Old cached
+        # settings carry min_daily_trades=3 which would silently re-enable it.
+        # Still adjustable from the app afterwards.
+        if not merged.get("_quota_migrated_v2"):
+            merged["min_daily_trades"] = 0
+            merged["_quota_migrated_v2"] = True
+            _save_risk_settings(merged)
+        return merged
     return _RISK_DEFAULTS.copy()
 
 
@@ -588,8 +598,10 @@ async def run_trading_cycle():
             _spy_prices_rs = (snapshot_light.get("SPY") or {}).get("closing_prices", [])
             _rs_ranks = rank_universe(snapshot_light, _spy_prices_rs)
             _rs_map = get_rs_map(_rs_ranks)
-            # Filter universe to top 60% RS stocks — only trade outperformers
-            _rs_filtered_universe = filter_by_rs(universe[:50], _rs_map, min_percentile=60)
+            # Filter universe to top 60% RS stocks — only trade outperformers.
+            # 100-symbol window (was 50): more genuine candidates per cycle is
+            # how activity rises without lowering the signal bar.
+            _rs_filtered_universe = filter_by_rs(universe[:100], _rs_map, min_percentile=60)
             logger.info(f"RS filter: {len(universe)} → {len(_rs_filtered_universe)} stocks (top 60th percentile)")
         except Exception as _re:
             logger.warning(f"Brain RS ranking failed (non-fatal): {_re}")
@@ -1433,7 +1445,7 @@ async def run_trading_cycle():
         # ── Daily trade floor: configurable via /api/risk/settings ──
         now_utc = datetime.now(timezone.utc)
         trades_today = _daily_trade_count.get(now_utc.date(), 0)
-        min_trades = int(_risk_settings.get("min_daily_trades", 2))
+        min_trades = int(_risk_settings.get("min_daily_trades", 0))
         # afternoon_pressure_hour is in EST; UTC offset is +4 (EDT) or +5 (EST)
         # Using +4 (EDT, summer) as default — close enough for this purpose
         # Bug fix: use ET timezone for afternoon pressure (DST-aware) instead of hardcoded UTC+4
@@ -1663,6 +1675,13 @@ async def run_trading_cycle():
             await manager.broadcast({"type": "ai_analysis", "data": _latest_analysis.model_dump(mode="json")})
 
             if decision.action not in ("buy", "sell", "short") or not decision.symbol or not decision.quantity:
+                continue
+
+            # Phase 1 audition: shorts are benched (see brain/signals.py). The
+            # signal layer no longer suggests them, but the AI can still emit
+            # one — enforce here so the bench holds at the execution boundary.
+            if decision.action == "short" and _os.environ.get("KOVA_ALLOW_SHORTS", "0") != "1":
+                logger.info(f"Setup benched: short {decision.symbol} skipped (Phase 1 audition)")
                 continue
 
             # ── Correlated-position cap ───────────────────────────────────────
@@ -2274,7 +2293,10 @@ async def run_trading_cycle():
             # Long calls/puts replace stock buys for high-conviction swing setups.
             # Falls back to stock if no liquid contract is found.
             _options_handled = False
-            if decision.action == "buy" and getattr(decision, "holding_period", "intraday") == "swing":
+            # Phase 1 audition: options engine benched until the core stock
+            # setups prove expectancy — re-enable via KOVA_ALLOW_OPTIONS=1.
+            _options_enabled = _os.environ.get("KOVA_ALLOW_OPTIONS", "0") == "1"
+            if _options_enabled and decision.action == "buy" and getattr(decision, "holding_period", "intraday") == "swing":
                 try:
                     from services.brain.options_engine import decide_and_place
                     _regime_str = getattr(_brain_regime, "regime", "bull") if "_brain_regime" in dir() else "bull"

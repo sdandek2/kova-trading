@@ -19,10 +19,20 @@ External data (Phase 7, added when API keys available):
   Earnings revision +20 (estimate raised) / -20 (estimate cut)
 """
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Phase 1 audition (2026-06) ────────────────────────────────────────────────
+# Until momentum-long + oversold-bounce prove positive expectancy over 30+
+# trades, other setup types are benched: each setup needs its own trade sample
+# to validate, and spreading ~3 trades/day across 7 setup types starves the
+# Kelly/ML learning loops. Re-enable one at a time via env once core edge is
+# proven. Inverse ETFs in bear regime stay on (the defensive "long" play).
+_ALLOW_SHORTS    = os.environ.get("KOVA_ALLOW_SHORTS", "0") == "1"
+_ALLOW_LEVERAGED = os.environ.get("KOVA_ALLOW_LEVERAGED", "0") == "1"
 
 
 @dataclass
@@ -292,11 +302,12 @@ def _score_symbol(
         suggested_action = "buy" if regime == "bear" else "skip"
     elif is_leveraged:
         signal_type = "momentum"
-        suggested_action = "buy" if (regime_result and regime_result.allows_leveraged_etfs) else "skip"
+        suggested_action = "buy" if (_ALLOW_LEVERAGED and regime_result
+                                     and regime_result.allows_leveraged_etfs) else "skip"
     elif rsi is not None and rsi > 70 and macd_hist is not None and macd_hist < 0.5:
         signal_type = "short_candidate"
-        suggested_action = "short" if regime in ("bear", "chop") else "skip"
-    elif (_heavy_put_short
+        suggested_action = "short" if (_ALLOW_SHORTS and regime in ("bear", "chop")) else "skip"
+    elif (_ALLOW_SHORTS and _heavy_put_short
           and rsi is not None and rsi > 50          # not already oversold
           and macd_hist is not None and macd_hist < 0  # momentum already turning down
           and regime in ("bear", "chop")):

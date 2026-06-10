@@ -493,7 +493,7 @@ def get_tradeable_universe() -> list[str]:
         from alpaca.data.historical.screener import ScreenerClient
         from alpaca.data.requests import MostActivesRequest
         sc = ScreenerClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        actives = sc.get_most_actives(MostActivesRequest(top=50))
+        actives = sc.get_most_actives(MostActivesRequest(top=100))
         add([i.symbol for i in actives.most_actives], "most_actives")
         logger.info(f"Most actives: {[i.symbol for i in actives.most_actives]}")
     except Exception as e:
@@ -505,7 +505,7 @@ def get_tradeable_universe() -> list[str]:
         from alpaca.data.historical.screener import ScreenerClient
         from alpaca.data.requests import MarketMoversRequest
         sc = ScreenerClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        movers = sc.get_market_movers(MarketMoversRequest(top=30))
+        movers = sc.get_market_movers(MarketMoversRequest(top=50))
         add([i.symbol for i in movers.gainers], "movers_gainers")
         add([i.symbol for i in movers.losers], "movers_losers")
         logger.info(f"Gainers: {[i.symbol for i in movers.gainers[:5]]} | Losers: {[i.symbol for i in movers.losers[:5]]}")

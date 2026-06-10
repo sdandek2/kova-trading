@@ -48,6 +48,9 @@ import os as _os
 MAX_ACTIVE_POSITIONS   = int(_os.environ.get("WHEEL_MAX_POSITIONS",    "5"))    # scale up as capital grows
 CONTRACTS_PER_TRADE    = int(_os.environ.get("WHEEL_CONTRACTS",        "2"))    # tiered close strategy
 MIN_PREMIUM_YIELD      = float(_os.environ.get("WHEEL_MIN_YIELD",      "0.008")) # 0.8% min yield/strike (bear: defensive stocks have lower IV)
+MAX_PREMIUM_YIELD      = float(_os.environ.get("WHEEL_MAX_YIELD",      "0.05"))  # 5% max yield/cycle — above this the market is pricing gap risk
+                                                                                  # (WULF lesson 2026-06: 9% yield = BTC-miner tail risk, not edge)
+ITM_CLOSE_PCT          = float(_os.environ.get("WHEEL_ITM_CLOSE_PCT",  "0.05"))  # buy-to-close a short put once underlying < strike × (1 - this)
 TARGET_DTE             = int(_os.environ.get("WHEEL_TARGET_DTE",       "45"))   # sweet spot for theta
 MIN_DTE                = int(_os.environ.get("WHEEL_MIN_DTE",          "30"))   # never inside 30 DTE — 21 is force-close, need buffer
 MAX_DTE                = int(_os.environ.get("WHEEL_MAX_DTE",          "60"))   # never beyond 60 DTE
@@ -735,6 +738,12 @@ def scan_opportunities() -> list[dict]:
                     prem_yield = premium / strike
                     if prem_yield < MIN_PREMIUM_YIELD:
                         continue
+                    if prem_yield > MAX_PREMIUM_YIELD:
+                        logger.info(
+                            f"Wheel skip {symbol} {contract.symbol}: yield {prem_yield:.1%} "
+                            f"> {MAX_PREMIUM_YIELD:.0%} cap — premium this rich is priced gap risk"
+                        )
+                        continue
 
                     # Get IV + delta from greeks
                     iv = 0.0
@@ -1008,7 +1017,7 @@ def execute_covered_call(position: dict) -> Optional[dict]:
         return None
 
 
-def _buy_to_close(position: dict, contract: str, current_price: float, reason: str):
+def _buy_to_close(position: dict, contract: str, current_price: float, reason: str, qty: int = 1):
     """Close an option position early (take profit or stop loss)."""
     try:
         from alpaca.trading.requests import LimitOrderRequest
@@ -1016,7 +1025,7 @@ def _buy_to_close(position: dict, contract: str, current_price: float, reason: s
 
         order = _get_wheel_trading_client().submit_order(LimitOrderRequest(
             symbol=contract,
-            qty=1,
+            qty=qty,
             side=OrderSide.BUY,
             type=OrderType.LIMIT,
             time_in_force=TimeInForce.DAY,
@@ -1368,6 +1377,51 @@ def check_profit_targets():
 
                 decay_ratio = current_prem / original_prem
                 contracts_left = _parse_contracts_remaining(pos.get("notes", ""))
+
+                # ── ITM emergency close ─────────────────────────────────────
+                # Once the underlying breaks ITM_CLOSE_PCT below the strike,
+                # assignment is near-certain and the loss grows with every
+                # further dollar of decline. Close all remaining contracts and
+                # take the known loss instead of riding an open-ended one.
+                strike = float(pos.get("put_strike") or 0)
+                underlying_px = 0.0
+                if strike > 0:
+                    try:
+                        from alpaca.data.requests import StockLatestQuoteRequest
+                        _q = _get_wheel_data_client().get_stock_latest_quote(
+                            StockLatestQuoteRequest(symbol_or_symbols=pos["symbol"])
+                        ).get(pos["symbol"])
+                        if _q and _q.bid_price and _q.ask_price:
+                            underlying_px = float((_q.ask_price + _q.bid_price) / 2)
+                    except Exception:
+                        pass
+                if underlying_px > 0 and underlying_px < strike * (1 - ITM_CLOSE_PCT):
+                    n = max(contracts_left, 1)
+                    buyback_cost = current_prem * 100 * n
+                    prev_total = float(pos.get("total_premium_collected") or 0)
+                    net = prev_total - buyback_cost
+                    logger.warning(
+                        f"Wheel ITM CLOSE: {pos['symbol']} ${underlying_px:.2f} is "
+                        f"{(strike - underlying_px) / strike:.1%} below ${strike:.2f} strike "
+                        f"(limit {ITM_CLOSE_PCT:.0%}) — closing {n} contract(s), net ${net:.0f}"
+                    )
+                    order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                                             f"ITM stop: underlying {(strike - underlying_px) / strike:.1%} below strike",
+                                             qty=n)
+                    if order_id:
+                        _add_to_profit_reserve_if_configured(net)
+                        _update_wheel_position(
+                            pos["id"],
+                            phase="completed", status="itm_stop",
+                            realized_pl=net,
+                            closed_at=now,
+                            notes=(
+                                f"ITM stop: underlying ${underlying_px:.2f} < strike ${strike:.2f} "
+                                f"× {1 - ITM_CLOSE_PCT:.2f}. Buyback ${buyback_cost:.0f}, "
+                                f"premium ${prev_total:.0f}, net ${net:.0f}"
+                            ),
+                        )
+                    continue
 
                 if contracts_left >= 2 and decay_ratio <= PROFIT_TIER_1:
                     # Close contract 1 at 50% profit
