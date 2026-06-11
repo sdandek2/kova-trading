@@ -436,6 +436,26 @@ async def run_trading_cycle():
             _macro_size_mult = 1.0
 
         positions = await loop.run_in_executor(None, alpaca_service.get_positions)
+
+        # ── Option positions: managed by options_engine, not the stock rules ──
+        # Stock stops/TPs misfire on option volatility (±30%/day is routine),
+        # so OCC-symbol positions are split out and handled by premium-based
+        # exits (premium stop / TP / time stop) in manage_option_positions.
+        try:
+            from services.brain.options_engine import is_option_symbol, manage_option_positions
+            _n_opts = sum(1 for p in positions if is_option_symbol(p.symbol))
+            positions = [p for p in positions if not is_option_symbol(p.symbol)]
+            if _n_opts:
+                _opt_exits = await loop.run_in_executor(None, manage_option_positions)
+                for _oe in _opt_exits:
+                    log_bot_activity(
+                        "options_exit",
+                        f"Options exit: {_oe['symbol']} — {_oe.get('reason', '')}",
+                        symbol=_oe["symbol"], cycle_id=_current_cycle_id,
+                    )
+        except Exception as _ope:
+            logger.warning(f"Option position management failed (non-fatal): {_ope}")
+
         universe = await loop.run_in_executor(None, alpaca_service.get_tradeable_universe)
         logger.info(f"Universe: {len(universe)} stocks — 100% market-driven (top movers, volume, news, sectors)")
         # Lightweight snapshot for broad scan (Step 1) — price + 5-day change + closing prices for indicators

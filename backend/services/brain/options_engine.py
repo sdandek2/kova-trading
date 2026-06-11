@@ -290,16 +290,13 @@ def route_instrument(
     if holding_period == "intraday":
         return "stock"
 
-    if regime == "chop" and conviction < 60:
-        return "iron_condor"
-
-    if suggested_action == "short" or regime == "bear":
+    # Single-leg only: the exit manager (manage_option_positions) closes legs
+    # independently, so multi-leg spreads could orphan a naked short leg.
+    # Single-leg also works at options approval level 2.
+    # Direction follows the SIGNAL, never the regime — a buy signal in a bear
+    # regime is still a bullish bet (oversold bounce), so it gets a call.
+    if suggested_action == "short":
         return "long_put"
-
-    if regime == "bull" and conviction >= 75:
-        return "bull_call_spread"
-
-    # Default swing trade in bull/neutral
     return "long_call"
 
 
@@ -497,3 +494,76 @@ def decide_and_place(
     result["rationale"] = order.rationale
     result["max_risk"] = order.max_risk
     return result
+
+
+# ── Position management (exits) ───────────────────────────────────────────────
+# Long options can't reuse the stock exit rules: a 4% stock stop fires on
+# normal option noise (±30%/day is routine), and an unmanaged long option
+# bleeds theta to zero. Rules here are premium-based instead.
+
+import re as _re
+
+_OCC_RE = _re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
+
+PREMIUM_STOP_PCT = float(os.environ.get("KOVA_OPT_STOP_PCT", "-50"))    # close at -50% premium
+PREMIUM_TP_PCT   = float(os.environ.get("KOVA_OPT_TP_PCT", "100"))     # close at +100% premium
+TIME_STOP_DTE    = int(os.environ.get("KOVA_OPT_TIME_STOP_DTE", "10")) # close at ≤10 DTE
+
+
+def is_option_symbol(symbol: str) -> bool:
+    return bool(_OCC_RE.match(symbol or ""))
+
+
+def _occ_expiry(symbol: str) -> Optional[date]:
+    m = _OCC_RE.match(symbol or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(2), "%y%m%d").date()
+    except ValueError:
+        return None
+
+
+def manage_option_positions() -> list[dict]:
+    """
+    Review every open option position and close any that hit an exit rule:
+      premium_stop  — unrealized P/L ≤ -50% of premium paid
+      take_profit   — unrealized P/L ≥ +100%
+      time_stop     — ≤ 10 DTE (theta burn accelerates; thesis had its chance)
+    Returns a list of action dicts for logging.
+    """
+    if not _ALPACA_OPTIONS_AVAILABLE:
+        return []
+    actions: list[dict] = []
+    try:
+        client = _get_client()
+        for p in client.get_all_positions():
+            sym = p.symbol
+            if not is_option_symbol(sym):
+                continue
+            pl_pct = float(p.unrealized_plpc or 0) * 100
+            expiry = _occ_expiry(sym)
+            dte = (expiry - date.today()).days if expiry else None
+
+            reason = None
+            if pl_pct <= PREMIUM_STOP_PCT:
+                reason = f"premium_stop ({pl_pct:.0f}%)"
+            elif pl_pct >= PREMIUM_TP_PCT:
+                reason = f"take_profit ({pl_pct:+.0f}%)"
+            elif dte is not None and dte <= TIME_STOP_DTE:
+                reason = f"time_stop ({dte} DTE)"
+
+            if not reason:
+                continue
+            try:
+                client.close_position(sym)
+                logger.info("Options exit: %s — %s (P/L %+.0f%%)", sym, reason, pl_pct)
+                actions.append({"symbol": sym, "action": "close",
+                                "reason": reason, "pl_pct": round(pl_pct, 1)})
+            except Exception as ce:
+                logger.warning("Options exit failed for %s: %s", sym, ce)
+                actions.append({"symbol": sym, "action": "close_failed",
+                                "reason": reason, "error": str(ce)})
+    except Exception as e:
+        logger.warning("manage_option_positions failed (non-fatal): %s", e)
+    return actions
