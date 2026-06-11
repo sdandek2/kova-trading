@@ -204,6 +204,23 @@ def _log_position_close(symbol: str, exit_price: float, reason: str):
 
 # ── Portfolio state → prompt ─────────────────────────────────────────────────
 
+def _get_open_theses() -> dict:
+    """symbol → original buy thesis for open positions (latest per symbol)."""
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (symbol) symbol, open_thesis
+                FROM pureai_positions
+                WHERE exit_time IS NULL AND open_thesis IS NOT NULL
+                ORDER BY symbol, entry_time DESC
+            """)
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
 def _get_portfolio_state() -> dict:
     client = _get_trading_client()
     acct = client.get_account()
@@ -245,6 +262,8 @@ Research the current market using web search — look up whatever YOU think matt
 1. BUY: 0 to {max_buys} US-listed stocks. Doing nothing is often the correct decision —
    only buy when you have genuine conviction. Each position must be ≤ {max_pos:.0%} of equity.
 2. SELL: any of your current holdings, partially or fully, for any reason.
+   Each holding includes your_original_thesis (why you bought it) — re-evaluate
+   whether that thesis still holds before deciding to keep or sell.
 3. ADD: increase an existing holding (counts toward the {max_pos:.0%} position cap).
 
 Rules: long-only US stocks. No options, no leveraged/inverse ETFs, no crypto tokens
@@ -302,6 +321,12 @@ def run_pureai_cycle(force: bool = False) -> dict:
 
     try:
         state = _get_portfolio_state()
+        # Feed back the AI's own buy thesis for each open position so it can
+        # re-evaluate its original reasoning ("is X still true?") on later cycles.
+        theses = _get_open_theses()
+        for h in state["holdings"]:
+            if h["symbol"] in theses:
+                h["your_original_thesis"] = theses[h["symbol"]]
         prompt = _build_prompt(state, cfg)
 
         from services.ai_client import ask_ai_with_search, parse_ai_json
