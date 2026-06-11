@@ -221,6 +221,53 @@ def _get_open_theses() -> dict:
         return {}
 
 
+def _get_track_record(limit: int = 10) -> dict:
+    """Closed-trade history fed back to the AI — its own memory, not curation.
+    Last N trades for recency plus aggregates (avg win vs avg loss is the
+    diagnostic that exposes cutting-winners/riding-losers behavior)."""
+    out = {"trades": [], "total": 0, "wins": 0, "total_pl": 0.0,
+           "avg_win": None, "avg_loss": None}
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, entry_price, exit_price, realized_pl,
+                       realized_pl_pct, open_thesis, close_reason
+                FROM pureai_positions
+                WHERE exit_time IS NOT NULL
+                ORDER BY exit_time DESC LIMIT %s
+            """, (limit,))
+            for r in cur.fetchall():
+                out["trades"].append({
+                    "symbol": r[0],
+                    "entry": r[1],
+                    "exit": r[2],
+                    "pl": round(float(r[3] or 0), 2),
+                    "pl_pct": round(float(r[4] or 0), 1),
+                    "your_thesis_was": r[5],
+                    "you_sold_because": r[6],
+                })
+            cur.execute("""
+                SELECT COUNT(*),
+                       COUNT(*) FILTER (WHERE realized_pl > 0),
+                       COALESCE(SUM(realized_pl), 0),
+                       AVG(realized_pl) FILTER (WHERE realized_pl > 0),
+                       AVG(realized_pl) FILTER (WHERE realized_pl <= 0)
+                FROM pureai_positions WHERE exit_time IS NOT NULL
+            """)
+            total, wins, pl, avg_w, avg_l = cur.fetchone()
+            out.update(
+                total=int(total or 0), wins=int(wins or 0),
+                total_pl=round(float(pl or 0), 2),
+                avg_win=round(float(avg_w), 2) if avg_w is not None else None,
+                avg_loss=round(float(avg_l), 2) if avg_l is not None else None,
+            )
+    except Exception:
+        pass
+    return out
+
+
 def _get_portfolio_state() -> dict:
     client = _get_trading_client()
     acct = client.get_account()
@@ -242,18 +289,35 @@ def _get_portfolio_state() -> dict:
     }
 
 
-def _build_prompt(state: dict, cfg: dict) -> str:
+def _build_prompt(state: dict, cfg: dict, record: Optional[dict] = None) -> str:
     today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
     holdings_json = json.dumps(state["holdings"], indent=2) if state["holdings"] \
         else "[] (no positions — all cash)"
     max_buys = int(cfg["max_buys_per_cycle"])
     max_pos = cfg["max_position_pct"]
+
+    track_section = ""
+    if record and record["total"] > 0:
+        wr = round(100 * record["wins"] / record["total"], 1)
+        avg_w = f"${record['avg_win']:,.2f}" if record["avg_win"] is not None else "n/a"
+        avg_l = f"${record['avg_loss']:,.2f}" if record["avg_loss"] is not None else "n/a"
+        trades_json = json.dumps(record["trades"], indent=2)
+        track_section = f"""
+
+## Your track record so far
+Closed trades: {record['total']} | Win rate: {wr}% | Total realized P&L: ${record['total_pl']:,.2f}
+Average win: {avg_w} | Average loss: {avg_l}
+Your last {len(record['trades'])} closed trades (most recent first):
+{trades_json}
+Review honestly: which theses worked, which didn't, and whether your average
+loss is outrunning your average win. Adjust your decisions accordingly."""
+
     return f"""You are an autonomous stock trader managing a real portfolio. Today is {today}.
 
 ## Your portfolio right now
 Equity: ${state['equity']:,.2f} | Cash available: ${state['cash']:,.2f}
 Holdings:
-{holdings_json}
+{holdings_json}{track_section}
 
 ## Your job this cycle
 Research the current market using web search — look up whatever YOU think matters
@@ -327,7 +391,7 @@ def run_pureai_cycle(force: bool = False) -> dict:
         for h in state["holdings"]:
             if h["symbol"] in theses:
                 h["your_original_thesis"] = theses[h["symbol"]]
-        prompt = _build_prompt(state, cfg)
+        prompt = _build_prompt(state, cfg, record=_get_track_record())
 
         from services.ai_client import ask_ai_with_search, parse_ai_json
         raw, searches = ask_ai_with_search(
