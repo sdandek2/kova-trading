@@ -506,8 +506,9 @@ import re as _re
 _OCC_RE = _re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
 
 PREMIUM_STOP_PCT = float(os.environ.get("KOVA_OPT_STOP_PCT", "-50"))    # close at -50% premium
-PREMIUM_TP_PCT   = float(os.environ.get("KOVA_OPT_TP_PCT", "100"))     # close at +100% premium
+PREMIUM_TP_PCT   = float(os.environ.get("KOVA_OPT_TP_PCT", "100"))     # profit ratchet ARMS here (not a cap)
 TIME_STOP_DTE    = int(os.environ.get("KOVA_OPT_TIME_STOP_DTE", "10")) # close at ≤10 DTE
+RATCHET_KEEP     = float(os.environ.get("KOVA_OPT_RATCHET_KEEP", "0.6"))  # keep ≥60% of peak gain once armed
 
 
 def is_option_symbol(symbol: str) -> bool:
@@ -524,46 +525,92 @@ def _occ_expiry(symbol: str) -> Optional[date]:
         return None
 
 
+def _close(client, sym: str, qty: Optional[int] = None):
+    """Close all (or qty contracts) of an option position."""
+    if qty:
+        from alpaca.trading.requests import ClosePositionRequest
+        return client.close_position(sym, ClosePositionRequest(qty=str(qty)))
+    return client.close_position(sym)
+
+
 def manage_option_positions() -> list[dict]:
     """
-    Review every open option position and close any that hit an exit rule:
-      premium_stop  — unrealized P/L ≤ -50% of premium paid
-      take_profit   — unrealized P/L ≥ +100%
-      time_stop     — ≤ 10 DTE (theta burn accelerates; thesis had its chance)
-    Returns a list of action dicts for logging.
+    Review every open option position each cycle.
+
+    Hard exits (close everything):
+      premium_stop — P/L ≤ -50% of premium paid
+      time_stop    — ≤ 10 DTE (theta burn accelerates; thesis had its chance)
+
+    Profit ratchet (uncapped upside, armed once P/L peaks ≥ +100%):
+      scale_out — sell HALF the contracts at the arm point (recoups roughly
+                  the full premium; the remainder is a free ride)
+      ratchet   — close the rest only if P/L falls below RATCHET_KEEP × peak,
+                  so a +400% runner exits near +240% instead of being cut
+                  at +100%. Peak is tracked in the DB cache per contract,
+                  keyed with entry price so re-entries reset cleanly.
     """
     if not _ALPACA_OPTIONS_AVAILABLE:
         return []
     actions: list[dict] = []
     try:
+        from services.db import cache_get, cache_set, cache_delete
         client = _get_client()
         for p in client.get_all_positions():
             sym = p.symbol
             if not is_option_symbol(sym):
                 continue
             pl_pct = float(p.unrealized_plpc or 0) * 100
+            qty = int(float(p.qty))
+            entry = round(float(p.avg_entry_price or 0), 4)
             expiry = _occ_expiry(sym)
             dte = (expiry - date.today()).days if expiry else None
+            key = f"opt_ratchet:{sym}"
 
+            # Peak tracking — reset if this is a fresh position in the same contract
+            st = cache_get(key) or {}
+            if abs(st.get("entry", -1) - entry) > 0.01:
+                st = {"entry": entry, "peak": pl_pct, "scaled": False}
+            st["peak"] = max(st.get("peak", pl_pct), pl_pct)
+            cache_set(key, st, 120 * 24 * 3600)
+            peak = st["peak"]
+
+            # ── Hard exits ────────────────────────────────────────────────
             reason = None
             if pl_pct <= PREMIUM_STOP_PCT:
                 reason = f"premium_stop ({pl_pct:.0f}%)"
-            elif pl_pct >= PREMIUM_TP_PCT:
-                reason = f"take_profit ({pl_pct:+.0f}%)"
             elif dte is not None and dte <= TIME_STOP_DTE:
-                reason = f"time_stop ({dte} DTE)"
+                reason = f"time_stop ({dte} DTE, P/L {pl_pct:+.0f}%)"
+            # ── Profit ratchet (armed at peak ≥ PREMIUM_TP_PCT) ───────────
+            elif peak >= PREMIUM_TP_PCT and pl_pct <= peak * RATCHET_KEEP:
+                reason = f"ratchet (peak {peak:+.0f}% → now {pl_pct:+.0f}%)"
 
-            if not reason:
+            if reason:
+                try:
+                    _close(client, sym)
+                    cache_delete(key)
+                    logger.info("Options exit: %s — %s", sym, reason)
+                    actions.append({"symbol": sym, "action": "close",
+                                    "reason": reason, "pl_pct": round(pl_pct, 1)})
+                except Exception as ce:
+                    logger.warning("Options exit failed for %s: %s", sym, ce)
+                    actions.append({"symbol": sym, "action": "close_failed",
+                                    "reason": reason, "error": str(ce)})
                 continue
-            try:
-                client.close_position(sym)
-                logger.info("Options exit: %s — %s (P/L %+.0f%%)", sym, reason, pl_pct)
-                actions.append({"symbol": sym, "action": "close",
-                                "reason": reason, "pl_pct": round(pl_pct, 1)})
-            except Exception as ce:
-                logger.warning("Options exit failed for %s: %s", sym, ce)
-                actions.append({"symbol": sym, "action": "close_failed",
-                                "reason": reason, "error": str(ce)})
+
+            # ── Scale-out: sell half at the arm point, ride the rest ──────
+            if peak >= PREMIUM_TP_PCT and not st.get("scaled") and qty >= 2:
+                half = qty // 2
+                try:
+                    _close(client, sym, qty=half)
+                    st["scaled"] = True
+                    cache_set(key, st, 120 * 24 * 3600)
+                    logger.info("Options scale-out: %s — sold %d/%d @ %+.0f%% (free ride on rest)",
+                                sym, half, qty, pl_pct)
+                    actions.append({"symbol": sym, "action": "scale_out",
+                                    "qty": half, "pl_pct": round(pl_pct, 1),
+                                    "reason": f"scale_out half at {pl_pct:+.0f}%"})
+                except Exception as ce:
+                    logger.warning("Options scale-out failed for %s: %s", sym, ce)
     except Exception as e:
         logger.warning("manage_option_positions failed (non-fatal): %s", e)
     return actions
