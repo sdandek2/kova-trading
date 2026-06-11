@@ -508,7 +508,7 @@ _OCC_RE = _re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
 PREMIUM_STOP_PCT = float(os.environ.get("KOVA_OPT_STOP_PCT", "-50"))    # close at -50% premium
 PREMIUM_TP_PCT   = float(os.environ.get("KOVA_OPT_TP_PCT", "100"))     # profit ratchet ARMS here (not a cap)
 TIME_STOP_DTE    = int(os.environ.get("KOVA_OPT_TIME_STOP_DTE", "10")) # close at ≤10 DTE
-RATCHET_KEEP     = float(os.environ.get("KOVA_OPT_RATCHET_KEEP", "0.6"))  # keep ≥60% of peak gain once armed
+RATCHET_KEEP     = float(os.environ.get("KOVA_OPT_RATCHET_KEEP", "0.75"))  # keep ≥75% of peak gain once armed — tight trail: lock in most of a runner, accept earlier exits on pullbacks
 
 
 def is_option_symbol(symbol: str) -> bool:
