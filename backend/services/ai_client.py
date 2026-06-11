@@ -230,6 +230,7 @@ def ask_ai_with_search(prompt: str, model: str = "claude-opus-4-8",
         "type": "web_search_20260209",
         "name": "web_search",
         "max_uses": max_searches,
+        "allowed_callers": ["direct"],  # required for Haiku; harmless on Opus/Sonnet
     }]
     messages = [{"role": "user", "content": prompt}]
     searches: list[str] = []
