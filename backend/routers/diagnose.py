@@ -113,7 +113,7 @@ def diagnose():
         SELECT symbol, realized_pl, realized_pl_pct, hold_duration_mins,
                entry_price, exit_price, exit_reason
         FROM position_log
-        WHERE exit_reason ILIKE '%momentum%' OR exit_reason ILIKE '%macd%' OR exit_reason ILIKE '%decay%'
+        WHERE exit_reason ILIKE '%%momentum%%' OR exit_reason ILIKE '%%macd%%' OR exit_reason ILIKE '%%decay%%'
         ORDER BY exit_time DESC LIMIT 20
     """)
 
