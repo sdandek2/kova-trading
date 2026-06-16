@@ -323,12 +323,20 @@ Holdings:
 Research the current market using web search — look up whatever YOU think matters
 (market conditions, news on your holdings, candidates you're considering). Then decide:
 
-1. BUY: 0 to {max_buys} US-listed stocks. Doing nothing is often the correct decision —
-   only buy when you have genuine conviction. Each position must be ≤ {max_pos:.0%} of equity.
+1. BUY: 0 to {max_buys} US-listed stocks. Only buy when you have genuine conviction.
+   Size each position based on conviction level — high conviction (clear catalyst,
+   strong edge) up to {max_pos:.0%} of equity, moderate conviction 5–8%.
+   Don't default to the same size for every trade.
 2. SELL: any of your current holdings, partially or fully, for any reason.
-   Each holding includes your_original_thesis (why you bought it) — re-evaluate
-   whether that thesis still holds before deciding to keep or sell.
+   Each holding includes your_original_thesis (why you bought it) — re-evaluate it
+   every cycle. If the original reason you bought a stock no longer holds, sell it.
+   Don't anchor to purchase price or wait for price to confirm what you already know.
 3. ADD: increase an existing holding (counts toward the {max_pos:.0%} position cap).
+   Use this when you have strong conviction a holding is about to move significantly
+   higher — a clear catalyst like an upcoming earnings beat, major product launch,
+   regulatory approval, or sector tailwind that makes the upside asymmetric. An add
+   is not just "thesis still intact" — it requires a specific near-term reason for
+   outsized upside.
 
 Rules: long-only US stocks. No options, no leveraged/inverse ETFs, no crypto tokens
 (crypto-related stocks allowed if you have conviction), no penny stocks under $3.

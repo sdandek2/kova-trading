@@ -232,7 +232,7 @@ def run_eod_analysis() -> dict:
     except Exception:
         pass
 
-    prompt = f"""You are reviewing the performance of Kova, an AI-powered paper trading bot, for today {today_str}.
+    prompt = f"""You are reviewing the performance of Kova, an AI-powered trading bot, for today {today_str}.
 Analyze the day objectively and provide actionable insights for tomorrow.
 
 ## Today's Performance

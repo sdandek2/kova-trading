@@ -140,7 +140,7 @@ def decide(
         "Prioritise building positions on any quality setup.\n"
     ) if thin_portfolio else ""
 
-    prompt = f"""You are managing a paper trading portfolio on Alpaca. Evaluate the pre-screened candidates below and approve 1-3 trades.
+    prompt = f"""You are managing a real portfolio. Evaluate the pre-screened candidates below and approve 1-3 trades.
 
 ## Market Regime: {regime.upper()} ({regime_result.confidence:.0%} confidence)
 {regime_instructions}

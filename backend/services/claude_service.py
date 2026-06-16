@@ -380,7 +380,7 @@ Factor these into your trade approvals — confirm or override based on today's 
     else:
         snapshot_text_final = snapshot_text
 
-    step1_prompt = f"""You are a professional equity analyst managing a paper trading portfolio. Analyze the market data below and identify the best opportunities for simulated trades. This is Alpaca paper trading — no real money involved.
+    step1_prompt = f"""You are a professional equity analyst managing a real portfolio. Analyze the market data below and identify the best opportunities for trades.
 
 {portfolio_context}
 {brain_regime_note}{rs_note}{prebreakout_note}{rejected_note}{eod_step1_context}{macro_text}{geo_text}{news_text}{trade_feedback_text}{earnings_plays_text}{bearish_etf_note}
