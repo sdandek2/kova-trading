@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai, diagnose
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -93,6 +93,7 @@ app.include_router(prompt.router)
 app.include_router(model_settings.router)
 app.include_router(wheel.router)
 app.include_router(pureai.router)
+app.include_router(diagnose.router)
 
 
 @app.get("/health")
