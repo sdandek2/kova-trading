@@ -3,10 +3,19 @@ diagnose.py — Temporary internal diagnostic endpoint.
 Returns Kova + Wheel DB stats as JSON. Remove after use.
 """
 
+import decimal
 from fastapi import APIRouter
 from services.db import _get_conn
 
 router = APIRouter(prefix="/internal", tags=["diagnose"])
+
+
+def _coerce(val):
+    if isinstance(val, decimal.Decimal):
+        return float(val)
+    if hasattr(val, "isoformat"):  # date / datetime
+        return val.isoformat()
+    return val
 
 
 def _q(sql, params=None):
@@ -16,7 +25,10 @@ def _q(sql, params=None):
     with conn.cursor() as cur:
         cur.execute(sql, params or ())
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [
+            {k: _coerce(v) for k, v in zip(cols, row)}
+            for row in cur.fetchall()
+        ]
 
 
 @router.get("/diagnose")
