@@ -30,7 +30,7 @@ _RISK_CACHE_KEY = "user_pref:risk_settings"
 _RISK_DEFAULTS = {
     "daily_loss_limit_pct": 4.0,   # halt new buys after 4% daily drawdown (was 6%)
     "stop_loss_pct": 0.04,          # 4% trailing stop fallback (Claude overrides per trade)
-    "take_profit_pct": 0.20,        # 20% TP fallback (Claude overrides per trade)
+    "take_profit_pct": 0.08,        # 8% TP fallback — was 20% but 0/16 live trades ever hit it
     "min_daily_trades": 0,          # 0 = no trade quota. Forced trades are the lowest-conviction
                                     # trades by construction; edge appears on conditions, not schedule.
     "afternoon_pressure_hour": 13,  # pressure kicks in at 1 PM ET
@@ -138,6 +138,8 @@ _pyramid_counts: dict = {}             # symbol → int (how many pyramid adds t
 # can re-buy a portion if the stock pulls back to MA20 and momentum resumes.
 _pre_scaleout_qty: dict = {}           # symbol → int (qty held before first scale-out)
 _earnings_day_positions: set = set()   # symbols entered as earnings plays — forced EOD exit
+_daily_rejection_counts: dict = {}     # symbol → # of entry rejections today; reset each ET day
+_daily_rejection_date: str = ""        # ET date (YYYY-MM-DD); triggers reset when it changes
 # Pending fills: limit orders placed but not yet confirmed filled.
 # Each cycle checks these and attaches TP/trailing at the actual fill price.
 _pending_fill_orders: dict = {}  # order_id → {symbol, side, stop_loss_pct, take_profit_pct}
@@ -284,9 +286,20 @@ async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
            _ai_sold_symbols, _earnings_day_positions, \
-           _last_regime, _last_vix_level, _last_regime_confidence, _last_regime_capital_mult
+           _last_regime, _last_vix_level, _last_regime_confidence, _last_regime_capital_mult, \
+           _daily_rejection_date
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
+
+    # Reset per-day rejection counts when ET date rolls over
+    try:
+        from zoneinfo import ZoneInfo as _ZI_dr
+        _today_et = datetime.now(_ZI_dr("America/New_York")).strftime("%Y-%m-%d")
+    except Exception:
+        _today_et = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%d")
+    if _today_et != _daily_rejection_date:
+        _daily_rejection_date = _today_et
+        _daily_rejection_counts.clear()
 
     logger.info(f"Running trading cycle [cycle={_current_cycle_id}]...")
 
@@ -1203,6 +1216,53 @@ async def run_trading_cycle():
                         }})
                     continue  # skip other exit checks for this position
 
+            # ── EOD flat: close all positions at 3:45 PM ET ──────────────────
+            # Gap-down exits averaged -$121/trade because of overnight holds.
+            # Closing before market close eliminates gap risk entirely.
+            try:
+                from zoneinfo import ZoneInfo as _ZI_flat
+                _now_et_flat = datetime.now(_ZI_flat("America/New_York"))
+            except Exception:
+                _now_et_flat = datetime.now(timezone.utc) - timedelta(hours=4)
+            if _now_et_flat.hour * 60 + _now_et_flat.minute >= 15 * 60 + 45:
+                _flat_reason = (
+                    f"{position.symbol} EOD flat — 3:45 PM ET, closing to avoid gap risk "
+                    f"(P&L: {position.unrealized_pl_percent:+.1f}%)"
+                )
+                logger.info(f"EOD_FLAT: {_flat_reason}")
+                log_bot_activity("scale_out", _flat_reason,
+                                 symbol=position.symbol, cycle_id=_current_cycle_id)
+                if position.symbol in _previous_positions:
+                    _previous_positions[position.symbol]["exit_reason"] = "eod_flat"
+                _flat_side = "sell" if position.side == "long" else "buy"
+                _flat_order = alpaca_service.submit_market_order(
+                    symbol=position.symbol, qty=int(float(position.qty)), side=_flat_side
+                )
+                if _flat_order:
+                    try:
+                        reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0)) / 100.0
+                        _prev_flat  = _previous_positions.get(position.symbol, {})
+                        entry_p_flat = _prev_flat.get("avg_entry_price") or float(position.avg_entry_price or 0)
+                        exit_p_flat  = float(position.current_price or entry_p_flat)
+                        qty_flat     = int(float(position.qty))
+                        is_short_flat = position.side == "short"
+                        if reserve_pct > 0 and entry_p_flat > 0 and qty_flat > 0:
+                            realized_flat = (
+                                (exit_p_flat - entry_p_flat) * qty_flat if not is_short_flat
+                                else (entry_p_flat - exit_p_flat) * qty_flat
+                            )
+                            if realized_flat > 0:
+                                add_to_reserve(round(realized_flat * reserve_pct, 2))
+                    except Exception as _re_flat:
+                        logger.warning(f"Profit reserve (eod_flat) failed (non-fatal): {_re_flat}")
+                    await manager.broadcast({"type": "order_filled", "data": _flat_order.model_dump(mode="json")})
+                    await manager.broadcast({"type": "ai_analysis", "data": {
+                        "reasoning": _flat_reason, "last_action": _flat_side,
+                        "symbol": position.symbol,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }})
+                continue
+
             # ── Momentum-decay exit ───────────────────────────────────────────
             # When MACD histogram turns clearly negative while position still has
             # some profit (1-15%), exit before momentum fully reverses.
@@ -1661,21 +1721,47 @@ async def run_trading_cycle():
                 timestamp=_last_analysis_at,
             )
             cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
-            # ── Risk/reward floor: take_profit ≥ 1.5× stop_loss ─────────────
-            # Live data (2026-06: avg loss -$59 vs avg win +$35) showed AI-chosen
-            # exits needed a ~63% win rate to break even. Raise the target only —
-            # never tighten the stop — so entries and stop-outs are unchanged.
+            # ── Block new entries after 3:45 PM ET (EOD flat window) ─────────
+            if decision.action in ("buy", "short"):
+                try:
+                    from zoneinfo import ZoneInfo as _ZI_eod_b
+                    _now_et_eod_b = datetime.now(_ZI_eod_b("America/New_York"))
+                except Exception:
+                    _now_et_eod_b = datetime.now(timezone.utc) - timedelta(hours=4)
+                if _now_et_eod_b.hour * 60 + _now_et_eod_b.minute >= 15 * 60 + 45:
+                    logger.debug(f"EOD flat window: skipping new {decision.action} {decision.symbol} after 3:45 PM ET")
+                    continue
+
+            # ── Daily rejection purge ─────────────────────────────────────────
+            # If a symbol has been rejected 3+ times today, skip it for the day.
+            # Prevents 30-cycle spam when a stock crashes and "down >5%" fires every cycle.
+            if decision.action in ("buy", "short"):
+                if _daily_rejection_counts.get(decision.symbol, 0) >= 3:
+                    logger.debug(f"Daily purge: {decision.symbol} skipped (rejected {_daily_rejection_counts[decision.symbol]}x today)")
+                    continue
+
+            # ── Risk/reward floor + ceiling: take_profit within [1.5×SL, 9%] ─
+            # Live data: AI set 15-20% TP but 0/16 trades ever reached it (avg
+            # hold 35h). Cap at 9% — a reachable target beats an ambitious one
+            # that never fires. Floor stays: TP ≥ 1.5× SL.
             if decision.action in ("buy", "short"):
                 _sl = decision.stop_loss_pct or _risk_settings["stop_loss_pct"]
                 _tp = decision.take_profit_pct or _risk_settings["take_profit_pct"]
                 _min_tp = round(_sl * 1.5, 4)
+                _max_tp = 0.09
                 if _tp < _min_tp:
                     logger.info(
                         f"R/R floor: {decision.symbol} TP raised {_tp:.3f} → {_min_tp:.3f} "
                         f"(stop {_sl:.3f}, ratio was {_tp/_sl:.2f}:1)"
                     )
                     decision.take_profit_pct = _min_tp
-                    decision.stop_loss_pct = _sl
+                elif _tp > _max_tp:
+                    logger.info(
+                        f"TP ceiling: {decision.symbol} TP capped {_tp:.3f} → {_max_tp:.3f} "
+                        f"(was {_tp/_sl:.1f}:1 R/R — unreachable in practice)"
+                    )
+                    decision.take_profit_pct = _max_tp
+                decision.stop_loss_pct = _sl
             _rsn_up = (decision.reasoning or "").upper()
             _conf_val = "high" if "[HIGH]" in _rsn_up else ("low" if "[LOW]" in _rsn_up else "medium")
             log_trade_decision({
@@ -2070,7 +2156,10 @@ async def run_trading_cycle():
             )
 
             if not confirmed:
-                logger.info(f"Entry rejected: {confirm_reason}")
+                _daily_rejection_counts[decision.symbol] = _daily_rejection_counts.get(decision.symbol, 0) + 1
+                _rej_count = _daily_rejection_counts[decision.symbol]
+                _purge_note = f" [purged for today after {_rej_count} rejections]" if _rej_count >= 3 else f" [{_rej_count}/3]"
+                logger.info(f"Entry rejected{_purge_note}: {confirm_reason}")
                 log_bot_activity("entry_rejected", confirm_reason,
                                  symbol=decision.symbol, cycle_id=_current_cycle_id)
                 await manager.broadcast({"type": "ai_analysis", "data": {
