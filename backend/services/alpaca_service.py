@@ -852,23 +852,67 @@ def get_intraday_bars(symbols: list[str], lookback_bars: int = 8) -> dict[str, l
     return result
 
 
+_BULLISH_TERMS = {
+    "beat", "beats", "exceed", "exceeds", "exceeded", "surpass", "surpasses",
+    "upgrade", "upgraded", "upgrades", "outperform", "buy rating", "strong buy",
+    "raises guidance", "raises forecast", "raises outlook", "record revenue",
+    "record earnings", "record quarter", "record profit", "all-time high",
+    "buyback", "share repurchase", "dividend increase", "special dividend",
+    "approval", "approved", "fda approval", "wins contract", "awarded contract",
+    "partnership", "acquires", "acquisition", "merger", "strategic deal",
+    "better than expected", "above expectations", "positive outlook",
+    "strong demand", "strong growth", "accelerating", "expanding",
+}
+_BEARISH_TERMS = {
+    "miss", "misses", "missed", "below expectations", "disappoints", "disappointing",
+    "downgrade", "downgraded", "downgrades", "underperform", "sell rating",
+    "lowers guidance", "cuts guidance", "reduces forecast", "lowers outlook",
+    "layoffs", "layoff", "job cuts", "workforce reduction", "restructuring",
+    "investigation", "probe", "sec investigation", "doj investigation",
+    "lawsuit", "sued", "class action", "settlement", "fine", "penalty",
+    "recall", "safety concern", "fda rejection", "rejected", "warning letter",
+    "guidance cut", "profit warning", "revenue warning", "loss widens",
+    "declining revenue", "declining sales", "weak demand", "slowing growth",
+    "bankruptcy", "default", "debt concern", "credit downgrade",
+    "ceo resign", "ceo departure", "executive departure",
+}
+
+
+def _score_headline(headline: str, summary: str) -> int:
+    """Return +1 (bullish), -1 (bearish), or 0 (neutral) for a single article."""
+    text = (headline + " " + summary).lower()
+    bull = sum(1 for t in _BULLISH_TERMS if t in text)
+    bear = sum(1 for t in _BEARISH_TERMS if t in text)
+    if bull > bear:
+        return 1
+    if bear > bull:
+        return -1
+    return 0
+
+
 def get_sentiment_context(symbols: list[str]) -> dict[str, int]:
-    """Return news mention count per symbol as a sentiment proxy."""
+    """
+    Return net sentiment score per symbol: positive = bullish, negative = bearish.
+    Scores headlines from Alpaca news directionally instead of just counting articles.
+    """
     from alpaca.data.requests import NewsRequest
     from alpaca.data.historical.news import NewsClient
-    from collections import Counter
+    from collections import defaultdict
 
-    counts: Counter = Counter()
+    scores: dict = defaultdict(int)
     try:
         nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
         news = nc.get_news(NewsRequest(symbols=symbols, limit=50))
         _articles = news.data.get('news', []) if isinstance(getattr(news, 'data', None), dict) else getattr(news, 'news', [])
         for article in _articles:
+            headline = (article.get('headline') if isinstance(article, dict) else getattr(article, 'headline', '')) or ''
+            summary  = (article.get('summary')  if isinstance(article, dict) else getattr(article, 'summary',  '')) or ''
+            direction = _score_headline(headline, summary)
             for sym in ((article.get('symbols') if isinstance(article, dict) else article.symbols) or []):
-                counts[sym] += 1
+                scores[sym] += direction
     except Exception as e:
         logger.warning(f"Could not fetch sentiment: {e}")
-    return dict(counts)
+    return dict(scores)
 
 
 def get_live_price(symbol: str) -> Optional[float]:

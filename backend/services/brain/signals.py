@@ -151,7 +151,8 @@ def _score_symbol(
     score += breakdown["volume"]
 
     # ── News sentiment ────────────────────────────────────────────────────────
-    breakdown["news"] = min(news_count * 5, 20)
+    # news_count is now a signed net score: +N bullish articles, -N bearish
+    breakdown["news"] = max(-15, min(20, news_count * 5))
     score += breakdown["news"]
 
     # ── RSI zone ─────────────────────────────────────────────────────────────
