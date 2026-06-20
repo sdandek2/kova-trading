@@ -181,10 +181,41 @@ all_candidates = score_universe(
 sys.stderr = sys.__stderr__
 elapsed = time.time() - t0
 
+_ok(f"Scored {len(all_candidates)} candidates in {elapsed:.0f}s")
+
+# ── 7b. Intraday momentum (mirrors production logic) ─────────────────────────
+_step("7b", "Intraday momentum (15-min MACD, 1 batch call)")
+try:
+    from services.alpaca_service import get_intraday_bars
+    from services.indicators import compute_macd as _imacd_fn
+    _intra_syms = [c.symbol for c in all_candidates]
+    if _intra_syms:
+        _intra_t0 = time.time()
+        _intra_bars = get_intraday_bars(_intra_syms, 20)
+        _intra_hits = 0
+        for _c in all_candidates:
+            _ibars = _intra_bars.get(_c.symbol, [])
+            if len(_ibars) >= 8:
+                _ic = [b["close"] for b in _ibars]
+                try:
+                    _ihist = float((_imacd_fn(_ic) or {}).get("histogram") or 0)
+                    _im = 8 if _ihist > 0.01 else (-8 if _ihist < -0.01 else 0)
+                    if _im != 0:
+                        _c.score += _im
+                        _c.score_breakdown["intraday_momentum"] = _im
+                        _intra_hits += 1
+                except Exception:
+                    pass
+        _ok(f"Intraday bars fetched in {time.time()-_intra_t0:.1f}s  "
+            f"({_intra_hits} symbols got momentum signal)")
+    else:
+        _warn("No candidates to fetch intraday bars for")
+except Exception as _intra_e:
+    _warn(f"Intraday momentum skipped: {_intra_e}")
+
 _min_trade_score = 55 if (regime and regime.regime == "bull") else 60
 above_threshold = [c for c in all_candidates if c.score >= _min_trade_score]
 near_miss       = [c for c in all_candidates if 50 <= c.score < _min_trade_score]
-_ok(f"Scored {len(all_candidates)} candidates in {elapsed:.0f}s")
 _ok(f"≥{_min_trade_score} (would trade): {len(above_threshold)}  |  50-{_min_trade_score-1} (near-miss): {len(near_miss)}")
 
 # ── 8. Score breakdown ────────────────────────────────────────────────────────

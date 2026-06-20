@@ -1618,6 +1618,45 @@ async def run_trading_cycle():
                     min_score=50,
                 )
             )
+            # ── Intraday momentum: 1 batch call for all top candidates ──────────
+            # Fetches today's 15-min bars in a single request and computes MACD
+            # from today's closes only — reflects what's happening THIS session.
+            # +8: intraday MACD positive (momentum building today)
+            # -8: intraday MACD negative (momentum fading today)
+            # Applied before threshold filter so a near-miss at 53 can reach 61
+            # on strong intraday momentum. Falls back silently if market closed.
+            try:
+                _top_syms_intra = [c.symbol for c in (_all_scored or [])]
+                if _top_syms_intra:
+                    _intraday_bars = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            alpaca_service.get_intraday_bars,
+                            _top_syms_intra,
+                            20,
+                        )
+                    )
+                    for _cand in (_all_scored or []):
+                        _ibars = _intraday_bars.get(_cand.symbol, [])
+                        if len(_ibars) >= 8:
+                            _ic = [b["close"] for b in _ibars]
+                            try:
+                                from services.indicators import compute_macd as _imacd_fn
+                                _imacd_data = _imacd_fn(_ic) or {}
+                                _ihist = float(_imacd_data.get("histogram") or 0)
+                                _im = 8 if _ihist > 0.01 else (-8 if _ihist < -0.01 else 0)
+                                if _im != 0:
+                                    _cand.score += _im
+                                    _cand.score_breakdown["intraday_momentum"] = _im
+                                    logger.debug(
+                                        f"Intraday {_cand.symbol}: "
+                                        f"hist={_ihist:.3f} → {_im:+d}pts → score={_cand.score}"
+                                    )
+                            except Exception:
+                                pass
+            except Exception as _intra_err:
+                logger.debug(f"Intraday momentum pass failed (non-fatal): {_intra_err}")
+
             # Bull regime: lower bar to 55 (regime bonus makes signals more reliable).
             # Chop/Bear: keep at 60 (no regime bonus, need stronger confirmation).
             _min_trade_score = 55 if (
