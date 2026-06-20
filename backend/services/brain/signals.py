@@ -344,17 +344,6 @@ def _score_symbol(
     is_leveraged = symbol in _LEVERAGED_ETFS
     is_inverse = symbol in _INVERSE_ETFS
 
-    # Broad/sector ETFs scored for reference only — Kova trades stocks, not ETFs.
-    # If one slips in via movers or news, block it here.
-    if symbol in _BROAD_ETFS:
-        return ScoredCandidate(
-            symbol=symbol, score=min(score, 49), signal_type="etf",
-            suggested_action="skip", price=price, rsi=rsi,
-            macd_hist=macd_hist, rs_percentile=rs_pct,
-            rel_volume=rel_vol, regime_aligned=False,
-            score_breakdown=breakdown, notes="ETF — not traded by Kova",
-        )
-
     # Check for heavy institutional put flow — this overrides the normal action
     # determination if the stock is already showing weakness (not in a strong uptrend)
     _heavy_put_short = False
