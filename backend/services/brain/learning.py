@@ -136,9 +136,22 @@ def _load_trades_from_db() -> list[dict]:
                     COALESCE(entry_hour_et,
                         EXTRACT(HOUR FROM entry_time)::int)       AS entry_hour_et,
                     (EXTRACT(DOW FROM entry_time)::int - 1)       AS entry_dow,
-                    CASE WHEN exit_price IS NOT NULL AND entry_price > 0
-                         THEN (exit_price - entry_price) / entry_price * 100
-                         ELSE NULL END                             AS pl_pct
+                    -- P1: use stored realized_pl_pct (side-aware) instead of recomputing.
+                    -- Fallback is also side-aware so old rows without realized_pl_pct
+                    -- aren't inverted for shorts.
+                    COALESCE(
+                        realized_pl_pct,
+                        CASE WHEN exit_price IS NOT NULL AND entry_price > 0
+                             THEN CASE WHEN COALESCE(side, 'long') = 'short'
+                                       THEN (entry_price - exit_price) / entry_price * 100
+                                       ELSE (exit_price - entry_price) / entry_price * 100
+                                  END
+                             ELSE NULL END
+                    )                                             AS pl_pct,
+                    rsi_at_entry,
+                    macd_at_entry,
+                    rs_percentile,
+                    vix_level
                 FROM position_log
                 WHERE exit_price IS NOT NULL
                   AND entry_price IS NOT NULL
@@ -147,8 +160,9 @@ def _load_trades_from_db() -> list[dict]:
                 LIMIT 2000
             """)
             rows = cur.fetchall()
-            cols = ["symbol", "signal_type", "regime", "entry_hour_et", "entry_dow", "pl_pct"]
-            return [dict(zip(cols, r)) for r in rows if r[-1] is not None]
+            cols = ["symbol", "signal_type", "regime", "entry_hour_et", "entry_dow",
+                    "pl_pct", "rsi_at_entry", "macd_at_entry", "rs_percentile", "vix_level"]
+            return [dict(zip(cols, r)) for r in rows if r[5] is not None]
     except Exception as e:
         logger.warning("learning: DB load failed (%s) — returning []", e)
         return []

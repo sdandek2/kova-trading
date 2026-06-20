@@ -2778,6 +2778,7 @@ async def run_trading_cycle():
                             "side": "short",
                         }
                 elif decision.action == "short" and fill_price > 0:
+                    _prev_scored_short = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     log_position_open(
                         symbol=decision.symbol,
                         entry_price=fill_price,
@@ -2789,11 +2790,14 @@ async def run_trading_cycle():
                         setup_type=_setup_type,
                         entry_hour_et=_entry_hour_et,
                         signal_type=_sig_type_entry or "short_candidate",
+                        rsi_at_entry=getattr(_prev_scored_short, "rsi", None),
+                        macd_at_entry=getattr(_prev_scored_short, "macd_hist", None),
+                        rs_percentile=getattr(_prev_scored_short, "rs_percentile", None),
+                        vix_level=getattr(_brain_regime, "vix_level", None),
                     )
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
                     _save_watermarks()
-                    _prev_scored_short = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     _previous_positions[decision.symbol] = {
                         "qty": decision.quantity,
                         "avg_entry_price": fill_price,
@@ -2803,6 +2807,7 @@ async def run_trading_cycle():
                         "score_breakdown": getattr(_prev_scored_short, "score_breakdown", {}) if _prev_scored_short else {},
                     }
                 elif decision.action == "buy" and fill_price > 0:
+                    _prev_scored = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     log_position_open(
                         symbol=decision.symbol,
                         entry_price=fill_price,
@@ -2814,12 +2819,14 @@ async def run_trading_cycle():
                         setup_type=_setup_type,
                         entry_hour_et=_entry_hour_et,
                         signal_type=_sig_type_entry or "momentum",
+                        rsi_at_entry=getattr(_prev_scored, "rsi", None),
+                        macd_at_entry=getattr(_prev_scored, "macd_hist", None),
+                        rs_percentile=getattr(_prev_scored, "rs_percentile", None),
+                        vix_level=getattr(_brain_regime, "vix_level", None),
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price
                     _save_watermarks()
-                    # Tag in previous_positions so close detection knows entry price
-                    _prev_scored = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                     _previous_positions[decision.symbol] = {
                         "qty": decision.quantity,
                         "avg_entry_price": fill_price,

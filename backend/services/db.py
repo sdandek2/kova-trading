@@ -146,6 +146,22 @@ def _ensure_table(conn):
             ADD COLUMN IF NOT EXISTS signal_type VARCHAR(50)
         """)
         cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS rsi_at_entry FLOAT
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS macd_at_entry FLOAT
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS rs_percentile FLOAT
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS vix_level TEXT
+        """)
+        cur.execute("""
             ALTER TABLE near_miss_log
             ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(20) DEFAULT 'below_threshold'
         """)
@@ -611,7 +627,9 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
                       strategy: str = None, claude_reasoning: str = None,
                       market_regime: str = None, side: str = "long",
                       setup_type: str = None, entry_hour_et: int = None,
-                      signal_type: str = None) -> Optional[int]:
+                      signal_type: str = None,
+                      rsi_at_entry: float = None, macd_at_entry: float = None,
+                      rs_percentile: float = None, vix_level: str = None) -> Optional[int]:
     """
     Record that a new position was opened.
     side: "long" | "short"
@@ -631,12 +649,12 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
                 INSERT INTO position_log
                     (symbol, side, entry_time, entry_price, quantity, strategy,
                      claude_reasoning, market_regime, setup_type, entry_hour_et,
-                     signal_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
                   strategy, claude_reasoning, market_regime, setup_type, entry_hour_et,
-                  signal_type))
+                  signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:
