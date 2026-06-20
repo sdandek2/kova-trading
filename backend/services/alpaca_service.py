@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -637,15 +638,17 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
         quote_request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
         quotes = data_client.get_stock_latest_quote(quote_request)
 
-        # 30-day bars — enough to get 20 trading days for avg_volume + 5-day change
+        # 310-day bars (~200 trading days) — needed for MA200, MACD (35 bars min), RSI accuracy
+        # limit=10000 avoids the 1000-point-total default cap across all symbols
         end = datetime.now(timezone.utc)
-        start = end - timedelta(days=30)
+        start = end - timedelta(days=310)
         bars_request = StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
             feed="iex",
             start=start,
             end=end,
+            limit=10000,
         )
         bars = data_client.get_stock_bars(bars_request)
 
@@ -689,15 +692,23 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
 
             relative_volume = round(projected_volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
+            n = len(closing_prices)
+            ma50   = round(sum(closing_prices[-50:]) / 50, 4)   if n >= 50  else None
+            ma200  = round(sum(closing_prices[-200:]) / 200, 4) if n >= 200 else None
+            year_high = round(max(high_prices), 4) if high_prices else None
+
             snapshot[symbol] = {
                 "current_price": current_price,
                 "five_day_change_pct": five_day_change,
-                "closing_prices": closing_prices,  # included for RSI/MACD computation in Step 1
+                "closing_prices": closing_prices,  # RSI/MACD/MA20 — now 200 bars deep
                 "high_prices": high_prices,
                 "low_prices": low_prices,
                 "volume": volume,
                 "avg_volume": avg_volume,
                 "relative_volume": relative_volume,
+                "ma50": ma50,
+                "ma200": ma200,
+                "year_high": year_high,
             }
     except Exception as e:
         logger.error(f"Error fetching light snapshot: {e}")

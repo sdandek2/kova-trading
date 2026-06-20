@@ -205,21 +205,33 @@ def _score_symbol(
         except Exception:
             pass
 
-    try:
-        from services.brain.connectors.fmp import get_estimate_revision
-        rev = get_estimate_revision(symbol, current_price=price)
-        if rev.get("signal") not in ("unavailable", "unchanged"):
-            breakdown["earnings_rev"] = rev.get("conviction_boost", 0)
-            score += breakdown["earnings_rev"]
-    except Exception:
-        pass
+    # fmp.py (analyst price targets) disabled — FMP free tier only covers a subset
+    # of symbols creating scoring bias. Re-enable once subscribed to FMP Starter.
+    # try:
+    #     from services.brain.connectors.fmp import get_estimate_revision
+    #     rev = get_estimate_revision(symbol, current_price=price)
+    #     if rev.get("signal") not in ("unavailable", "unchanged"):
+    #         breakdown["earnings_rev"] = rev.get("conviction_boost", 0)
+    #         score += breakdown["earnings_rev"]
+    # except Exception:
+    #     pass
 
+    # Trend strength: MA50/MA200/52w-high from snapshot (Alpaca bars, all symbols, no quota)
+    # Replaces quiver.py FMP connector which only covered FMP-whitelisted symbols.
     try:
-        from services.brain.connectors.quiver import get_darkpool_signal
-        dp = get_darkpool_signal(symbol)
-        if dp.get("signal") not in ("unavailable", "neutral"):
-            breakdown["darkpool"] = dp.get("conviction_boost", 0)
-            score += breakdown["darkpool"]
+        _ma50      = data.get("ma50")
+        _ma200     = data.get("ma200")
+        _year_high = data.get("year_high")
+        if _ma50 and price > 0 and _year_high:
+            _above_50   = price > _ma50
+            _above_200  = _ma200 and price > _ma200
+            _golden     = _ma200 and _ma50 > _ma200
+            _near_high  = (price - _year_high) / _year_high >= -0.05
+            if _near_high and _above_50 and _above_200:
+                breakdown["darkpool"] = 8
+            elif _above_50 and _golden:
+                breakdown["darkpool"] = 4
+            score += breakdown.get("darkpool", 0)
     except Exception:
         pass
 
