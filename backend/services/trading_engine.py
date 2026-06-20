@@ -153,6 +153,9 @@ _last_regime: Optional[str] = None        # bull | bear | chop
 _last_vix_level: Optional[str] = None     # low | normal | high | extreme
 _last_regime_confidence: Optional[float] = None
 _last_regime_capital_mult: float = 1.0
+# Regime cache: recalculate at most every 30 min to prevent intraday whipsawing
+_regime_cache = None          # RegimeResult | None
+_regime_cache_time: Optional[datetime] = None
 
 
 def _save_watermarks() -> None:
@@ -287,7 +290,7 @@ async def run_trading_cycle():
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
            _ai_sold_symbols, _earnings_day_positions, \
            _last_regime, _last_vix_level, _last_regime_confidence, _last_regime_capital_mult, \
-           _daily_rejection_date
+           _daily_rejection_date, _regime_cache, _regime_cache_time
     import uuid
     _current_cycle_id = str(uuid.uuid4())[:8]  # short 8-char id per cycle
 
@@ -579,7 +582,15 @@ async def run_trading_cycle():
             _spy_data = snapshot_light.get("SPY", {})
             _spy_prices = _spy_data.get("closing_prices", [])
             _vix_raw = macro.get("vix_value")  # numeric VIX if available
-            _brain_regime = detect_regime(_spy_prices, _vix_raw, snapshot_light)
+            _now_for_cache = datetime.now(timezone.utc)
+            if (_regime_cache is not None and _regime_cache_time is not None
+                    and (_now_for_cache - _regime_cache_time).total_seconds() < 1800):
+                _brain_regime = _regime_cache
+                logger.info(f"Brain regime (cached): {_brain_regime.regime.upper()} — reusing 30-min result")
+            else:
+                _brain_regime = detect_regime(_spy_prices, _vix_raw, snapshot_light)
+                _regime_cache = _brain_regime
+                _regime_cache_time = _now_for_cache
             logger.info(f"Brain regime: {_brain_regime.regime.upper()} (score={_brain_regime.score}, confidence={_brain_regime.confidence:.0%})")
 
             # Block leveraged ETF buys when regime is not bull or VIX is high
@@ -755,7 +766,10 @@ async def run_trading_cycle():
                     quantity=prev.get("qty"),
                     entry_time=prev.get("entry_time"),
                     side=prev.get("side", "long"),
-                    market_regime=macro.get("market_regime") if macro else None,
+                    market_regime=(
+                        getattr(_brain_regime, "regime", None)
+                        or (macro.get("market_regime") if macro else None)
+                    ),
                 )
                 # Log signal performance for weekly weight adjustment
                 try:

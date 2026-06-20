@@ -169,8 +169,11 @@ Strategy: {strategy.get('name')} — {strategy.get('prompt_modifier', '')}
 - Inverse ETFs (SQQQ/SPXU/TZA/SDOW): always BUY action — they profit from falls.
 - Leveraged ETFs: only in BULL regime with low/normal VIX.
 - NEVER issue sell or buy on a [SHORT] position — engine manages those.
-- take_profit_pct: 0.15-0.30 stocks, 0.25-0.50 leveraged ETFs, 0.08-0.15 inverse ETFs
+- take_profit_pct: 0.05-0.09 stocks (9% hard cap enforced by engine), 0.10-0.20 leveraged ETFs, 0.06-0.09 inverse ETFs
 - stop_loss_pct: 0.03-0.05 (tight — cut losers fast)
+- confidence=high: signal score ≥ 70 AND regime_aligned AND no earnings today — triggers options + full Kelly size
+- confidence=medium: score 45-69 or minor concerns (elevated VIX, slightly off regime)
+- confidence=low: score < 45 or multiple red flags — skip unless nothing else exists
 {f"⛔ Earnings risk stocks (avoid or tiny position only): {', '.join(k for k,v in (earnings_map or {}).items() if v == 'today/tomorrow')}" if earnings_map else ""}
 
 Return valid JSON only — no markdown:

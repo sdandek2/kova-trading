@@ -324,10 +324,10 @@ def _score_symbol(
         suggested_action = "buy" if regime in ("bull", "chop") else "skip"
     elif macd_hist is not None and macd_hist > 0.05 and rel_vol >= 1.5:
         signal_type = "breakout"
-        suggested_action = "buy"
+        suggested_action = "buy" if regime != "bear" else "skip"
     elif macd_hist is not None and macd_hist > 0:
         signal_type = "momentum"
-        suggested_action = "buy"
+        suggested_action = "buy" if regime != "bear" else "skip"
     else:
         signal_type = "reversal"
         suggested_action = "skip"
@@ -401,7 +401,7 @@ def score_universe(
     sentiment: dict,
     news_headlines: list,
     top_n: int = 12,
-    min_score: int = 35,
+    min_score: int = 50,
 ) -> list[ScoredCandidate]:
     """
     Score every symbol in universe_snapshot and return top_n candidates.
@@ -442,8 +442,7 @@ def score_universe(
         top_str = ", ".join(f"{c.symbol}({c.score})" for c in filtered[:5])
         logger.info(f"Signal scores — top {len(filtered)}: {top_str}")
     else:
-        logger.info("Signal scoring: no candidates above min_score — returning top 7 unfiltered")
-        filtered = candidates[:7]
+        logger.info(f"Signal scoring: no candidates above min_score={min_score} — holding this cycle")
 
     return filtered
 
