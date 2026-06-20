@@ -388,6 +388,35 @@ def _score_symbol(
         signal_type = "reversal"
         suggested_action = "skip"
 
+    # ── Short-context RSI/MACD correction ────────────────────────────────────
+    # RSI and MACD were scored above from a long perspective.
+    # For short candidates: overbought RSI and negative MACD are POSITIVES,
+    # so replace those scores with short-appropriate values.
+    if signal_type == "short_candidate":
+        if rsi is not None:
+            if rsi >= 75:
+                short_rsi = 12    # deeply overbought = prime short entry
+            elif rsi >= 65:
+                short_rsi = 6     # stretched = decent setup
+            elif rsi >= 50:
+                short_rsi = 0
+            else:
+                short_rsi = -10   # oversold = bad short entry
+            score += short_rsi - breakdown["rsi"]
+            breakdown["rsi"] = short_rsi
+
+        if macd_hist is not None:
+            if macd_hist < -0.10:
+                short_macd = 15   # momentum broken down = strong confirmation
+            elif macd_hist < 0:
+                short_macd = 8    # turning negative = early entry signal
+            elif macd_hist < 0.5:
+                short_macd = 0    # still positive but fading
+            else:
+                short_macd = -10  # strongly bullish MACD = fight the trend
+            score += short_macd - breakdown["macd"]
+            breakdown["macd"] = short_macd
+
     # ── Regime alignment bonus/penalty ───────────────────────────────────────
     regime_aligned = False
     if regime == "bull" and suggested_action == "buy":
@@ -404,7 +433,10 @@ def _score_symbol(
     elif regime == "chop" and is_inverse:
         breakdown["regime"] = -15  # inverse ETFs decay in sideways markets
     elif regime == "chop" and signal_type == "oversold":
-        breakdown["regime"] = 10   # mean reversion works in chop
+        breakdown["regime"] = 10   # oversold bounce — mean reversion works in chop
+        regime_aligned = True
+    elif regime == "chop" and signal_type == "short_candidate":
+        breakdown["regime"] = 8    # overbought fade — mirror of oversold bounce
         regime_aligned = True
     else:
         breakdown["regime"] = 0
