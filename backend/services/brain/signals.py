@@ -101,6 +101,34 @@ def _score_symbol(
     rel_vol = data.get("relative_volume", 1.0)
     news_count = (sentiment or {}).get(symbol, 0)
 
+    # ── Liquidity + penny stock gate ─────────────────────────────────────────
+    # Skip if price < $5 (penny stocks: wide spreads, manipulation risk).
+    # Skip if neither avg nor today's dollar volume clears the floor:
+    #   avg_dollar_vol < $5M  AND  today_dollar_vol < $2M
+    # A catalyst-day mover (today_dollar_vol >= $2M) always passes even if
+    # its historical average is thin — that's the trade we want to catch.
+    if price > 0:
+        _avg_vol   = data.get("avg_volume", 0) or 0
+        _today_vol = data.get("volume", 0) or 0
+        _avg_dv    = _avg_vol   * price
+        _today_dv  = _today_vol * price
+        if price < 5.0:
+            return ScoredCandidate(
+                symbol=symbol, score=0, signal_type="skip",
+                suggested_action="skip", price=price, rsi=None,
+                macd_hist=None, rs_percentile=0, rel_volume=rel_vol,
+                regime_aligned=False, score_breakdown={},
+                notes=f"Penny stock (${price:.2f})",
+            )
+        if _avg_dv < 5_000_000 and _today_dv < 2_000_000:
+            return ScoredCandidate(
+                symbol=symbol, score=0, signal_type="skip",
+                suggested_action="skip", price=price, rsi=None,
+                macd_hist=None, rs_percentile=0, rel_volume=rel_vol,
+                regime_aligned=False, score_breakdown={},
+                notes=f"Low liquidity (avg ${_avg_dv/1e6:.1f}M, today ${_today_dv/1e6:.1f}M)",
+            )
+
     rsi = _safe_rsi(prices) if len(prices) >= 15 else None
     macd_data = _safe_macd(prices) if len(prices) >= 35 else {}
     macd_hist = macd_data.get("histogram")
