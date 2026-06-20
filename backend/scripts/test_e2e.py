@@ -341,6 +341,176 @@ else:
                 print(line)
         print()
 
+# ── Shared helper for printing decisions ─────────────────────────────────────
+def _print_decisions(dec_list):
+    for i, d in enumerate(dec_list, 1):
+        print(f"  Decision {i}: {d.action.upper()} {d.symbol or ''}")
+        if d.quantity:
+            print(f"    quantity  : {d.quantity}")
+        if d.reasoning:
+            words = d.reasoning.split()
+            line = "    reasoning : "
+            for w in words:
+                if len(line) + len(w) > 72:
+                    print(line)
+                    line = "               " + w + " "
+                else:
+                    line += w + " "
+            if line.strip():
+                print(line)
+        print()
+
+# ── Test A: Sell / Rotation ───────────────────────────────────────────────────
+_header("TEST A: SELL / ROTATION (mock open positions)")
+
+from types import SimpleNamespace as _NS
+
+_mock_positions = [
+    _NS(symbol="NVDA", side="long", qty=5,  avg_entry_price=280.00, unrealized_pl_percent=+18.5),
+    _NS(symbol="INTC", side="long", qty=15, avg_entry_price=145.00, unrealized_pl_percent=-8.2),
+    _NS(symbol="META", side="long", qty=3,  avg_entry_price=320.00, unrealized_pl_percent=+2.1),
+]
+
+print("  Mock positions injected (one strong winner, one loser, one flat):")
+for p in _mock_positions:
+    print(f"    {p.symbol}: {p.qty}sh @ ${p.avg_entry_price:.2f}  P&L={p.unrealized_pl_percent:+.1f}%")
+print()
+
+_decisions_rot = []
+if above_threshold:
+    try:
+        t0 = time.time()
+        _decisions_rot = decide(
+            scored_candidates=above_threshold,
+            positions=_mock_positions,
+            account_cash=cash * 0.6,   # 40% already deployed in mock positions
+            portfolio_value=portfolio,
+            regime_result=regime,
+            rs_map=rs_map,
+            kelly_history=kelly_history,
+            strategy=strategy,
+            news_headlines=news_headlines,
+            rotation_context=(
+                "## Rotation Opportunities\nCash: 60% available (40% in open positions)\n"
+                "  NVDA: P&L=+18.5% signal=72 MACD=0.200 RSI=74 → STRONG\n"
+                "  INTC: P&L=-8.2%  signal=68 MACD=0.672 RSI=64 → WEAK (down, consider exit)\n"
+                "  META: P&L=+2.1%  signal=55 MACD=0.100 RSI=58 → MODERATE\n"
+                "Rotate if a new candidate scores 15+ points above existing position's signal score."
+                " Sells execute before buys.\n"
+            ),
+        )
+        _ok(f"LLM responded in {time.time()-t0:.1f}s")
+        print()
+        _print_decisions(_decisions_rot)
+        _sells = [d for d in _decisions_rot if d.action == "sell"]
+        _buys_rot = [d for d in _decisions_rot if d.action == "buy"]
+        if _sells:
+            _ok(f"Rotation working: {len(_sells)} sell(s), {len(_buys_rot)} buy(s)")
+        else:
+            _warn("No sells issued — Claude may not be rotating weak positions (INTC -8.2%)")
+    except Exception as e:
+        _fail(f"Rotation test failed: {e}")
+else:
+    _warn("Skipping rotation test — no scored candidates above threshold")
+
+# ── Test B: Bear regime — shorts + inverse ETFs ───────────────────────────────
+_header("TEST B: BEAR REGIME — shorts + inverse ETFs")
+
+from services.brain.regime import RegimeResult as _RegimeResult
+from services.brain.signals import score_universe as _score_bear, ScoredCandidate as _SC
+
+_bear_regime = _RegimeResult(
+    regime="bear",
+    confidence=0.80,
+    vix_level="high",
+    spy_trend="below_ma20",
+    breadth_pct=22.0,
+    score=-3,
+    notes="Simulated bear regime for test — SPY below all MAs, VIX elevated",
+)
+print(f"  Forcing: BEAR | VIX=HIGH | breadth=22% | confidence=80%")
+print(f"  Re-scoring universe with bear regime (~15s)...\n")
+
+sys.stderr = _devnull
+t0 = time.time()
+_bear_all = _score_bear(
+    universe_snapshot=snapshot,
+    regime_result=_bear_regime,
+    rs_map=rs_map,
+    sentiment=sentiment,
+    news_headlines=news_headlines,
+    top_n=30,
+    min_score=50,
+)
+sys.stderr = sys.__stderr__
+_ok(f"Bear scoring: {len(_bear_all)} candidates in {time.time()-t0:.0f}s")
+
+_bear_shorts = [c for c in _bear_all if c.suggested_action == "short" and c.score >= 60]
+_bear_buys   = [c for c in _bear_all if c.suggested_action == "buy"   and c.score >= 60]
+_ok(f"Bear candidates ≥60: {len(_bear_buys)} buy(s)  |  {len(_bear_shorts)} short(s)")
+
+if _bear_shorts:
+    print("\n  SHORT CANDIDATES:")
+    for c in _bear_shorts[:5]:
+        _rsi_b = f"{c.rsi:.0f}" if c.rsi else "n/a"
+        bd = {k: v for k, v in (c.score_breakdown or {}).items() if v != 0}
+        bd_str = "  ".join(f"{k}={v:+d}" for k, v in sorted(bd.items(), key=lambda x: -abs(x[1])))
+        print(f"    [{c.score:>3}] {c.symbol:<6}  ${c.price:<8.2f}  RSI={_rsi_b}")
+        if bd_str:
+            print(f"           breakdown: {bd_str}")
+
+# Always inject mock inverse ETFs so that path is tested even in bull markets
+_mock_inverse = [
+    _SC(symbol="SQQQ", score=72, signal_type="inverse_etf", suggested_action="buy",
+        price=18.50, rsi=45.0, macd_hist=-0.12, rs_percentile=85, rel_volume=2.1,
+        regime_aligned=True,
+        score_breakdown={"regime": 25, "rs": 25, "macd": 15, "volume": 8},
+        notes="Inverse ETF — QQQ 3× short exposure (injected for test)"),
+    _SC(symbol="SOXS", score=65, signal_type="inverse_etf", suggested_action="buy",
+        price=9.20, rsi=42.0, macd_hist=-0.08, rs_percentile=78, rel_volume=1.8,
+        regime_aligned=True,
+        score_breakdown={"regime": 25, "rs": 20, "macd": 10, "volume": 8, "rsi": 5},
+        notes="Inverse ETF — SOXX 3× short exposure (injected for test)"),
+]
+_bear_above = sorted(_bear_buys + _bear_shorts + _mock_inverse,
+                     key=lambda c: c.score, reverse=True)
+_ok(f"Injected SQQQ(72) + SOXS(65) mock inverse ETFs to test bear path")
+
+_decisions_bear = []
+if _bear_above:
+    print(f"\n  Sending {len(_bear_above)} bear candidates to Claude...\n")
+    try:
+        t0 = time.time()
+        _decisions_bear = decide(
+            scored_candidates=_bear_above,
+            positions=[],
+            account_cash=cash,
+            portfolio_value=portfolio,
+            regime_result=_bear_regime,
+            rs_map=rs_map,
+            kelly_history=kelly_history,
+            strategy=strategy,
+            news_headlines=news_headlines,
+        )
+        _ok(f"Bear LLM responded in {time.time()-t0:.1f}s")
+        print()
+        _print_decisions(_decisions_bear)
+        _short_dec = [d for d in _decisions_bear if d.action == "short"]
+        _inv_dec   = [d for d in _decisions_bear
+                      if d.symbol in {"SQQQ","SOXS","SPXS","SPXU","TECS","TZA","SDOW","SRTY"}]
+        if _short_dec:
+            _ok(f"Short decisions: {len(_short_dec)} short(s) issued")
+        else:
+            _warn("No shorts issued in bear regime — check short scoring")
+        if _inv_dec:
+            _ok(f"Inverse ETF decisions: {len(_inv_dec)} picked ({', '.join(d.symbol for d in _inv_dec)})")
+        else:
+            _warn("No inverse ETFs picked in bear regime — Claude may be avoiding them")
+    except Exception as e:
+        _fail(f"Bear regime test failed: {e}")
+else:
+    _warn("No bear candidates to test")
+
 # ── 10. Pipeline health summary ───────────────────────────────────────────────
 _header("PIPELINE HEALTH SUMMARY")
 
@@ -355,6 +525,8 @@ checks = {
     "News flowing":                      len(news_headlines) > 0,
     "Candidates scored":                 len(all_candidates) > 0,
     "LLM responded":                     above_threshold == [] or len(decisions) > 0,
+    "Sell/rotation path":                len(_decisions_rot) > 0,
+    "Bear/short/inverse path":           len(_decisions_bear) > 0,
 }
 
 # Signal weights: enhancement only — bot works fine on connector defaults.
