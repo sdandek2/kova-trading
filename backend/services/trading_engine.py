@@ -1740,8 +1740,11 @@ async def run_trading_cycle():
             # have 105 minutes to play out — not enough for momentum to work.
             # Analysis showed 1/8 EOD-flat exits were winners (avg -$32):
             # the root cause was late-day entries with no time to reach TP.
-            # Exception: stocks with earnings TODAY after close get until 3:15 PM
-            # to capture the pre-earnings run into the close (forced EOD exit anyway).
+            #
+            # Exceptions (allow entry up to 3:15 PM):
+            #   1. Earnings today/tomorrow — pre-earnings run into the close
+            #   2. Breaking news cycle (_urgent_ctx non-empty) — news-driven
+            #      moves have immediate catalysts that play out within minutes
             if decision.action in ("buy", "short"):
                 try:
                     from zoneinfo import ZoneInfo as _ZI_eod_b
@@ -1751,13 +1754,19 @@ async def run_trading_cycle():
                 _mins_now = _now_et_eod_b.hour * 60 + _now_et_eod_b.minute
                 _has_earnings_today = (earnings_map and
                                        earnings_map.get(decision.symbol) == "today/tomorrow")
-                _entry_cutoff = 15 * 60 + 15 if _has_earnings_today else 14 * 60
+                _is_news_driven = bool(_urgent_ctx)
+                if _has_earnings_today or _is_news_driven:
+                    _entry_cutoff = 15 * 60 + 15  # 3:15 PM for catalyst trades
+                    _reason_tag = "earnings play" if _has_earnings_today else "breaking news"
+                else:
+                    _entry_cutoff = 14 * 60        # 2:00 PM for regular trades
+                    _reason_tag = ""
                 if _mins_now >= _entry_cutoff:
-                    _cutoff_str = "3:15 PM" if _has_earnings_today else "2:00 PM"
+                    _cutoff_str = "3:15 PM" if _entry_cutoff > 14 * 60 else "2:00 PM"
                     logger.info(
                         f"Late-day entry block: skipping {decision.action} {decision.symbol} "
                         f"after {_cutoff_str} ET"
-                        + (" (earnings play)" if _has_earnings_today else "")
+                        + (f" ({_reason_tag})" if _reason_tag else "")
                     )
                     continue
 
