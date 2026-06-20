@@ -8,15 +8,46 @@ Run locally with Railway env vars:
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-TEST_SYMBOLS = ["SOXL", "TQQQ", "MU", "NVDA", "RXRX", "AAPL"]
+print("=" * 60)
+print("STRESS TEST: snapshot_light — real universe")
+print("  Batches of 30, 10-hour cache, MA50/MA200/year_high + MACD/RSI")
+print("=" * 60)
 
-print("=" * 60)
-print("TEST: snapshot_light — bars depth + MA50/MA200/year_high + MACD/RSI")
-print("=" * 60)
+print("\nFetching real universe (same as live trading)...")
+import time
+from services.alpaca_service import get_tradeable_universe
+t0 = time.time()
+TEST_SYMBOLS = get_tradeable_universe()
+print(f"  Universe: {len(TEST_SYMBOLS)} symbols  ({time.time()-t0:.1f}s)")
 
 from services.alpaca_service import get_market_snapshot_light
-snap = get_market_snapshot_light(TEST_SYMBOLS)
 
+print(f"\nCall 1 (cold — fetches bars from Alpaca):")
+t0 = time.time()
+snap = get_market_snapshot_light(TEST_SYMBOLS)
+t1 = time.time()
+print(f"  Elapsed: {t1-t0:.1f}s")
+
+print(f"\nCall 2 (warm — should hit cache, only fetches live quotes):")
+t0 = time.time()
+snap2 = get_market_snapshot_light(TEST_SYMBOLS)
+t1 = time.time()
+print(f"  Elapsed: {t1-t0:.1f}s  (should be much faster)")
+
+# Analyze first call results
+got_ma50  = sum(1 for s in TEST_SYMBOLS if snap.get(s, {}).get("ma50"))
+got_ma200 = sum(1 for s in TEST_SYMBOLS if snap.get(s, {}).get("ma200"))
+got_price = sum(1 for s in TEST_SYMBOLS if snap.get(s, {}).get("current_price"))
+no_data   = [s for s in TEST_SYMBOLS if not snap.get(s)]
+
+print(f"\nResults across {len(TEST_SYMBOLS)} symbols:")
+print(f"  Got MA50:          {got_ma50}/{len(TEST_SYMBOLS)}")
+print(f"  Got MA200:         {got_ma200}/{len(TEST_SYMBOLS)}")
+print(f"  Got current_price: {got_price}/{len(TEST_SYMBOLS)}")
+if no_data:
+    print(f"  No data at all:    {no_data}")
+
+print(f"\nAll {len(TEST_SYMBOLS)} symbols:")
 all_passed = True
 for sym in TEST_SYMBOLS:
     d = snap.get(sym)

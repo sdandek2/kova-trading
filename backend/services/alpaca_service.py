@@ -1,7 +1,14 @@
 from __future__ import annotations
 import logging
+import time as _time_module
 from datetime import datetime, timezone
 from typing import Optional
+
+# ── Bars cache (MA50/MA200/year_high/closing_prices — daily values, stable intraday) ──
+_bars_cache: dict = {}        # symbol → {closing_prices, high_prices, low_prices, ma50, ma200, year_high, avg_volume}
+_bars_cache_ts: float = 0.0  # last fetch timestamp
+_BARS_CACHE_TTL = 10 * 3600  # 10 hours — covers full trading day
+_BARS_BATCH_SIZE = 30         # max symbols per Alpaca bars request (30×213 = 6,390 < 10,000 cap)
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -521,8 +528,9 @@ def get_tradeable_universe() -> list[str]:
         nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
         news = nc.get_news(NewsRequest(limit=50))
         news_symbols = []
-        for article in news.news:
-            news_symbols.extend(article.symbols or [])
+        _articles = news.data.get('news', []) if isinstance(getattr(news, 'data', None), dict) else getattr(news, 'news', [])
+        for article in _articles:
+            news_symbols.extend((article.get('symbols') if isinstance(article, dict) else article.symbols) or [])
         top_news = [sym for sym, _ in Counter(news_symbols).most_common(50)]
         add(top_news, "news")
         logger.info(f"Top news symbols: {top_news[:10]}")
@@ -625,90 +633,136 @@ def get_tradeable_universe() -> list[str]:
 
 
 @track_api("alpaca_market_data")
+def _fetch_bars_batch(symbols: list[str]) -> dict:
+    """
+    Fetch 310 days of daily bars for symbols in batches of _BARS_BATCH_SIZE
+    (Alpaca caps at 10,000 total data points per request; 40 syms × 213 bars = 8,520).
+    Returns dict: symbol → {closing_prices, high_prices, low_prices, ma50, ma200, year_high, avg_volume}
+    """
+    from datetime import timedelta
+    result: dict = {}
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=310)
+
+    for i in range(0, len(symbols), _BARS_BATCH_SIZE):
+        batch = symbols[i: i + _BARS_BATCH_SIZE]
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=batch,
+                timeframe=TimeFrame.Day,
+                feed="iex",
+                start=start,
+                end=end,
+                limit=10000,
+            )
+            bars_data = data_client.get_stock_bars(req).data
+        except Exception as e:
+            logger.warning(f"Bars batch {i//40 + 1} failed: {e}")
+            continue
+
+        for sym in batch:
+            sym_bars = bars_data.get(sym, [])
+            if not sym_bars:
+                continue
+            closes  = [float(b.close) for b in sym_bars]
+            highs   = [float(b.high)  for b in sym_bars]
+            lows    = [float(b.low)   for b in sym_bars]
+            n       = len(closes)
+            volumes = [int(b.volume) for b in sym_bars]
+            hist_vols = volumes[:-1] if len(volumes) > 1 else volumes
+            last_20   = hist_vols[-20:] if len(hist_vols) >= 20 else hist_vols
+            result[sym] = {
+                "closing_prices": closes,
+                "high_prices":    highs,
+                "low_prices":     lows,
+                "ma50":      round(sum(closes[-50:])  / 50,  4) if n >= 50  else None,
+                "ma200":     round(sum(closes[-200:]) / 200, 4) if n >= 200 else None,
+                "year_high": round(max(highs), 4) if highs else None,
+                "avg_volume": int(sum(last_20) / len(last_20)) if last_20 else 0,
+            }
+    return result
+
+
 def get_market_snapshot_light(symbols: list[str]) -> dict:
     """
-    Lightweight snapshot — only current price + 5-day change.
-    Used for broad Step 1 scan across hundreds of stocks.
-    No historical bars needed, just latest quote + recent change.
+    Snapshot for broad universe scan — live prices + bars-derived signals.
+
+    Bars data (MA50/MA200/year_high/closing_prices) is cached 10 hours:
+    daily values don't change intraday, so first cycle of the day fetches
+    in batches of 40 symbols; all subsequent cycles hit the cache.
+    Live prices and intraday volume are always fetched fresh.
     """
+    global _bars_cache, _bars_cache_ts
     snapshot = {}
     try:
-        from datetime import timedelta
-        # Batch quotes
+        # ── Bars: use cache or re-fetch ───────────────────────────────────────
+        now = _time_module.time()
+        missing = [s for s in symbols if s not in _bars_cache]
+        cache_stale = (now - _bars_cache_ts) > _BARS_CACHE_TTL
+
+        if cache_stale or missing:
+            fetch_syms = symbols if cache_stale else missing
+            label = "full refresh" if cache_stale else f"{len(missing)} new symbols"
+            logger.info(f"Bars cache: fetching {len(fetch_syms)} symbols ({label})")
+            fresh = _fetch_bars_batch(fetch_syms)
+            _bars_cache.update(fresh)
+            if cache_stale:
+                # Evict symbols no longer in universe
+                _bars_cache = {k: v for k, v in _bars_cache.items() if k in set(symbols)}
+            _bars_cache_ts = now
+        else:
+            logger.debug(f"Bars cache: serving {len(symbols)} symbols from cache")
+
+        # ── Live quotes (always fresh) ────────────────────────────────────────
         quote_request = StockLatestQuoteRequest(symbol_or_symbols=symbols)
         quotes = data_client.get_stock_latest_quote(quote_request)
 
-        # 310-day bars (~200 trading days) — needed for MA200, MACD (35 bars min), RSI accuracy
-        # limit=10000 avoids the 1000-point-total default cap across all symbols
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=310)
-        bars_request = StockBarsRequest(
-            symbol_or_symbols=symbols,
-            timeframe=TimeFrame.Day,
-            feed="iex",
-            start=start,
-            end=end,
-            limit=10000,
-        )
-        bars = data_client.get_stock_bars(bars_request)
-
-        bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
         for symbol in symbols:
+            cached = _bars_cache.get(symbol, {})
+            closing_prices = cached.get("closing_prices", [])
+            high_prices    = cached.get("high_prices", [])
+            low_prices     = cached.get("low_prices", [])
+            avg_volume     = cached.get("avg_volume", 0)
+
             quote = quotes.get(symbol)
             current_price = float(quote.ask_price) if quote and quote.ask_price else None
 
-            symbol_bars = bars_dict.get(symbol, [])
-            closing_prices = [float(b.close) for b in symbol_bars]
-            high_prices = [float(b.high) for b in symbol_bars]
-            low_prices = [float(b.low) for b in symbol_bars]
             five_day_change = None
             if closing_prices and len(closing_prices) >= 6:
-                oldest_5d = closing_prices[-6]
-                newest = closing_prices[-1]
-                five_day_change = round((newest - oldest_5d) / oldest_5d * 100, 2) if oldest_5d else None
+                five_day_change = round(
+                    (closing_prices[-1] - closing_prices[-6]) / closing_prices[-6] * 100, 2
+                ) if closing_prices[-6] else None
             elif closing_prices and len(closing_prices) >= 2:
-                oldest = closing_prices[0]
-                newest = closing_prices[-1]
-                five_day_change = round((newest - oldest) / oldest * 100, 2) if oldest else None
+                five_day_change = round(
+                    (closing_prices[-1] - closing_prices[0]) / closing_prices[0] * 100, 2
+                ) if closing_prices[0] else None
 
-            volume = int(symbol_bars[-1].volume) if symbol_bars else 0
-            volumes = [int(b.volume) for b in symbol_bars]
-            # Exclude today's partial bar from the historical average
-            historical_volumes = volumes[:-1] if len(volumes) > 1 else volumes
-            last_20_volumes = historical_volumes[-20:] if len(historical_volumes) >= 20 else historical_volumes
-            avg_volume = int(sum(last_20_volumes) / len(last_20_volumes)) if last_20_volumes else 0
+            volume = int(quote.ask_size or 0) if quote else 0
 
-            # Project today's partial volume to a full-day estimate based on time elapsed
+            # Project today's partial volume to full-day estimate
             market_open_minutes = 9.5 * 60
             market_close_minutes = 16.0 * 60
             total_session_minutes = market_close_minutes - market_open_minutes
             now_et = datetime.now(timezone.utc)
-            import time as _time
-            et_offset = -4 if _time.daylight else -5
+            et_offset = -4 if _time_module.daylight else -5
             now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
             minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
             day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
             projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume
-
             relative_volume = round(projected_volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
-            n = len(closing_prices)
-            ma50   = round(sum(closing_prices[-50:]) / 50, 4)   if n >= 50  else None
-            ma200  = round(sum(closing_prices[-200:]) / 200, 4) if n >= 200 else None
-            year_high = round(max(high_prices), 4) if high_prices else None
-
             snapshot[symbol] = {
-                "current_price": current_price,
+                "current_price":      current_price,
                 "five_day_change_pct": five_day_change,
-                "closing_prices": closing_prices,  # RSI/MACD/MA20 — now 200 bars deep
-                "high_prices": high_prices,
-                "low_prices": low_prices,
-                "volume": volume,
-                "avg_volume": avg_volume,
-                "relative_volume": relative_volume,
-                "ma50": ma50,
-                "ma200": ma200,
-                "year_high": year_high,
+                "closing_prices":     closing_prices,
+                "high_prices":        high_prices,
+                "low_prices":         low_prices,
+                "volume":             volume,
+                "avg_volume":         avg_volume,
+                "relative_volume":    relative_volume,
+                "ma50":               cached.get("ma50"),
+                "ma200":              cached.get("ma200"),
+                "year_high":          cached.get("year_high"),
             }
     except Exception as e:
         logger.error(f"Error fetching light snapshot: {e}")
@@ -820,8 +874,9 @@ def get_sentiment_context(symbols: list[str]) -> dict[str, int]:
     try:
         nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
         news = nc.get_news(NewsRequest(symbols=symbols, limit=50))
-        for article in news.news:
-            for sym in (article.symbols or []):
+        _articles = news.data.get('news', []) if isinstance(getattr(news, 'data', None), dict) else getattr(news, 'news', [])
+        for article in _articles:
+            for sym in ((article.get('symbols') if isinstance(article, dict) else article.symbols) or []):
                 counts[sym] += 1
     except Exception as e:
         logger.warning(f"Could not fetch sentiment: {e}")
@@ -1173,20 +1228,23 @@ def get_news(symbols: list[str] = None, limit: int = 40) -> list[dict]:
         except TypeError:
             req = NewsRequest(symbols=",".join(target_symbols), limit=20)
             news = nc.get_news(req)
-        for article in news.news:
-            headline = _clean_text(article.headline or "")
+        _articles = news.data.get('news', []) if isinstance(getattr(news, 'data', None), dict) else getattr(news, 'news', [])
+        for article in _articles:
+            _g = (lambda f: article.get(f) if isinstance(article, dict) else getattr(article, f, None))
+            headline = _clean_text(_g('headline') or "")
             if not headline:
                 continue
-            summary = _clean_text(article.summary or "")[:400]
+            created = _g('created_at')
+            summary = _clean_text(_g('summary') or "")[:400]
             all_articles.append({
-                "id": str(article.id),
+                "id": str(_g('id') or ""),
                 "headline": headline,
                 "summary": summary,
-                "author": article.author or "",
-                "created_at": article.created_at.isoformat() if article.created_at else None,
-                "url": article.url or "",
-                "symbols": article.symbols or [],
-                "source": getattr(article, "source", "Benzinga"),
+                "author": _g('author') or "",
+                "created_at": created.isoformat() if hasattr(created, 'isoformat') else (created or None),
+                "url": _g('url') or "",
+                "symbols": (article.get('symbols') if isinstance(article, dict) else article.symbols) or [],
+                "source": _g('source') or "Benzinga",
             })
     except Exception as e:
         logger.warning(f"Alpaca news fetch failed (non-fatal): {e}")

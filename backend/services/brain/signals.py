@@ -413,7 +413,7 @@ def score_universe(
     sentiment: dict,
     news_headlines: list,
     top_n: int = 12,
-    min_score: int = 50,
+    min_score: int = 60,
 ) -> list[ScoredCandidate]:
     """
     Score every symbol in universe_snapshot and return top_n candidates.

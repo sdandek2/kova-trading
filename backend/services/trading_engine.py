@@ -1588,7 +1588,7 @@ async def run_trading_cycle():
                     sentiment=sentiment,
                     news_headlines=news_headlines,
                     top_n=16,
-                    min_score=35,
+                    min_score=60,
                 )
             )
 
