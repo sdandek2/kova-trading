@@ -1599,6 +1599,8 @@ async def run_trading_cycle():
         # Falls back to claude_service if brain fails (non-fatal).
         _use_brain = True
         _brain_decisions = None
+        _all_scored: list = []
+        _scored: list = []
         try:
             from services.brain.signals import score_universe
             from services.brain.ai_brain import decide as _brain_decide
@@ -1656,6 +1658,9 @@ async def run_trading_cycle():
                                 pass
             except Exception as _intra_err:
                 logger.debug(f"Intraday momentum pass failed (non-fatal): {_intra_err}")
+
+            # Re-sort after intraday mutations so threshold filter and logs stay score-ordered
+            _all_scored.sort(key=lambda c: c.score, reverse=True)
 
             # Bull regime: lower bar to 55 (regime bonus makes signals more reliable).
             # Chop/Bear: keep at 60 (no regime bonus, need stronger confirmation).

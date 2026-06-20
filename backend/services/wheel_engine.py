@@ -2012,9 +2012,8 @@ def _should_scan_today() -> bool:
     except Exception:
         return True   # on error → scan to be safe
 
-    # Normal schedule: Mon (0) and Wed (2)
     weekday = datetime.now(timezone.utc).weekday()
-    return weekday in (0, 1, 2, 3, 4)  # scan every market day
+    return weekday in (0, 1, 2, 3, 4)  # scan every market day (Mon–Fri)
 
 
 def _record_scan_date():
@@ -2102,6 +2101,13 @@ def _reconcile_pending_orders():
                 # collateral price, not the premium, and inflates income 10-40x.
                 fill_price = float(order.filled_avg_price or pos.get("put_premium") or 0)
                 filled_qty = int(float(order.filled_qty or 0))
+                if fill_price <= 0:
+                    logger.warning(
+                        f"Wheel reconcile: {pos['symbol']} filled but fill_price=0 "
+                        f"(filled_avg_price={order.filled_avg_price}, "
+                        f"put_premium={pos.get('put_premium')}) — skipping update to avoid $0 income record"
+                    )
+                    continue
                 premium_collected = fill_price * 100 * filled_qty
                 _update_wheel_position(
                     pos["id"],

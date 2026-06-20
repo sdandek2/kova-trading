@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import re
 import time as _time_module
 from datetime import datetime, timezone
 from typing import Optional
@@ -383,7 +384,12 @@ def get_market_snapshot(symbols: list[str]) -> dict:
         bars_dict = bars.data if hasattr(bars, 'data') else dict(bars)
         for symbol in symbols:
             quote = quotes.get(symbol)
-            current_price = float(quote.ask_price) if quote and quote.ask_price else None
+            if quote:
+                _ask = float(quote.ask_price or 0)
+                _bid = float(quote.bid_price or 0)
+                current_price = round((_ask + _bid) / 2, 4) if _ask > 0 and _bid > 0 else (_ask or _bid or None)
+            else:
+                current_price = None
 
             symbol_bars = bars_dict.get(symbol, [])
             closing_prices = [float(b.close) for b in symbol_bars]
@@ -484,11 +490,20 @@ def get_tradeable_universe() -> list[str]:
     # Track which sources put each symbol in the universe
     symbol_sources: dict[str, list[str]] = {}
 
+    _JUNK_SUFFIX = re.compile(r'(WS?|[RU])$')  # warrants, rights, units
+
     def add(symbols: list[str], source: str):
         for s in symbols:
             # Filter out non-US symbols (e.g. TSX:IMO, LSE:XXXX) — Alpaca US equity
             # API rejects them with "invalid symbol" and pollutes the snapshot fetch.
-            if s and ":" not in s:
+            if not s or ":" in s:
+                continue
+            # Skip SPAC derivatives: warrants (W/WS), rights (R), units (U).
+            # Pattern: 5+ char symbols whose last chars are the suffix (e.g. NKLAW, ABCLWS).
+            # 4-char stocks like SNOW or SBSW are short enough to be safe.
+            if len(s) >= 5 and _JUNK_SUFFIX.search(s):
+                continue
+            if s:
                 if s not in symbol_sources:
                     symbol_sources[s] = []
                 if source not in symbol_sources[s]:
@@ -724,7 +739,12 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
             avg_volume     = cached.get("avg_volume", 0)
 
             quote = quotes.get(symbol)
-            current_price = float(quote.ask_price) if quote and quote.ask_price else None
+            if quote:
+                _ask = float(quote.ask_price or 0)
+                _bid = float(quote.bid_price or 0)
+                current_price = round((_ask + _bid) / 2, 4) if _ask > 0 and _bid > 0 else (_ask or _bid or None)
+            else:
+                current_price = None
 
             five_day_change = None
             if closing_prices and len(closing_prices) >= 6:
