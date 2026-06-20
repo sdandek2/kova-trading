@@ -701,10 +701,10 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
     """
     Snapshot for broad universe scan — live prices + bars-derived signals.
 
-    Bars data (MA50/MA200/year_high/closing_prices) is cached 10 hours:
-    daily values don't change intraday, so first cycle of the day fetches
-    in batches of 40 symbols; all subsequent cycles hit the cache.
-    Live prices and intraday volume are always fetched fresh.
+    Bars data (MA50/MA200/year_high/closing_prices, avg_volume, relative_volume)
+    is cached 10 hours. Live prices (current_price via bid/ask midpoint) are
+    always fetched fresh. relative_volume is frozen at first fetch — it reflects
+    yesterday's EOD volume vs 20-day average, not live intraday participation.
     """
     global _bars_cache, _bars_cache_ts
     snapshot = {}
