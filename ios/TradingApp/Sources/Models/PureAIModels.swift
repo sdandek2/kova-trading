@@ -14,6 +14,7 @@ struct PureAISettings: Codable {
     var maxSearchesPerCycle: Int
     var model: String
     var modelOptions: [String]?
+    var profitReservePct: Double?
 
     enum CodingKeys: String, CodingKey {
         case enabled, model
@@ -22,6 +23,7 @@ struct PureAISettings: Codable {
         case maxPositionPct       = "max_position_pct"
         case maxSearchesPerCycle  = "max_searches_per_cycle"
         case modelOptions         = "model_options"
+        case profitReservePct     = "profit_reserve_pct"
     }
 }
 
@@ -62,13 +64,15 @@ struct PureAIStatus: Decodable {
     let closedTrades: Int?
     let realizedPl: Double?
     let winRate: Double?
+    let reservedCash: Double?
 
     enum CodingKeys: String, CodingKey {
         case configured, paper, model, settings, equity, cash, holdings
         case accountError = "account_error"
         case closedTrades = "closed_trades"
-        case realizedPl = "realized_pl"
-        case winRate = "win_rate"
+        case realizedPl   = "realized_pl"
+        case winRate      = "win_rate"
+        case reservedCash = "reserved_cash"
     }
 }
 

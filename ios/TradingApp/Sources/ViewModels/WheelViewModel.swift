@@ -19,6 +19,8 @@ final class WheelViewModel: ObservableObject {
     @Published var lastRefreshedAt: Date?
     @Published var cycleResult: String?
     @Published var showCycleResult = false
+    @Published var isWithdrawingReserve = false
+    @Published var withdrawReserveSuccess: String?
 
     private let api = APIService.shared
 
@@ -90,6 +92,25 @@ final class WheelViewModel: ObservableObject {
             await loadStatus()
         } catch {
             errorMessage = "Universe refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    // ── Withdraw Wheel reserve ────────────────────────────────────────────────
+    func withdrawReserve() async {
+        isWithdrawingReserve = true
+        withdrawReserveSuccess = nil
+        defer { isWithdrawingReserve = false }
+        do {
+            struct Req: Encodable { let confirm: Bool }
+            struct Resp: Decodable { let withdrawn: Double; let new_balance: Double; let message: String }
+            let resp: Resp = try await api.fetch("/wheel/reserve/reset", method: "POST",
+                                                 body: Req(confirm: true), timeout: 15)
+            withdrawReserveSuccess = resp.message
+            await loadStatus()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withdrawReserveSuccess = nil
+        } catch {
+            errorMessage = "Withdraw failed: \(error.localizedDescription)"
         }
     }
 

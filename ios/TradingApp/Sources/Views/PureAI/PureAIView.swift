@@ -142,11 +142,14 @@ private struct PureAIHeroCard: View {
                 StatCell(label: "Positions",
                          value: "\(vm.holdingsCount)")
                 Divider().frame(height: 36)
-                StatCell(label: "Closed Trades",
+                StatCell(label: "Closed",
                          value: "\(vm.status?.closedTrades ?? 0)")
                 Divider().frame(height: 36)
                 StatCell(label: "Win Rate",
                          value: vm.status?.winRate.map { String(format: "%.0f%%", $0) } ?? "--")
+                Divider().frame(height: 36)
+                StatCell(label: "Reserve",
+                         value: vm.status?.reservedCash.map { String(format: "$%.0f", $0) } ?? "$0")
             }
             .padding(.vertical, 8)
             .background(KovaTheme.card)
@@ -414,14 +417,71 @@ private struct PureAISettingsSection: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(
-                    vm.isSavingConfig
-                    ? KovaTheme.purple.opacity(0.5)
-                    : KovaTheme.purple
-                )
+                .background(vm.isSavingConfig ? KovaTheme.purple.opacity(0.5) : KovaTheme.purple)
                 .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
             }
             .disabled(vm.isSavingConfig)
+
+            // ── Profit Reserve ─────────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Profit Reserve")
+                            .font(.headline)
+                        Text("% of each profitable trade to set aside")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(Int(vm.editReservePct))%")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.green)
+                }
+                Slider(value: $vm.editReservePct, in: 0...50, step: 1) { editing in
+                    if !editing { Task { await vm.saveConfig() } }
+                }
+                .tint(.green)
+                HStack {
+                    Text("0% = disabled").font(.caption2).foregroundStyle(.tertiary)
+                    Spacer()
+                    Text("50% max").font(.caption2).foregroundStyle(.tertiary)
+                }
+
+                let reserved = vm.status?.reservedCash ?? 0
+                if reserved > 0 {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Currently reserved")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(String(format: "$%.2f", reserved))
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.green)
+                        }
+                        Spacer()
+                        Button {
+                            Task { await vm.withdrawReserve() }
+                        } label: {
+                            HStack(spacing: 4) {
+                                if vm.isWithdrawingReserve {
+                                    ProgressView().scaleEffect(0.7)
+                                } else {
+                                    Image(systemName: "arrow.down.circle")
+                                }
+                                Text("Withdraw")
+                            }
+                            .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.green)
+                        .disabled(vm.isWithdrawingReserve)
+                    }
+                    if let msg = vm.withdrawSuccess {
+                        Text(msg).font(.caption).foregroundStyle(.green)
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.green.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("About this experiment")

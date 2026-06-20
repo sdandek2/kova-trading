@@ -296,6 +296,42 @@ private struct WheelControlsCard: View {
                 }
             }
 
+            // Reserve withdraw (shown only when balance > 0)
+            let reserve = vm.status?.profitReserve ?? 0
+            if reserve > 0 {
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Profit Reserve")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(String(format: "$%.2f set aside", reserve))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Button {
+                        Task { await vm.withdrawReserve() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if vm.isWithdrawingReserve {
+                                ProgressView().scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "arrow.down.circle")
+                            }
+                            Text("Withdraw")
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                    .disabled(vm.isWithdrawingReserve)
+                }
+                if let msg = vm.withdrawReserveSuccess {
+                    Text(msg).font(.caption).foregroundStyle(.green)
+                }
+            }
+
             // Schedule info
             Divider()
             VStack(alignment: .leading, spacing: 4) {

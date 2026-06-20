@@ -442,3 +442,53 @@ def wheel_sprint_report():
     except Exception as e:
         logger.error(f"GET /wheel/sprint-report: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Profit reserve ─────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel
+from typing import Optional as _Optional
+
+
+class _WheelReserveResetRequest(_BaseModel):
+    confirm: bool = False
+    amount: _Optional[float] = None
+
+
+@router.get("/reserve")
+def wheel_get_reserve():
+    """Return current Wheel profit reserve balance."""
+    from services.wheel_engine import _get_wheel_reserve, _WHEEL_RESERVE_KEY
+    from services.trading_engine import _risk_settings
+    reserved = _get_wheel_reserve()
+    reserve_pct = float(_risk_settings.get("profit_reserve_pct", 0.0))
+    return {
+        "reserved_cash":      round(reserved, 2),
+        "profit_reserve_pct": reserve_pct,
+        "enabled":            reserve_pct > 0,
+        "message":            f"${reserved:,.2f} set aside from Wheel profits — not used for trading."
+                              if reserved > 0 else "No Wheel profits reserved yet.",
+    }
+
+
+@router.post("/reserve/reset")
+def wheel_reset_reserve(req: _WheelReserveResetRequest):
+    """Withdraw from the Wheel profit reserve. Requires confirm=True."""
+    if not req.confirm:
+        return {"error": "Pass confirm=true to withdraw the reserve balance."}
+    from services.wheel_engine import _get_wheel_reserve, _WHEEL_RESERVE_KEY
+    from services.db import cache_set
+    current = _get_wheel_reserve()
+    if req.amount is not None:
+        if float(req.amount) < 0:
+            return {"error": "amount must be non-negative"}
+        deduct = min(float(req.amount), current)
+    else:
+        deduct = current
+    new_balance = round(current - deduct, 2)
+    cache_set(_WHEEL_RESERVE_KEY, new_balance, 365 * 24 * 3600)
+    return {
+        "withdrawn":   round(deduct, 2),
+        "new_balance": new_balance,
+        "message":     f"${deduct:,.2f} withdrawn from Wheel reserve. New balance: ${new_balance:,.2f}",
+    }

@@ -25,7 +25,10 @@ final class PureAIViewModel: ObservableObject {
     @Published var editInterval: Int = 60
     @Published var editMaxSearches: Int = 8
     @Published var editModel: String = "claude-opus-4-8"
+    @Published var editReservePct: Double = 0
     @Published var modelOptions: [String] = ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
+    @Published var isWithdrawingReserve = false
+    @Published var withdrawSuccess: String?
 
     private let api = APIService.shared
 
@@ -42,6 +45,7 @@ final class PureAIViewModel: ObservableObject {
                 editInterval    = s.cycleIntervalMinutes
                 editMaxSearches = s.maxSearchesPerCycle
                 editModel       = s.model
+                editReservePct  = s.profitReservePct ?? 0
                 if let opts = s.modelOptions, !opts.isEmpty { modelOptions = opts }
             }
             lastRefreshed = Date()
@@ -83,13 +87,15 @@ final class PureAIViewModel: ObservableObject {
                 let cycle_interval_minutes: Int
                 let max_searches_per_cycle: Int
                 let model: String
+                let profit_reserve_pct: Double
             }
             let body = Req(
                 enabled: editEnabled,
                 max_buys_per_cycle: editMaxBuys,
                 cycle_interval_minutes: editInterval,
                 max_searches_per_cycle: editMaxSearches,
-                model: editModel
+                model: editModel,
+                profit_reserve_pct: editReservePct
             )
             struct Resp: Decodable { let message: String }
             let _: Resp = try await api.fetch("/pureai/config", method: "POST",
@@ -97,6 +103,25 @@ final class PureAIViewModel: ObservableObject {
             await loadStatus()
         } catch {
             errorMessage = "Config save failed: \(error.localizedDescription)"
+        }
+    }
+
+    // ── Withdraw PureAI reserve ───────────────────────────────────────────────
+    func withdrawReserve() async {
+        isWithdrawingReserve = true
+        withdrawSuccess = nil
+        defer { isWithdrawingReserve = false }
+        do {
+            struct Req: Encodable { let confirm: Bool }
+            struct Resp: Decodable { let withdrawn: Double; let new_balance: Double; let message: String }
+            let resp: Resp = try await api.fetch("/pureai/reserve/reset", method: "POST",
+                                                 body: Req(confirm: true), timeout: 15)
+            withdrawSuccess = resp.message
+            await loadStatus()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withdrawSuccess = nil
+        } catch {
+            errorMessage = "Withdraw failed: \(error.localizedDescription)"
         }
     }
 
