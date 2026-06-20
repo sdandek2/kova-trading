@@ -234,6 +234,15 @@ else:
     except Exception:
         cash, portfolio = 25000.0, 25000.0
 
+    try:
+        import anthropic  # noqa — just checking it's installed
+    except ModuleNotFoundError:
+        print("  ⚠  'anthropic' not installed locally.")
+        print("     Run:  pip install anthropic  then rerun.")
+        print("     LLM works fine on Railway — this is a local-only gap.")
+        print("     Skipping LLM call.\n")
+        above_threshold = []  # skip the loop below
+
     # Use Haiku for the test call — same logic, fraction of the cost
     import services.ai_client as _ai_client
     _ai_client.ask_ai_pro = _ai_client.ask_ai
