@@ -165,7 +165,7 @@ Strategy: {strategy.get('name')} — {strategy.get('prompt_modifier', '')}
 ## Rules
 - BUY: long position. Only if suggested_action=buy or regime=bull.
 - SHORT: requires RSI > 65 AND MACD < 0.5 AND regime=bear or chop.
-- SELL: close an existing long for rotation only. Add BEFORE any buy.
+- SELL: close an existing long for rotation. Rotate when new candidate signal score is 15+ points above the existing position's current signal score shown in Rotation Opportunities. Always output SELL before BUY so cash is freed first.
 - Inverse ETFs (SQQQ/SPXU/TZA/SDOW): always BUY action — they profit from falls.
 - Leveraged ETFs: only in BULL regime with low/normal VIX.
 - NEVER issue sell or buy on a [SHORT] position — engine manages those.

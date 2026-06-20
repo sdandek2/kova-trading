@@ -1623,6 +1623,26 @@ async def run_trading_cycle():
             except Exception as _nm_reg_err:
                 logger.debug(f"Near-miss registration failed (non-fatal): {_nm_reg_err}")
 
+            # Re-score existing long positions so rotation uses live signal quality,
+            # not just P&L — a position can be P&L-positive but technically stale.
+            _position_scores: dict = {}
+            try:
+                _long_syms = [p.symbol for p in positions if getattr(p, "side", "long") == "long"]
+                _pos_snap = {s: snapshot_light[s] for s in _long_syms if s in snapshot_light}
+                if _pos_snap:
+                    _pos_scored_list = score_universe(
+                        universe_snapshot=_pos_snap,
+                        regime_result=_brain_regime,
+                        rs_map=_rs_map,
+                        sentiment=sentiment,
+                        news_headlines=news_headlines,
+                        top_n=len(_long_syms),
+                        min_score=0,
+                    )
+                    _position_scores = {c.symbol: c.score for c in (_pos_scored_list or [])}
+            except Exception as _ps_err:
+                logger.debug(f"Position re-score failed (non-fatal): {_ps_err}")
+
             # Build rotation context for brain
             _rotation_lines = []
             for p in positions:
@@ -1634,12 +1654,17 @@ async def run_trading_cycle():
                 _ph = (_cm(_pprices) or {}).get("histogram", 0) if _pprices else 0
                 _pr = (_cr(_pprices) or 50) if _pprices else 50
                 _pnl = p.unrealized_pl_percent
+                _curr_score = _position_scores.get(p.symbol)
+                _score_str = f" signal={_curr_score}" if _curr_score is not None else ""
                 _mom = "STRONG" if _pnl > 5 and _ph > 0 else ("WEAK" if _pnl < -2 or (_pr > 70 and _ph < 0) else "MODERATE")
-                _rotation_lines.append(f"  {p.symbol}: P&L={_pnl:+.1f}% MACD={_ph:.3f} RSI={_pr:.0f} → {_mom}")
+                _rotation_lines.append(
+                    f"  {p.symbol}: P&L={_pnl:+.1f}%{_score_str} MACD={_ph:.3f} RSI={_pr:.0f} → {_mom}"
+                )
             _rotation_ctx = (
                 f"## Rotation Opportunities\nCash: ${_tradeable_cash:,.0f}\n"
                 + ("\n".join(_rotation_lines) if _rotation_lines else "  None")
-                + "\nOnly rotate WEAK positions to fund clearly better setups.\n"
+                + "\nRotate if a new candidate scores 15+ points above an existing position's current signal score."
+                + " Sells execute before buys — free cash first, then enter.\n"
             )
 
             # EOD context
