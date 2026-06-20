@@ -228,7 +228,7 @@ if not above_threshold:
     print("  Skipping LLM call — no candidates ≥60.")
     print("  This is what the live bot would do: hold, no trade.")
 else:
-    print(f"  Sending top {min(3, len(above_threshold))} candidates to Claude...\n")
+    print(f"  Sending all {len(above_threshold)} candidates to Claude (same as production)...\n")
 
     # Minimal real-account context for the test
     try:
@@ -272,7 +272,7 @@ else:
 
         t0 = time.time()
         decisions = decide(
-            scored_candidates=above_threshold[:3],
+            scored_candidates=above_threshold,
             positions=[],
             account_cash=cash,
             portfolio_value=portfolio,
