@@ -69,8 +69,14 @@ if _sample_syms:
     av = d.get("avg_volume", 0)
     vol = d.get("volume", 0)
     print(f"         Volume check ({s}): raw_vol={vol:,}  avg_vol={av:,}  rel_vol={rv}")
+    from datetime import datetime as _dt, timezone as _tz
+    _et_hour = (_dt.now(_tz.utc).hour - 4) % 24
+    _market_open = 9 <= _et_hour < 16
     if rv == 1.0 and vol == 0:
-        _warn("relative_volume is forced 1.0 — bars fix may not be deployed yet")
+        if _market_open:
+            _warn("relative_volume is forced 1.0 during market hours — check bars fix")
+        else:
+            _ok(f"Volume=0 outside market hours (weekend/after-close) — will be live Monday")
     else:
         _ok(f"Volume signal is LIVE (rel_vol={rv})")
 
@@ -90,8 +96,8 @@ from services.brain import rank_universe, get_rs_map
 rs_ranks = rank_universe(snapshot, spy_prices)
 rs_map = get_rs_map(rs_ranks)
 _ok(f"{len(rs_map)} symbols ranked")
-top5_rs = sorted(rs_map.items(), key=lambda x: -(x[1] or 0))[:5]
-print(f"         Top 5 RS: {', '.join(f'{s}({v:.0f}th)' for s,v in top5_rs)}")
+top5_rs = sorted(rs_map.items(), key=lambda x: -(x[1].percentile if hasattr(x[1], 'percentile') else x[1] or 0))[:5]
+print(f"         Top 5 RS: {', '.join(f'{s}({v.percentile:.0f}th)' if hasattr(v,'percentile') else f'{s}({v:.0f}th)' for s,v in top5_rs)}")
 
 # ── 5. News + sentiment ───────────────────────────────────────────────────────
 _step(5, "News + sentiment")
