@@ -418,6 +418,12 @@ def _score_symbol(
             score += short_macd - breakdown["macd"]
             breakdown["macd"] = short_macd
 
+        # Flip news sentiment: bearish news confirms the short, bullish contradicts it
+        if breakdown["news"] != 0:
+            short_news = -breakdown["news"]
+            score += short_news - breakdown["news"]
+            breakdown["news"] = short_news
+
     # ── Regime alignment bonus/penalty ───────────────────────────────────────
     regime_aligned = False
     if regime == "bull" and suggested_action == "buy":
