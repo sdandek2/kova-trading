@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
     log_connector_status()
     trading_engine.start()
     logger.info("Trading bot auto-started on launch.")
+    from services.alerts import alert_system_start
+    alert_system_start()
     # Wheel bot scheduler — runs independently alongside Kova
     from services.wheel_scheduler import start_wheel_scheduler
     start_wheel_scheduler()
@@ -40,6 +42,8 @@ async def lifespan(app: FastAPI):
     start_pureai_scheduler()
     yield
     trading_engine.stop()
+    from services.alerts import alert_system_stop
+    alert_system_stop("Trading engine shut down gracefully.")
     logger.info("Trading app backend shut down.")
 
 

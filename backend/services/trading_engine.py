@@ -429,6 +429,11 @@ async def run_trading_cycle():
             log_bot_activity("circuit_breaker",
                              f"Daily loss limit hit: down {_day_pl_pct:.2f}% (limit -{_risk_settings['daily_loss_limit_pct']}%). New buys blocked.",
                              cycle_id=_current_cycle_id)
+            try:
+                from services.alerts import alert_circuit_breaker as _acb
+                _acb(_day_pl_pct, _risk_settings["daily_loss_limit_pct"])
+            except Exception:
+                pass
             await manager.broadcast({
                 "type": "circuit_breaker",
                 "data": {
@@ -2954,6 +2959,11 @@ async def _trading_loop():
             raise  # let stop() work correctly
         except Exception as _loop_err:
             logger.error(f"Unhandled error in trading loop — cycle skipped, loop continues: {_loop_err}", exc_info=True)
+            try:
+                from services.alerts import alert_cycle_error as _ace
+                _ace(str(_loop_err))
+            except Exception:
+                pass
 
         # Detect market close → save EOD snapshot once per day
         market_open_now = alpaca_service.is_market_open()
