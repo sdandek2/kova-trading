@@ -91,14 +91,19 @@ def detect_regime(
     Scoring (+1 bull / -1 bear per signal):
       +1  SPY above MA20
       +1  SPY MA20 above MA50 (medium-term uptrend)
+      +1  SPY above MA200 (long-term structural uptrend)
       +1  Breadth > 60% (most stocks participating)
-      -1  VIX high (≥20) or extreme (≥30 = -2)
       +1  VIX low (<15)
+      -1  SPY below MA20
+      -1  SPY MA20 below MA50 (downtrend)
+      -1  SPY below MA200 (long-term structural downtrend)
+      -1  Breadth < 40% (narrow/weak)
+      -1  VIX high (≥20), -2 VIX extreme (≥30)
 
     Final score:
-      ≥ 2  → bull
-      ≤ -1 → bear
-      else → chop
+      ≥  2 → bull
+      ≤ -2 → bear   (symmetric with bull — requires 2+ confirming bearish signals)
+      else → chop    (captures -1 to 1: normal pullbacks, transition periods)
     """
     notes_parts = []
     score = 0
@@ -107,10 +112,11 @@ def detect_regime(
 
     # SPY trend signals
     spy_trend = "at_ma20"
-    if spy_prices and len(spy_prices) >= 50:
+    if spy_prices and len(spy_prices) >= 200:
         current_spy = spy_prices[-1]
-        ma20_spy = _moving_average(spy_prices, 20)
-        ma50_spy = _moving_average(spy_prices, 50)
+        ma20_spy  = _moving_average(spy_prices, 20)
+        ma50_spy  = _moving_average(spy_prices, 50)
+        ma200_spy = _moving_average(spy_prices, 200)
 
         if ma20_spy:
             if current_spy > ma20_spy * 1.005:
@@ -129,6 +135,38 @@ def detect_regime(
             else:
                 score -= 1
                 notes_parts.append("MA20<MA50 downtrend")
+
+        if ma200_spy:
+            if current_spy > ma200_spy * 1.005:
+                score += 1
+                notes_parts.append("SPY above MA200")
+            elif current_spy < ma200_spy * 0.995:
+                score -= 1
+                notes_parts.append("SPY below MA200")
+
+    elif spy_prices and len(spy_prices) >= 50:
+        current_spy = spy_prices[-1]
+        ma20_spy  = _moving_average(spy_prices, 20)
+        ma50_spy  = _moving_average(spy_prices, 50)
+
+        if ma20_spy:
+            if current_spy > ma20_spy * 1.005:
+                spy_trend = "above_ma20"
+                score += 1
+                notes_parts.append("SPY above MA20")
+            elif current_spy < ma20_spy * 0.995:
+                spy_trend = "below_ma20"
+                score -= 1
+                notes_parts.append("SPY below MA20")
+
+        if ma20_spy and ma50_spy:
+            if ma20_spy > ma50_spy:
+                score += 1
+                notes_parts.append("MA20>MA50 uptrend")
+            else:
+                score -= 1
+                notes_parts.append("MA20<MA50 downtrend")
+
     elif spy_prices and len(spy_prices) >= 20:
         current_spy = spy_prices[-1]
         ma20_spy = _moving_average(spy_prices, 20)
@@ -166,7 +204,7 @@ def detect_regime(
     if score >= 2:
         regime = "bull"
         confidence = min(1.0, 0.5 + score * 0.1)
-    elif score <= -1:
+    elif score <= -2:
         regime = "bear"
         confidence = min(1.0, 0.5 + abs(score) * 0.1)
     else:
