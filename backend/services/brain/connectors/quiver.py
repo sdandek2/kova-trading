@@ -1,17 +1,20 @@
 """
-Phase 7I — Institutional positioning via Financial Modeling Prep (FMP) API.
+Phase 7I — Trend strength confirmation via FMP stable quote API.
 
-Replaces the original yfinance implementation which got rate-limited (429) by Yahoo
-Finance on Railway's cloud IP daily, blocking all conviction boosts for the day.
+Original yfinance-based institutional holder lookup was 429-blocked daily on
+Railway's cloud IP. FMP free tier doesn't expose institutional ownership either.
 
-Uses FMP company profile to get institutional ownership %.
-API key env var: FMP_API_KEY (shared with fmp_earnings.py; 250 calls/day free tier)
-Cache: 24h per symbol — quarterly 13F data doesn't change intraday.
+Instead, uses FMP stable quote to measure trend strength signals not otherwise
+available in signals.py (which only computes MA20):
+  MA50, MA200, 52-week high proximity → structural accumulation proxy
 
 Signal:
-  inst_pct >= 70%  → strong institutional backing  +15 pts
-  inst_pct >= 50%  → moderate institutional backing  +8 pts
-  inst_pct <  50%  → low institutional interest       0 pts
+  within 5% of 52-week high + above MA50 + MA200  → strong trend  +15 pts
+  above MA50 + golden cross (MA50 > MA200)          → solid trend   +8 pts
+  else                                               → neutral        0 pts
+
+API key env var: FMP_API_KEY (250 calls/day free tier; shared with fmp_earnings.py)
+Cache: 4h per symbol.
 """
 import logging
 import os
@@ -21,8 +24,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_API_BASE = "https://financialmodelingprep.com/api/v3"
-_CACHE_TTL = 86_400  # 24h — 13F filings are quarterly; no point re-fetching intraday
+_API_BASE = "https://financialmodelingprep.com/stable"
+_CACHE_TTL = 14_400  # 4h — MA50/MA200 are daily but we want reasonably fresh data
 
 _cache: dict[str, tuple[dict, float]] = {}
 
@@ -59,7 +62,7 @@ def _unavailable(reason: str) -> dict:
 
 def get_darkpool_signal(symbol: str) -> dict:
     """
-    Return institutional positioning signal for a symbol using FMP API.
+    Return trend strength signal for a symbol using FMP stable quote (MA50/MA200/52w-high).
 
     Returns:
         {
@@ -72,8 +75,9 @@ def get_darkpool_signal(symbol: str) -> dict:
     if cached and time.time() < cached[1]:
         return cached[0]
 
+    # ETFs are often near 52-week highs in bull markets — suppress false positives
     if symbol in _KNOWN_ETFS or any(symbol.endswith(s) for s in _ETF_SUFFIXES):
-        return _unavailable("ETF — no institutional holder data")
+        return _unavailable("ETF — trend strength filter skipped")
 
     api_key = _get_api_key()
     if not api_key:
@@ -83,8 +87,8 @@ def get_darkpool_signal(symbol: str) -> dict:
 
     try:
         resp = httpx.get(
-            f"{_API_BASE}/profile/{symbol}",
-            params={"apikey": api_key},
+            f"{_API_BASE}/quote",
+            params={"symbol": symbol, "apikey": api_key},
             timeout=10,
             headers={"User-Agent": "Kova Trading kova@trading.com"},
         )
@@ -102,38 +106,54 @@ def get_darkpool_signal(symbol: str) -> dict:
         if isinstance(data, list):
             data = data[0] if data else {}
 
-        # institutionalOwnershipPercentage is a 0.0–1.0 decimal in FMP profile
-        raw_pct = data.get("institutionalOwnershipPercentage") or 0
-        inst_pct = float(raw_pct) * 100
+        price = float(data.get("price") or 0)
+        year_high = float(data.get("yearHigh") or 0)
+        ma50 = float(data.get("priceAvg50") or 0)
+        ma200 = float(data.get("priceAvg200") or 0)
 
-        if inst_pct >= 70:
+        if price <= 0 or year_high <= 0 or ma50 <= 0:
+            result = _unavailable("FMP: quote data incomplete")
+            _cache[symbol] = (result, time.time() + _CACHE_TTL)
+            _log_health(result)
+            return result
+
+        pct_from_52w_high = (price - year_high) / year_high  # negative number
+        above_50ma = price > ma50
+        above_200ma = ma200 > 0 and price > ma200
+        golden_cross = ma200 > 0 and ma50 > ma200
+
+        if pct_from_52w_high >= -0.05 and above_50ma and above_200ma:
             result = {
                 "signal": "accumulating",
                 "conviction_boost": 15,
-                "details": f"FMP: institutions hold {inst_pct:.0f}% of float (strong backing)",
+                "details": (
+                    f"FMP: {pct_from_52w_high:.0%} from 52w-high, "
+                    f"above MA50(${ma50:.0f}) + MA200(${ma200:.0f})"
+                ),
             }
-        elif inst_pct >= 50:
+        elif above_50ma and golden_cross:
             result = {
                 "signal": "accumulating",
                 "conviction_boost": 8,
-                "details": f"FMP: institutions hold {inst_pct:.0f}% of float",
+                "details": f"FMP: above MA50(${ma50:.0f}), golden cross (MA50 > MA200)",
             }
-        elif inst_pct > 0:
+        else:
             result = {
                 "signal": "neutral",
                 "conviction_boost": 0,
-                "details": f"FMP: institutions hold {inst_pct:.0f}% of float (below 50% threshold)",
+                "details": (
+                    f"FMP: {'below MA50' if not above_50ma else 'no golden cross'}"
+                    f" (price=${price:.2f}, MA50=${ma50:.0f}, MA200=${ma200:.0f})"
+                ),
             }
-        else:
-            result = _unavailable("FMP: institutional ownership data not available")
 
         _cache[symbol] = (result, time.time() + _CACHE_TTL)
         _log_health(result)
-        logger.info("FMP institutional %s: %s", symbol, result.get("details", "ok"))
+        logger.info("FMP trend-strength %s: %s", symbol, result.get("details", "ok"))
         return result
 
     except Exception as e:
         result = _unavailable(str(e))
         _log_health(result)
-        logger.warning("FMP institutional %s error: %s", symbol, e)
+        logger.warning("FMP trend-strength %s error: %s", symbol, e)
         return result

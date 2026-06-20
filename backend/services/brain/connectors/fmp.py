@@ -1,14 +1,11 @@
 """
-Analyst estimate signals via Financial Modeling Prep (FMP) API.
-
-Replaces the original yfinance implementation which got rate-limited (429) by Yahoo
-Finance on Railway's cloud IP daily, zeroing out all analyst conviction boosts.
+Analyst estimate signals via Financial Modeling Prep (FMP) stable API.
 
 Uses FMP price-target-summary to measure analyst consensus vs current price.
-API key env var: FMP_API_KEY (shared with fmp_earnings.py; 250 calls/day free tier)
+API key env var: FMP_API_KEY (250 calls/day free tier; shared with fmp_earnings.py)
 Cache: 24h per symbol — analyst targets update at most once daily.
 
-Signal (analyst consensus target vs current stock price):
+Signal (analyst consensus target from last quarter vs current stock price):
   upside >  20%  → analysts strongly bullish  +20 pts
   upside >  10%  → analysts moderately bullish +10 pts
   downside > 10% → analysts bearish           -20 pts
@@ -50,19 +47,12 @@ def _unavailable(reason: str) -> dict:
 
 def get_estimate_revision(symbol: str, current_price: float = 0.0) -> dict:
     """
-    Return analyst estimate signal for a symbol using FMP price target API.
+    Return analyst estimate signal for a symbol using FMP price-target-summary.
 
     Args:
         symbol: ticker symbol
         current_price: current stock price for computing upside vs analyst target.
                        Passed in from signals.py which already has the price.
-
-    Returns:
-        {
-          "signal": "raised" | "lowered" | "unchanged" | "unavailable",
-          "conviction_boost": int,
-          "details": str
-        }
     """
     cached = _cache.get(symbol)
     if cached and time.time() < cached[1]:
@@ -76,8 +66,8 @@ def get_estimate_revision(symbol: str, current_price: float = 0.0) -> dict:
 
     try:
         resp = httpx.get(
-            f"{_API_BASE}/price-target-summary/{symbol}",
-            params={"apikey": api_key},
+            f"{_API_BASE}/price-target-summary",
+            params={"symbol": symbol, "apikey": api_key},
             timeout=10,
             headers={"User-Agent": "Kova Trading kova@trading.com"},
         )
@@ -95,9 +85,11 @@ def get_estimate_revision(symbol: str, current_price: float = 0.0) -> dict:
         if isinstance(data, list):
             data = data[0] if data else {}
 
-        target_consensus = float(data.get("targetConsensus") or 0)
+        # Prefer last-quarter consensus (13+ analysts), fall back to last-month
+        target = float(data.get("lastQuarterAvgPriceTarget") or
+                       data.get("lastMonthAvgPriceTarget") or 0)
 
-        if target_consensus <= 0:
+        if target <= 0:
             result = _unavailable("no analyst price target data from FMP")
             _cache[symbol] = (result, time.time() + _CACHE_TTL)
             _log_health(result)
@@ -109,31 +101,31 @@ def get_estimate_revision(symbol: str, current_price: float = 0.0) -> dict:
             _log_health(result)
             return result
 
-        upside = (target_consensus - current_price) / current_price
+        upside = (target - current_price) / current_price
 
         if upside > 0.20:
             result = {
                 "signal": "raised",
                 "conviction_boost": 20,
-                "details": f"FMP: analyst consensus ${target_consensus:.0f} is +{upside:.0%} above current",
+                "details": f"FMP: analyst consensus ${target:.0f} is +{upside:.0%} above current (strong buy)",
             }
         elif upside > 0.10:
             result = {
                 "signal": "raised",
                 "conviction_boost": 10,
-                "details": f"FMP: analyst target ${target_consensus:.0f} is +{upside:.0%} above current",
+                "details": f"FMP: analyst target ${target:.0f} is +{upside:.0%} above current",
             }
         elif upside < -0.10:
             result = {
                 "signal": "lowered",
                 "conviction_boost": -20,
-                "details": f"FMP: analyst target ${target_consensus:.0f} is {upside:.0%} below current (bearish consensus)",
+                "details": f"FMP: analyst target ${target:.0f} is {upside:.0%} below current (sell consensus)",
             }
         else:
             result = {
                 "signal": "unchanged",
                 "conviction_boost": 0,
-                "details": f"FMP: analyst target ${target_consensus:.0f} ({upside:+.0%} from current — neutral)",
+                "details": f"FMP: analyst target ${target:.0f} ({upside:+.0%} from current — neutral)",
             }
 
         _cache[symbol] = (result, time.time() + _CACHE_TTL)
