@@ -540,20 +540,10 @@ def get_tradeable_universe() -> list[str]:
     except Exception as e:
         logger.warning(f"Could not fetch news symbols: {e}")
 
-    # ── Real-time: leading sector ETFs ──
-    # Whichever sectors are rotating hot today get included automatically
-    # These are always liquid and represent macro-level opportunities
-    sector_etfs = [
-        "SPY", "QQQ", "IWM", "DIA",           # broad market
-        "XLK", "XLF", "XLV", "XLE", "XLY",   # sectors
-        "XLI", "XLU", "XLP", "XLB", "XLRE",
-        "SOXX", "SMH", "IBB", "XBI",           # sub-sectors
-        "GLD", "SLV", "GDX", "USO",            # commodities
-        "SOXL", "TQQQ", "SPXL", "UVXY",       # leveraged (always volatile)
-        "SOXS", "SQQQ", "SPXS",               # inverse (bear plays)
-        "ARKK", "ARKG", "ARKW",               # innovation
-    ]
-    add(sector_etfs, "sector_etf")
+    # SPY is required for regime detection and RS ranking — always in universe.
+    # All other ETFs are excluded: Kova trades stocks only. ETFs that appear
+    # in most_actives or movers are still filtered out by the scorer.
+    add(["SPY"], "spy_benchmark")
 
     # ── Session 6: FMP Earnings Surprise injection ────────────────────────────
     # Stocks with >10% EPS beat in the last 21 days — captures post-earnings drift
