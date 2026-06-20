@@ -141,9 +141,27 @@ except Exception as e:
     _warn(f"Weight load failed: {e}")
     sig_weights = {}
 
-# ── 7. Scoring (REAL connectors) ──────────────────────────────────────────────
-_step(7, "Scoring universe — REAL connectors (may be slow for SEC/Finnhub)")
-print("    (Connectors are live — SEC/Finnhub/Barchart will make real API calls)")
+# ── 7. Scoring (selective real connectors) ────────────────────────────────────
+_step(7, "Scoring universe — Barchart+FMP live, SEC+Finnhub stubbed")
+print("    Barchart: real (batch fetch, 15-min cache)")
+print("    FMP:      real (date-range batch, not per-symbol)")
+print("    SEC:      stubbed — 291 HTTP calls × 1-2s each = 10min wait not worth it in test")
+print("    Finnhub:  stubbed — per-symbol calls, cached 1hr in prod but cold here")
+
+# Stub the slow per-symbol HTTP connectors.
+# In production these are warm after the first cycle (1hr cache).
+# In a test (cold process) they'd hang for 5-10 minutes.
+_STUB = {"signal": "unavailable", "conviction_boost": 0, "details": "e2e test stub"}
+try:
+    import services.brain.connectors.sec_insider as _sec
+    _sec.get_insider_signal = lambda s: _STUB
+except Exception:
+    pass
+try:
+    import services.brain.connectors.finnhub as _fh
+    _fh.get_recommendation_signal = lambda s: _STUB
+except Exception:
+    pass
 sys.stderr = _devnull
 t0 = time.time()
 from services.brain.signals import score_universe
