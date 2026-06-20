@@ -511,6 +511,79 @@ if _bear_above:
 else:
     _warn("No bear candidates to test")
 
+# ── Test C: Gemini Flash vs Haiku comparison ──────────────────────────────────
+_header("TEST C: GEMINI FLASH vs HAIKU — same candidates, different model")
+
+_gemini_decisions = []
+_gemini_available = False
+
+try:
+    from config import settings as _cfg
+    if not _cfg.gemini_api_key:
+        _warn("GEMINI_API_KEY not set — skipping comparison (set it in Railway or .env)")
+    elif not above_threshold:
+        _warn("No scored candidates — skipping comparison")
+    else:
+        import services.ai_client as _aic
+        import services.brain.ai_brain as _aib
+
+        # Patch ask_ai_pro in ai_brain's namespace to use Gemini Flash directly
+        # (ai_brain binds it at import time, so module-level patch wouldn't reach it)
+        _orig_ask = _aib.ask_ai_pro
+
+        def _gemini_flash(prompt, max_tokens=600):
+            return _aic._call_gemini("gemini-2.5-flash", prompt, max_tokens)
+
+        _aib.ask_ai_pro = _gemini_flash
+        try:
+            t0 = time.time()
+            _gemini_decisions = decide(
+                scored_candidates=above_threshold,
+                positions=[],
+                account_cash=cash,
+                portfolio_value=portfolio,
+                regime_result=regime,
+                rs_map=rs_map,
+                kelly_history=kelly_history,
+                strategy=strategy,
+                news_headlines=news_headlines,
+            )
+            _ok(f"Gemini Flash responded in {time.time()-t0:.1f}s")
+            _gemini_available = True
+        finally:
+            _aib.ask_ai_pro = _orig_ask   # always restore
+
+        # ── Side-by-side comparison ──────────────────────────────────────────
+        print()
+        _haiku_syms  = [d.symbol for d in decisions  if d.action in ("buy","short")]
+        _gemini_syms = [d.symbol for d in _gemini_decisions if d.action in ("buy","short")]
+        _agree = [s for s in _haiku_syms if s in _gemini_syms]
+        _haiku_only  = [s for s in _haiku_syms  if s not in _gemini_syms]
+        _gemini_only = [s for s in _gemini_syms if s not in _haiku_syms]
+
+        print(f"  {'HAIKU':<30}  {'GEMINI FLASH':<30}")
+        print(f"  {'─'*30}  {'─'*30}")
+        _max = max(len(decisions), len(_gemini_decisions))
+        for i in range(_max):
+            h = decisions[i]       if i < len(decisions)         else None
+            g = _gemini_decisions[i] if i < len(_gemini_decisions) else None
+            h_str = f"{h.action.upper()} {h.symbol or '':<6}" if h else ""
+            g_str = f"{g.action.upper()} {g.symbol or '':<6}" if g else ""
+            match = "✓" if h and g and h.symbol == g.symbol and h.action == g.action else " "
+            print(f"  {h_str:<30}  {g_str:<30}  {match}")
+        print()
+        if _agree:
+            _ok(f"Agreement: both picked {', '.join(_agree)}")
+        if _haiku_only:
+            print(f"    Haiku only  : {', '.join(_haiku_only)}")
+        if _gemini_only:
+            print(f"    Gemini only : {', '.join(_gemini_only)}")
+        if not _haiku_only and not _gemini_only:
+            _ok("100% agreement — models converge on same trades")
+
+except Exception as _cmp_err:
+    _warn(f"Gemini comparison skipped: {_cmp_err}")
+
 # ── 10. Pipeline health summary ───────────────────────────────────────────────
 _header("PIPELINE HEALTH SUMMARY")
 
