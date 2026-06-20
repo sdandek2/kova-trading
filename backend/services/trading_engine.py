@@ -1784,6 +1784,33 @@ async def run_trading_cycle():
         ACTION_PRIORITY = {"sell": 0, "short": 1, "buy": 1, "hold": 2}
         decisions = sorted(decisions, key=lambda d: ACTION_PRIORITY.get(d.action, 2))
 
+        # ── Track AI-skipped candidates: scored ≥threshold but Claude didn't pick them ──
+        # Separate from near-misses (50-59) — these cleared the signal bar but the
+        # AI filtered them out. Tracking their EOD price reveals whether Claude's
+        # filtering adds value or costs us profitable trades.
+        try:
+            from services.db import log_near_miss as _log_ai_skip
+            _traded_syms = {d.symbol for d in decisions if d.action in ("buy", "short")}
+            _now_utc_ai = datetime.now(timezone.utc)
+            for _sc in (_scored or []):
+                if _sc.symbol not in _traded_syms and _sc.suggested_action != "skip":
+                    _ai_skip_id = _log_ai_skip(
+                        symbol=_sc.symbol,
+                        score=_sc.score,
+                        breakdown=_sc.score_breakdown,
+                        suggested_action=_sc.suggested_action,
+                        price=_sc.price,
+                        skip_reason="ai_skipped",
+                    )
+                    if _ai_skip_id:
+                        _pending_near_miss_price_checks[_ai_skip_id] = {
+                            "symbol": _sc.symbol,
+                            "skipped_at": _now_utc_ai,
+                            "pending": {"price_1h", "price_eod"},
+                        }
+        except Exception as _ai_skip_err:
+            logger.debug(f"AI-skipped registration failed (non-fatal): {_ai_skip_err}")
+
         # Broadcast + log each decision
         for decision in decisions:
             _latest_analysis = AIAnalysis(

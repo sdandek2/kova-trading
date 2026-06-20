@@ -145,6 +145,10 @@ def _ensure_table(conn):
             ALTER TABLE position_log
             ADD COLUMN IF NOT EXISTS signal_type VARCHAR(50)
         """)
+        cur.execute("""
+            ALTER TABLE near_miss_log
+            ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(20) DEFAULT 'below_threshold'
+        """)
         # ── NEW: circuit_breaker_log ────────────────────────────────────────
         # Every time the daily loss limit fires, record when and why.
         cur.execute("""
@@ -1482,8 +1486,11 @@ def log_daily_universe(symbols_sources: dict[str, list[str]]) -> None:
 
 
 def log_near_miss(symbol: str, score: int, breakdown: dict,
-                  suggested_action: str, price: float) -> int:
-    """Log a near-miss candidate (score 35–44). Returns row id for price followup."""
+                  suggested_action: str, price: float,
+                  skip_reason: str = "below_threshold") -> int:
+    """Log a skipped candidate. Returns row id for price followup.
+    skip_reason: 'below_threshold' (50-59) | 'ai_skipped' (≥60, Claude didn't pick it)
+    """
     if TEST_MODE:
         return
     row_id = 0
@@ -1493,10 +1500,10 @@ def log_near_miss(symbol: str, score: int, breakdown: dict,
             return 0
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO near_miss_log (symbol, score, breakdown, suggested_action, price_at_skip)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO near_miss_log (symbol, score, breakdown, suggested_action, price_at_skip, skip_reason)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (symbol, score, json.dumps(breakdown), suggested_action, price))
+            """, (symbol, score, json.dumps(breakdown), suggested_action, price, skip_reason))
             row_id = cur.fetchone()[0]
     except Exception as e:
         logger.debug(f"log_near_miss failed (non-fatal): {e}")
@@ -1531,75 +1538,80 @@ def update_near_miss_prices(row_id: int, field: str, price: float) -> None:
 
 
 def get_near_misses_report() -> dict:
-    """Near-miss tracker: what happened to stocks that scored 35-44."""
+    """Near-miss tracker split by skip reason:
+    - below_threshold: scored 50-59, didn't reach trading bar
+    - ai_skipped: scored ≥60, Claude saw it but didn't pick it
+    """
+    def _bucket_stats(cur, reason: str) -> dict:
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE hypothetical_pnl_pct > 0) AS would_have_won,
+                ROUND(AVG(hypothetical_pnl_pct)::numeric, 2) AS avg_pnl,
+                ROUND(AVG(score)::numeric, 1) AS avg_score
+            FROM near_miss_log
+            WHERE timestamp > NOW() - INTERVAL '30 days'
+              AND hypothetical_pnl_pct IS NOT NULL
+              AND skip_reason = %s
+        """, (reason,))
+        row = cur.fetchone()
+        total, won, avg_pnl, avg_score = row if row else (0, 0, None, None)
+        accuracy = round(won / total * 100, 1) if total else 0.0
+        return {
+            "total": total or 0,
+            "would_have_been_profitable": won or 0,
+            "accuracy_if_traded": f"{accuracy:.1f}%",
+            "avg_hypothetical_pnl": f"{avg_pnl:+.2f}%" if avg_pnl is not None else "N/A",
+            "avg_score": float(avg_score) if avg_score else None,
+        }
+
     try:
         conn = _get_conn()
         if not conn:
             return {}
         with conn.cursor() as cur:
-            # Summary stats
+            below = _bucket_stats(cur, "below_threshold")
+            ai_skipped = _bucket_stats(cur, "ai_skipped")
+
+            # Threshold verdict for below_threshold bucket
+            total_bt = below["total"]
+            acc_bt = float(below["accuracy_if_traded"].rstrip("%")) if below["total"] else 0.0
+            if total_bt < 20:
+                verdict = "Not enough data yet (need 20+ near-misses with price followup)"
+            elif acc_bt > 60:
+                verdict = f"Threshold may be too high — {acc_bt:.0f}% of near-misses were profitable. Consider lowering."
+            elif acc_bt < 40:
+                verdict = f"Threshold looks correct — only {acc_bt:.0f}% of near-misses would have been profitable."
+            else:
+                verdict = f"Threshold looks optimal — {acc_bt:.0f}% accuracy on near-misses."
+
+            # AI skip verdict
+            total_ai = ai_skipped["total"]
+            acc_ai = float(ai_skipped["accuracy_if_traded"].rstrip("%")) if total_ai else 0.0
+            if total_ai < 20:
+                ai_verdict = "Not enough data yet (need 20+ AI-skipped with price followup)"
+            elif acc_ai > 60:
+                ai_verdict = f"Claude is leaving money on the table — {acc_ai:.0f}% of skipped ≥60 candidates were profitable."
+            elif acc_ai < 40:
+                ai_verdict = f"Claude's filtering is valuable — only {acc_ai:.0f}% of skipped candidates were profitable."
+            else:
+                ai_verdict = f"Claude's skips are roughly coin-flip — {acc_ai:.0f}% would have been profitable."
+
+            # Recent entries for both buckets
             cur.execute("""
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE hypothetical_pnl_pct > 0) AS would_have_won,
-                    ROUND(AVG(hypothetical_pnl_pct)::numeric, 2) AS avg_pnl,
-                    ROUND(AVG(score)::numeric, 1) AS avg_score
-                FROM near_miss_log
-                WHERE timestamp > NOW() - INTERVAL '30 days'
-                  AND hypothetical_pnl_pct IS NOT NULL
-            """)
-            row = cur.fetchone()
-            total, won, avg_pnl, avg_score = row if row else (0, 0, None, None)
-
-            accuracy = round(won / total * 100, 1) if total else 0.0
-
-            # Which signals were most often the deciding factor (lowest score contributor)
-            # We look at which signal had the most negative contribution in near-misses
-            cur.execute("""
-                SELECT breakdown
-                FROM near_miss_log
-                WHERE timestamp > NOW() - INTERVAL '30 days'
-                  AND hypothetical_pnl_pct IS NOT NULL
-            """)
-            breakdowns = [r[0] for r in cur.fetchall() if r[0]]
-
-            signal_stats: dict = {}
-            for bd in breakdowns:
-                if not isinstance(bd, dict):
-                    continue
-                for sig, val in bd.items():
-                    if sig not in signal_stats:
-                        signal_stats[sig] = {"count": 0, "total_pnl": 0.0}
-                    signal_stats[sig]["count"] += 1
-
-            top_signals = sorted(
-                [{"signal": k, "times_was_deciding_factor": v["count"]} for k, v in signal_stats.items()],
-                key=lambda x: x["times_was_deciding_factor"], reverse=True
-            )[:5]
-
-            # Threshold verdict
-            verdict = "Not enough data yet (need 20+ near-misses with price followup)"
-            if total >= 20:
-                if accuracy > 60:
-                    verdict = f"Threshold (45) may be too high — {accuracy:.0f}% of near-misses were profitable. Consider lowering to 40."
-                elif accuracy < 40:
-                    verdict = f"Threshold (45) looks correct — only {accuracy:.0f}% of near-misses would have been profitable."
-                else:
-                    verdict = f"Threshold (45) looks optimal — {accuracy:.0f}% accuracy on near-misses."
-
-            # Recent near-misses
-            cur.execute("""
-                SELECT symbol, score, suggested_action, price_at_skip, price_eod, hypothetical_pnl_pct, timestamp
+                SELECT symbol, score, suggested_action, price_at_skip, price_eod,
+                       hypothetical_pnl_pct, timestamp, skip_reason
                 FROM near_miss_log
                 WHERE timestamp > NOW() - INTERVAL '7 days'
                 ORDER BY timestamp DESC
-                LIMIT 20
+                LIMIT 30
             """)
             recent = []
             for r in cur.fetchall():
-                sym, sc, action, p_skip, p_eod, pnl, ts = r
+                sym, sc, action, p_skip, p_eod, pnl, ts, reason = r
                 recent.append({
                     "symbol": sym, "score": sc, "suggested_action": action,
+                    "skip_reason": reason or "below_threshold",
                     "price_at_skip": float(p_skip) if p_skip else None,
                     "price_eod": float(p_eod) if p_eod else None,
                     "hypothetical_pnl_pct": float(pnl) if pnl else None,
@@ -1608,15 +1620,8 @@ def get_near_misses_report() -> dict:
                 })
 
             return {
-                "summary": {
-                    "total_near_misses": total or 0,
-                    "would_have_been_profitable": won or 0,
-                    "accuracy_if_traded": f"{accuracy:.1f}%",
-                    "avg_hypothetical_pnl": f"{avg_pnl:+.2f}%" if avg_pnl is not None else "N/A",
-                    "avg_score": float(avg_score) if avg_score else None,
-                    "threshold_verdict": verdict,
-                },
-                "top_missed_signals": top_signals,
+                "below_threshold": {**below, "verdict": verdict},
+                "ai_skipped": {**ai_skipped, "verdict": ai_verdict},
                 "recent": recent,
             }
     except Exception as e:
