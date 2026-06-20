@@ -209,6 +209,10 @@ else:
     except Exception:
         cash, portfolio = 25000.0, 25000.0
 
+    # Use Haiku for the test call — same logic, fraction of the cost
+    import services.ai_client as _ai_client
+    _ai_client.ask_ai_pro = _ai_client.ask_ai
+
     from services.brain.ai_brain import decide
     from services.db import get_recent_trade_outcomes
 
