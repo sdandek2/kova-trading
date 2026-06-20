@@ -1827,6 +1827,30 @@ async def run_trading_cycle():
             # that never fires. Floor stays: TP ≥ 1.5× SL.
             if decision.action in ("buy", "short"):
                 _sl = decision.stop_loss_pct or _risk_settings["stop_loss_pct"]
+
+                # Override fixed stop with ATR-calibrated stop.
+                # Each stock gets a stop proportional to its own daily volatility:
+                #   stop = 1.5 × ATR/price  (floored 2%, capped 6%)
+                # Cap at 6% so TP at 1.5× never exceeds the 9% TP ceiling.
+                try:
+                    _sd = snapshot_light.get(decision.symbol, {})
+                    _atr_val = compute_atr(
+                        _sd.get("high_prices", []),
+                        _sd.get("low_prices", []),
+                        _sd.get("closing_prices", []),
+                    )
+                    _atr_price = _sd.get("current_price") or 0
+                    if _atr_val > 0 and _atr_price > 0:
+                        _atr_pct = _atr_val / _atr_price
+                        _atr_sl  = round(max(0.02, min(0.06, 1.5 * _atr_pct)), 4)
+                        logger.info(
+                            f"ATR stop {decision.symbol}: ATR={_atr_val:.3f} "
+                            f"({_atr_pct:.1%}/day) → stop {_sl:.1%} → {_atr_sl:.1%}"
+                        )
+                        _sl = _atr_sl
+                except Exception as _atr_err:
+                    logger.debug(f"ATR stop calc failed ({decision.symbol}): {_atr_err}")
+
                 _tp = decision.take_profit_pct or _risk_settings["take_profit_pct"]
                 _min_tp = round(_sl * 1.5, 4)
                 _max_tp = 0.09
