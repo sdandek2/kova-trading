@@ -1054,16 +1054,35 @@ async def run_trading_cycle():
             closing_prices = sym_data.get("closing_prices", [])
             # compute_rsi returns None when <15 bars — fall back to 50 (neutral, no rule fires)
             rsi = (compute_rsi(closing_prices) or 50.0) if closing_prices else 50.0
-            # ── Dynamic trailing stop: tighten as profit grows ────────────────
-            # Locks in progressively more of a big gain rather than letting a
-            # 30% winner give back 5% before stopping out.
+            # ── ATR-based dynamic trailing stop ───────────────────────────────
+            # Base trail width = 1.5×ATR/price (same formula as entry stop).
+            # Volatile stocks get wider trails so normal intraday swings don't
+            # shake you out; calm stocks trail tighter.
+            # Trail tightens automatically as gains grow — locks in more of a
+            # big winner once position is up 15% or 25%.
             _pnl_for_trail = position.unrealized_pl_percent
             if _pnl_for_trail >= 25.0:
-                trail_pct = 0.02   # up 25%+ → 2% trail — protect most of the gain
+                trail_pct = 0.02   # up 25%+ → tight 2% trail, protect most of the gain
             elif _pnl_for_trail >= 15.0:
                 trail_pct = 0.03   # up 15-25% → 3% trail
             else:
-                trail_pct = float(_risk_settings.get("stop_loss_pct", 0.05))
+                try:
+                    _trail_atr = compute_atr(
+                        sym_data.get("high_prices", []),
+                        sym_data.get("low_prices", []),
+                        closing_prices,
+                    )
+                    _trail_price = sym_data.get("current_price") or position.current_price or 0
+                    if _trail_atr > 0 and _trail_price > 0:
+                        trail_pct = round(max(0.02, min(0.06, 1.5 * _trail_atr / _trail_price)), 4)
+                        logger.debug(
+                            f"ATR trail {position.symbol}: ATR={_trail_atr:.3f} "
+                            f"({_trail_atr/_trail_price:.1%}/day) → trail={trail_pct:.1%}"
+                        )
+                    else:
+                        trail_pct = float(_risk_settings.get("stop_loss_pct", 0.05))
+                except Exception:
+                    trail_pct = float(_risk_settings.get("stop_loss_pct", 0.05))
 
             is_short = position.side == "short"
 
