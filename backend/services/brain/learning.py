@@ -131,12 +131,14 @@ def _load_trades_from_db() -> list[dict]:
             cur.execute("""
                 SELECT
                     symbol,
-                    side                            AS signal_type,
-                    EXTRACT(HOUR FROM entry_time)   AS entry_hour_et,
-                    EXTRACT(DOW FROM entry_time) - 1 AS entry_dow,
+                    COALESCE(NULLIF(signal_type, ''), 'momentum') AS signal_type,
+                    COALESCE(market_regime, 'chop')               AS regime,
+                    COALESCE(entry_hour_et,
+                        EXTRACT(HOUR FROM entry_time)::int)       AS entry_hour_et,
+                    (EXTRACT(DOW FROM entry_time)::int - 1)       AS entry_dow,
                     CASE WHEN exit_price IS NOT NULL AND entry_price > 0
                          THEN (exit_price - entry_price) / entry_price * 100
-                         ELSE NULL END               AS pl_pct
+                         ELSE NULL END                             AS pl_pct
                 FROM position_log
                 WHERE exit_price IS NOT NULL
                   AND entry_price IS NOT NULL
@@ -145,7 +147,7 @@ def _load_trades_from_db() -> list[dict]:
                 LIMIT 2000
             """)
             rows = cur.fetchall()
-            cols = ["symbol", "signal_type", "entry_hour_et", "entry_dow", "pl_pct"]
+            cols = ["symbol", "signal_type", "regime", "entry_hour_et", "entry_dow", "pl_pct"]
             return [dict(zip(cols, r)) for r in rows if r[-1] is not None]
     except Exception as e:
         logger.warning("learning: DB load failed (%s) — returning []", e)

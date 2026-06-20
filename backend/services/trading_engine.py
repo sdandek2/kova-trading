@@ -716,8 +716,9 @@ async def run_trading_cycle():
                         claude_reasoning="Limit order filled between cycles — entry logged on position detection",
                         market_regime=macro.get("market_regime"),
                         side=pos.side,
-                        setup_type="momentum_breakout",  # limit orders are always momentum entries
+                        setup_type="momentum_breakout",
                         entry_hour_et=_det_hour_et,
+                        signal_type="momentum",
                     )
                     _position_high_watermarks[sym] = pos.current_price
                     _save_watermarks()
@@ -2643,6 +2644,7 @@ async def run_trading_cycle():
                         side="short",
                         setup_type=_setup_type,
                         entry_hour_et=_entry_hour_et,
+                        signal_type=_sig_type_entry or "short_candidate",
                     )
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
@@ -2667,6 +2669,7 @@ async def run_trading_cycle():
                         side="long",
                         setup_type=_setup_type,
                         entry_hour_et=_entry_hour_et,
+                        signal_type=_sig_type_entry or "momentum",
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price

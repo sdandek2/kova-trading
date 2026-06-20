@@ -141,6 +141,10 @@ def _ensure_table(conn):
             ALTER TABLE position_log
             ADD COLUMN IF NOT EXISTS entry_hour_et INTEGER
         """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS signal_type VARCHAR(50)
+        """)
         # ── NEW: circuit_breaker_log ────────────────────────────────────────
         # Every time the daily loss limit fires, record when and why.
         cur.execute("""
@@ -602,11 +606,13 @@ def cleanup_old_trade_logs(days: int = 90) -> None:
 def log_position_open(symbol: str, entry_price: float, quantity: int,
                       strategy: str = None, claude_reasoning: str = None,
                       market_regime: str = None, side: str = "long",
-                      setup_type: str = None, entry_hour_et: int = None) -> Optional[int]:
+                      setup_type: str = None, entry_hour_et: int = None,
+                      signal_type: str = None) -> Optional[int]:
     """
     Record that a new position was opened.
     side: "long" | "short"
     setup_type: "momentum_breakout" | "mean_reversion" | "event_driven" | "extended_hours"
+    signal_type: scorer label — "momentum" | "breakout" | "reversal" | "oversold" | "short_candidate"
     entry_hour_et: hour of entry in ET (9-15) for time-of-day analysis
     Returns the row id so the caller can update it on close, or None on failure.
     """
@@ -620,11 +626,13 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
             cur.execute("""
                 INSERT INTO position_log
                     (symbol, side, entry_time, entry_price, quantity, strategy,
-                     claude_reasoning, market_regime, setup_type, entry_hour_et)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     claude_reasoning, market_regime, setup_type, entry_hour_et,
+                     signal_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
-                  strategy, claude_reasoning, market_regime, setup_type, entry_hour_et))
+                  strategy, claude_reasoning, market_regime, setup_type, entry_hour_et,
+                  signal_type))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:
