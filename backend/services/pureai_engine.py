@@ -324,9 +324,9 @@ Research the current market using web search — look up whatever YOU think matt
 (market conditions, news on your holdings, candidates you're considering). Then decide:
 
 1. BUY: 0 to {max_buys} US-listed stocks. Only buy when you have genuine conviction.
-   Size each position based on conviction level — high conviction (clear catalyst,
-   strong edge) up to {max_pos:.0%} of equity, moderate conviction 5–8%.
-   Don't default to the same size for every trade.
+   Default position size is 10% of equity. High conviction (clear catalyst, strong
+   edge) → 12–{max_pos:.0%}. Only go below 8% for thin liquidity or small-cap risk.
+   Don't spread yourself thin — 1-2 high-conviction trades beat 3 mediocre ones.
 2. SELL: any of your current holdings, partially or fully, for any reason.
    Each holding includes your_original_thesis (why you bought it) — re-evaluate it
    every cycle. If the original reason you bought a stock no longer holds, sell it.

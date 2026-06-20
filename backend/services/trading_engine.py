@@ -1735,15 +1735,20 @@ async def run_trading_cycle():
                 timestamp=_last_analysis_at,
             )
             cache_set("latest_ai_decision", _latest_analysis.model_dump(mode="json"), 86400)
-            # ── Block new entries after 3:45 PM ET (EOD flat window) ─────────
+            # ── Block new entries after 2:00 PM ET ───────────────────────────
+            # EOD flat closes everything at 3:45 PM. Entries after 2:00 PM only
+            # have 105 minutes to play out — not enough for momentum to work.
+            # Analysis showed 1/8 EOD-flat exits were winners (avg -$32):
+            # the root cause was late-day entries with no time to reach TP.
             if decision.action in ("buy", "short"):
                 try:
                     from zoneinfo import ZoneInfo as _ZI_eod_b
                     _now_et_eod_b = datetime.now(_ZI_eod_b("America/New_York"))
                 except Exception:
                     _now_et_eod_b = datetime.now(timezone.utc) - timedelta(hours=4)
-                if _now_et_eod_b.hour * 60 + _now_et_eod_b.minute >= 15 * 60 + 45:
-                    logger.debug(f"EOD flat window: skipping new {decision.action} {decision.symbol} after 3:45 PM ET")
+                _mins_now = _now_et_eod_b.hour * 60 + _now_et_eod_b.minute
+                if _mins_now >= 14 * 60:  # 2:00 PM ET
+                    logger.info(f"Late-day entry block: skipping {decision.action} {decision.symbol} after 2:00 PM ET")
                     continue
 
             # ── Daily rejection purge ─────────────────────────────────────────
