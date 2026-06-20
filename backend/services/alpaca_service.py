@@ -676,14 +676,18 @@ def _fetch_bars_batch(symbols: list[str]) -> dict:
             volumes = [int(b.volume) for b in sym_bars]
             hist_vols = volumes[:-1] if len(volumes) > 1 else volumes
             last_20   = hist_vols[-20:] if len(hist_vols) >= 20 else hist_vols
+            avg_vol   = int(sum(last_20) / len(last_20)) if last_20 else 0
+            today_vol = volumes[-1] if volumes else 0
             result[sym] = {
                 "closing_prices": closes,
                 "high_prices":    highs,
                 "low_prices":     lows,
-                "ma50":      round(sum(closes[-50:])  / 50,  4) if n >= 50  else None,
-                "ma200":     round(sum(closes[-200:]) / 200, 4) if n >= 200 else None,
-                "year_high": round(max(highs), 4) if highs else None,
-                "avg_volume": int(sum(last_20) / len(last_20)) if last_20 else 0,
+                "ma50":           round(sum(closes[-50:])  / 50,  4) if n >= 50  else None,
+                "ma200":          round(sum(closes[-200:]) / 200, 4) if n >= 200 else None,
+                "year_high":      round(max(highs), 4) if highs else None,
+                "avg_volume":     avg_vol,
+                "volume":         today_vol,
+                "relative_volume": round(today_vol / avg_vol, 2) if avg_vol > 0 else 1.0,
             }
     return result
 

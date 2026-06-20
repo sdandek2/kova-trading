@@ -195,11 +195,18 @@ def _score_symbol(
         flow = _bc_flow(symbol)
         if flow.get("signal") not in ("unavailable", "neutral"):
             raw = flow.get("conviction_boost", 0)
-            if raw > 0:
+            # Bullish call flow (+) contradicts a short setup (RSI>70 + MACD fading).
+            # Don't boost a stock we're about to short on overbought signals —
+            # the calls and the short thesis can't both be right.
+            _short_setup = (rsi is not None and rsi > 70
+                            and macd_hist is not None and macd_hist < 0.5)
+            if raw > 0 and _short_setup:
+                pts = 0   # conflicting signals — neutral, don't add
+            elif raw > 0:
                 db_key = "barchart_very_unusual" if raw >= 15 else "barchart_unusual"
                 pts = weights.get(db_key, raw)
             else:
-                pts = raw  # negative signals keep their hardcoded value
+                pts = raw  # negative (put flow) always applies
             breakdown["options_flow"] = pts
             score += pts
 
@@ -209,7 +216,14 @@ def _score_symbol(
             flow = get_options_flow(symbol)
             if flow.get("signal") not in ("unavailable", "neutral"):
                 raw = flow.get("conviction_boost", 0)
-                pts = weights.get("options_flow_fallback", raw) if raw > 0 else raw
+                _short_setup = (rsi is not None and rsi > 70
+                                and macd_hist is not None and macd_hist < 0.5)
+                if raw > 0 and _short_setup:
+                    pts = 0
+                elif raw > 0:
+                    pts = weights.get("options_flow_fallback", raw)
+                else:
+                    pts = raw
                 breakdown["options_flow"] = pts
                 score += pts
         except Exception:
