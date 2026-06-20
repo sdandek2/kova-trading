@@ -131,9 +131,9 @@ def _load_trades_from_db() -> list[dict]:
             cur.execute("""
                 SELECT
                     symbol,
-                    action                          AS signal_type,
-                    EXTRACT(HOUR FROM opened_at)    AS entry_hour_et,
-                    EXTRACT(DOW FROM opened_at) - 1 AS entry_dow,
+                    side                            AS signal_type,
+                    EXTRACT(HOUR FROM entry_time)   AS entry_hour_et,
+                    EXTRACT(DOW FROM entry_time) - 1 AS entry_dow,
                     CASE WHEN exit_price IS NOT NULL AND entry_price > 0
                          THEN (exit_price - entry_price) / entry_price * 100
                          ELSE NULL END               AS pl_pct
@@ -141,7 +141,7 @@ def _load_trades_from_db() -> list[dict]:
                 WHERE exit_price IS NOT NULL
                   AND entry_price IS NOT NULL
                   AND entry_price > 0
-                ORDER BY closed_at DESC
+                ORDER BY exit_time DESC
                 LIMIT 2000
             """)
             rows = cur.fetchall()

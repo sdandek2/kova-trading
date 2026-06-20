@@ -91,7 +91,9 @@ def _score_symbol(
     rs_score,               # RSScore from brain/rs_ranking.py (or None)
     sentiment: dict,
     news_headlines: list,
+    weights: dict = None,   # signal_weights from DB — {signal_name: current_weight}
 ) -> ScoredCandidate:
+    weights = weights or {}
     prices = data.get("closing_prices", [])
     high_prices = data.get("high_prices", [])
     low_prices = data.get("low_prices", [])
@@ -192,16 +194,24 @@ def _score_symbol(
         from services.brain.connectors.barchart_options import get_options_flow as _bc_flow
         flow = _bc_flow(symbol)
         if flow.get("signal") not in ("unavailable", "neutral"):
-            breakdown["options_flow"] = flow.get("conviction_boost", 0)
-            score += breakdown["options_flow"]
+            raw = flow.get("conviction_boost", 0)
+            if raw > 0:
+                db_key = "barchart_very_unusual" if raw >= 15 else "barchart_unusual"
+                pts = weights.get(db_key, raw)
+            else:
+                pts = raw  # negative signals keep their hardcoded value
+            breakdown["options_flow"] = pts
+            score += pts
 
     except Exception:
         try:
             from services.brain.connectors.unusual_whales import get_options_flow
             flow = get_options_flow(symbol)
             if flow.get("signal") not in ("unavailable", "neutral"):
-                breakdown["options_flow"] = flow.get("conviction_boost", 0)
-                score += breakdown["options_flow"]
+                raw = flow.get("conviction_boost", 0)
+                pts = weights.get("options_flow_fallback", raw) if raw > 0 else raw
+                breakdown["options_flow"] = pts
+                score += pts
         except Exception:
             pass
 
@@ -240,8 +250,14 @@ def _score_symbol(
         from services.brain.connectors.fmp_earnings import get_earnings_signal
         esurp = get_earnings_signal(symbol)
         if esurp.get("signal") not in ("unavailable", "neutral"):
-            breakdown["earnings_surprise"] = esurp.get("conviction_boost", 0)
-            score += breakdown["earnings_surprise"]
+            raw = esurp.get("conviction_boost", 0)
+            if raw > 0:
+                db_key = "earnings_surprise_strong" if raw >= 10 else "earnings_surprise_mild"
+                pts = weights.get(db_key, raw)
+            else:
+                pts = raw  # negative surprise keeps hardcoded penalty
+            breakdown["earnings_surprise"] = pts
+            score += pts
     except Exception:
         pass
 
@@ -250,8 +266,14 @@ def _score_symbol(
         from services.brain.connectors.sec_insider import get_insider_signal
         insider = get_insider_signal(symbol)
         if insider.get("signal") not in ("unavailable", "neutral"):
-            breakdown["insider_buy"] = insider.get("conviction_boost", 0)
-            score += breakdown["insider_buy"]
+            raw = insider.get("conviction_boost", 0)
+            if raw > 0:
+                db_key = "insider_buy_large" if raw >= 12 else "insider_buy_small"
+                pts = weights.get(db_key, raw)
+            else:
+                pts = raw
+            breakdown["insider_buy"] = pts
+            score += pts
     except Exception:
         pass
 
@@ -260,8 +282,13 @@ def _score_symbol(
         from services.brain.connectors.finnhub import get_recommendation_signal
         rec = get_recommendation_signal(symbol)
         if rec.get("signal") not in ("unavailable", "neutral"):
-            breakdown["analyst_revision"] = rec.get("conviction_boost", 0)
-            score += breakdown["analyst_revision"]
+            raw = rec.get("conviction_boost", 0)
+            if raw > 0:
+                pts = weights.get("analyst_revision", raw)
+            else:
+                pts = raw  # negative revision keeps hardcoded penalty
+            breakdown["analyst_revision"] = pts
+            score += pts
     except Exception:
         pass
 
@@ -430,11 +457,19 @@ def score_universe(
     Score every symbol in universe_snapshot and return top_n candidates.
     Only returns candidates with score >= min_score.
     """
+    # Load adaptive weights from DB once per scoring cycle.
+    # Falls back gracefully to {} (connector defaults) if DB is unavailable.
+    try:
+        from services.db import get_signal_weights as _get_weights
+        _weights = _get_weights()
+    except Exception:
+        _weights = {}
+
     candidates = []
     for symbol, data in universe_snapshot.items():
         rs_score = (rs_map or {}).get(symbol)
         try:
-            c = _score_symbol(symbol, data, regime_result, rs_score, sentiment, news_headlines)
+            c = _score_symbol(symbol, data, regime_result, rs_score, sentiment, news_headlines, weights=_weights)
             candidates.append(c)
         except Exception as e:
             logger.debug(f"Signal scoring failed for {symbol}: {e}")

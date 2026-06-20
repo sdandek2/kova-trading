@@ -740,11 +740,8 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
                     (closing_prices[-1] - closing_prices[0]) / closing_prices[0] * 100, 2
                 ) if closing_prices[0] else None
 
-            # ask_size is shares-at-ask (order book depth), not traded volume.
-            # Real intraday volume requires a separate bars/snapshot call.
-            # Set relative_volume=1.0 (neutral) to avoid distorting scores.
-            volume = 0
-            relative_volume = 1.0
+            volume = cached.get("volume", 0)
+            relative_volume = cached.get("relative_volume", 1.0)
 
             snapshot[symbol] = {
                 "current_price":      current_price,
