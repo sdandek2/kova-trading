@@ -60,6 +60,11 @@ _ok(f"{live}/{len(universe)} symbols have live price  ({time.time()-t0:.1f}s)")
 if missing:
     _warn(f"{missing} symbols missing price — will be skipped in scoring")
 
+# Compute market-hours flag once (used here and in health summary)
+from datetime import datetime as _dt, timezone as _tz
+_et_hour = (_dt.now(_tz.utc).hour - 4) % 24
+_market_open = 9 <= _et_hour < 16
+
 # Sample volume signal (was broken before fix)
 _sample_syms = [s for s in ["AAPL","NVDA","TSLA","SPY"] if s in snapshot]
 if _sample_syms:
@@ -69,9 +74,6 @@ if _sample_syms:
     av = d.get("avg_volume", 0)
     vol = d.get("volume", 0)
     print(f"         Volume check ({s}): raw_vol={vol:,}  avg_vol={av:,}  rel_vol={rv}")
-    from datetime import datetime as _dt, timezone as _tz
-    _et_hour = (_dt.now(_tz.utc).hour - 4) % 24
-    _market_open = 9 <= _et_hour < 16
     if rv == 1.0 and vol == 0:
         if _market_open:
             _warn("relative_volume is forced 1.0 during market hours — check bars fix")
@@ -127,10 +129,12 @@ except Exception as e:
 
 # ── 6. Signal weights ─────────────────────────────────────────────────────────
 _step(6, "Adaptive signal weights (from DB)")
+_sig_weights_from_db = False
 try:
     from services.db import get_signal_weights
     sig_weights = get_signal_weights()
     if sig_weights:
+        _sig_weights_from_db = True
         _ok(f"Loaded {len(sig_weights)} weights from DB")
         for k, v in sorted(sig_weights.items()):
             print(f"         {k:<32} = {v}")
@@ -138,7 +142,7 @@ try:
         _warn("DB unavailable or empty — using connector defaults")
         sig_weights = {}
 except Exception as e:
-    _warn(f"Weight load failed: {e}")
+    _warn(f"Weight load failed (DB not reachable from local Mac — OK): {type(e).__name__}")
     sig_weights = {}
 
 # ── 7. Scoring (selective real connectors) ────────────────────────────────────
@@ -308,16 +312,21 @@ else:
 # ── 10. Pipeline health summary ───────────────────────────────────────────────
 _header("PIPELINE HEALTH SUMMARY")
 
+# Some checks only make sense during market hours or when running on Railway
+_on_railway = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_SERVICE_NAME"))
+
 checks = {
-    "Universe populated":       len(universe) > 100,
-    "Snapshot >90% live":       live / max(len(universe), 1) > 0.9,
-    "Regime detected":          regime.regime in ("bull", "chop", "bear"),
-    "VIX connected":            regime.vix_level not in ("unknown", None),
-    "RS map populated":         len(rs_map) > 50,
-    "News flowing":             len(news_headlines) > 0,
-    "Signal weights loaded":    len(sig_weights) > 0,
-    "Candidates scored":        len(all_candidates) > 0,
-    "LLM responded":            above_threshold == [] or len(decisions) > 0,
+    "Universe populated":                len(universe) > 100,
+    # Snapshot: live prices only exist during market hours (9-4 ET weekdays)
+    "Snapshot >90% live (mkt hrs)":      (not _market_open) or live / max(len(universe), 1) > 0.9,
+    "Regime detected":                   regime.regime in ("bull", "chop", "bear"),
+    "VIX connected":                     regime.vix_level not in ("unknown", None),
+    "RS map populated":                  len(rs_map) > 50,
+    "News flowing":                      len(news_headlines) > 0,
+    # DB only reachable inside Railway — skip check when running locally
+    "Signal weights (Railway-only DB)":  _sig_weights_from_db or not _on_railway,
+    "Candidates scored":                 len(all_candidates) > 0,
+    "LLM responded":                     above_threshold == [] or len(decisions) > 0,
 }
 
 all_passed = True
