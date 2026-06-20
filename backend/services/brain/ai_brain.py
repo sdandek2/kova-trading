@@ -188,9 +188,9 @@ Return valid JSON only — no markdown:
     try:
         from services.db import log_bot_activity as _lba
         for _c in scored_candidates:
-            _baseline_action = "buy" if _c.signal_score >= 55 else "skip"
+            _baseline_action = "buy" if _c.score >= 55 else "skip"
             _lba("signal_baseline",
-                 f"signal_only={_baseline_action} score={_c.signal_score:.0f} "
+                 f"signal_only={_baseline_action} score={_c.score:.0f} "
                  f"side={_c.suggested_action}",
                  symbol=_c.symbol)
     except Exception as _be:
@@ -210,12 +210,12 @@ Return valid JSON only — no markdown:
             from services.db import log_bot_activity as _lba2
             _approved_syms = {t.get("symbol") for t in approved}
             for _c in scored_candidates:
-                if _c.signal_score >= 65 and _c.symbol not in _approved_syms:
+                if _c.score >= 65 and _c.symbol not in _approved_syms:
                     _lba2("claude_override",
-                          f"Claude skipped score={_c.signal_score:.0f} "
+                          f"Claude skipped score={_c.score:.0f} "
                           f"side={_c.suggested_action} (signal said buy, AI said no)",
                           symbol=_c.symbol)
-                    logger.info(f"claude_override: {_c.symbol} score={_c.signal_score:.0f} skipped by AI")
+                    logger.info(f"claude_override: {_c.symbol} score={_c.score:.0f} skipped by AI")
         except Exception as _oe:
             logger.debug(f"claude_override logging failed (non-fatal): {_oe}")
 
