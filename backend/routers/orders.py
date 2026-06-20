@@ -30,7 +30,7 @@ def place_manual_order(req: ManualOrderRequest):
         from alpaca.trading.client import TradingClient
         from alpaca.trading.enums import AssetStatus
         from config import settings
-        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
+        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper="paper-api" in settings.alpaca_base_url)
         try:
             asset = client.get_asset(symbol)
             if not asset.tradable:
@@ -71,7 +71,7 @@ def place_manual_order(req: ManualOrderRequest):
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         from config import settings
-        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
+        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper="paper-api" in settings.alpaca_base_url)
         order = client.submit_order(MarketOrderRequest(
             symbol=symbol,
             qty=req.qty,
@@ -88,7 +88,7 @@ def cancel_order(order_id: str):
     try:
         from alpaca.trading.client import TradingClient
         from config import settings
-        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper=True)
+        client = TradingClient(settings.alpaca_api_key, settings.alpaca_secret_key, paper="paper-api" in settings.alpaca_base_url)
         client.cancel_order_by_id(order_id)
         return {"status": "cancelled", "order_id": order_id}
     except Exception as e:

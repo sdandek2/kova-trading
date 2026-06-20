@@ -89,7 +89,7 @@ def _get_client() -> "TradingClient":
         _trading_client = TradingClient(
             settings.alpaca_api_key,
             settings.alpaca_secret_key,
-            paper=getattr(settings, "alpaca_paper", True),
+            paper="paper-api" in settings.alpaca_base_url,
         )
     return _trading_client
 
