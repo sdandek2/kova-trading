@@ -740,19 +740,11 @@ def get_market_snapshot_light(symbols: list[str]) -> dict:
                     (closing_prices[-1] - closing_prices[0]) / closing_prices[0] * 100, 2
                 ) if closing_prices[0] else None
 
-            volume = int(quote.ask_size or 0) if quote else 0
-
-            # Project today's partial volume to full-day estimate
-            market_open_minutes = 9.5 * 60
-            market_close_minutes = 16.0 * 60
-            total_session_minutes = market_close_minutes - market_open_minutes
-            now_et = datetime.now(timezone.utc)
-            et_offset = -4 if _time_module.daylight else -5
-            now_et_minutes = (now_et.hour + et_offset) * 60 + now_et.minute
-            minutes_elapsed = max(1, now_et_minutes - market_open_minutes)
-            day_fraction = min(minutes_elapsed / total_session_minutes, 1.0)
-            projected_volume = int(volume / day_fraction) if day_fraction > 0 else volume
-            relative_volume = round(projected_volume / avg_volume, 2) if avg_volume > 0 else 1.0
+            # ask_size is shares-at-ask (order book depth), not traded volume.
+            # Real intraday volume requires a separate bars/snapshot call.
+            # Set relative_volume=1.0 (neutral) to avoid distorting scores.
+            volume = 0
+            relative_volume = 1.0
 
             snapshot[symbol] = {
                 "current_price":      current_price,

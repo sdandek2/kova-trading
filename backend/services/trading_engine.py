@@ -1578,7 +1578,9 @@ async def run_trading_cycle():
             from services.brain.signals import score_universe
             from services.brain.ai_brain import decide as _brain_decide
 
-            _scored = await loop.run_in_executor(
+            # Fetch all candidates ≥50 so we can track near-misses (50–59)
+            # separately from the 60+ pool passed to the brain.
+            _all_scored = await loop.run_in_executor(
                 None,
                 functools.partial(
                     score_universe,
@@ -1587,17 +1589,18 @@ async def run_trading_cycle():
                     rs_map=_rs_map,
                     sentiment=sentiment,
                     news_headlines=news_headlines,
-                    top_n=16,
-                    min_score=60,
+                    top_n=20,
+                    min_score=50,
                 )
             )
+            _scored = [c for c in (_all_scored or []) if c.score >= 60]
 
-            # Register near-miss candidates for price followup (score 35–44)
+            # Register near-miss candidates (scored 50–59) for price followup
             try:
                 from services.db import log_near_miss as _log_nm_inline
                 _now_utc_nm_reg = datetime.now(timezone.utc)
-                for _nm_c in (_scored or []):
-                    if 35 <= _nm_c.score < 45 and _nm_c.suggested_action != "skip":
+                for _nm_c in (_all_scored or []):
+                    if 50 <= _nm_c.score < 60 and _nm_c.suggested_action != "skip":
                         _nm_id = _log_nm_inline(
                             symbol=_nm_c.symbol,
                             score=_nm_c.score,
@@ -1754,7 +1757,11 @@ async def run_trading_cycle():
                 _mins_now = _now_et_eod_b.hour * 60 + _now_et_eod_b.minute
                 _has_earnings_today = (earnings_map and
                                        earnings_map.get(decision.symbol) == "today/tomorrow")
-                _is_news_driven = bool(_urgent_ctx)
+                _is_news_driven = bool(_urgent_ctx) and any(
+                    decision.symbol in ((art.get('symbols') or []) if isinstance(art, dict)
+                                        else (getattr(art, 'symbols', None) or []))
+                    for art in _urgent_ctx
+                )
                 if _has_earnings_today or _is_news_driven:
                     _entry_cutoff = 15 * 60 + 35  # 3:35 PM for catalyst trades (10 min buffer before EOD flat)
                     _reason_tag = "earnings play" if _has_earnings_today else "breaking news"

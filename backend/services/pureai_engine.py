@@ -317,9 +317,11 @@ def _get_portfolio_state() -> dict:
             "unrealized_pl": round(float(p.unrealized_pl or 0), 2),
             "unrealized_pl_pct": round(float(p.unrealized_plpc or 0) * 100, 2),
         })
+    reserved = get_pureai_reserve()
+    tradeable_cash = max(0.0, float(acct.cash) - reserved)
     return {
         "equity": float(acct.equity),
-        "cash": float(acct.cash),
+        "cash": tradeable_cash,
         "holdings": holdings,
     }
 
