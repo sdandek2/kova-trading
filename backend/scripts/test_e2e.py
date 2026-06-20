@@ -241,41 +241,44 @@ else:
         print("     Run:  pip install anthropic  then rerun.")
         print("     LLM works fine on Railway — this is a local-only gap.")
         print("     Skipping LLM call.\n")
-        above_threshold = []  # skip the loop below
+        above_threshold = []
 
-    # Use Haiku for the test call — same logic, fraction of the cost
-    import services.ai_client as _ai_client
-    _ai_client.ask_ai_pro = _ai_client.ask_ai
+    if not above_threshold:
+        decisions = []
+    else:
+        # Use Haiku for the test call — same logic, fraction of the cost
+        import services.ai_client as _ai_client
+        _ai_client.ask_ai_pro = _ai_client.ask_ai
 
-    from services.brain.ai_brain import decide
-    from services.db import get_recent_trade_outcomes
+        from services.brain.ai_brain import decide
+        from services.db import get_recent_trade_outcomes
 
-    kelly_history = []
-    try:
-        kelly_history = get_recent_trade_outcomes(limit=30) or []
-    except Exception:
-        pass
+        kelly_history = []
+        try:
+            kelly_history = get_recent_trade_outcomes(limit=30) or []
+        except Exception:
+            pass
 
-    strategy = {
-        "max_position_pct": 0.15,
-        "stop_loss_pct": 0.05,
-        "take_profit_pct": 0.12,
-    }
+        strategy = {
+            "max_position_pct": 0.15,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.12,
+        }
 
-    t0 = time.time()
-    decisions = decide(
-        scored_candidates=above_threshold[:3],
-        positions=[],
-        account_cash=cash,
-        portfolio_value=portfolio,
-        regime_result=regime,
-        rs_map=rs_map,
-        kelly_history=kelly_history,
-        strategy=strategy,
-        news_headlines=news_headlines,
-    )
-    llm_elapsed = time.time() - t0
-    _ok(f"LLM responded in {llm_elapsed:.1f}s")
+        t0 = time.time()
+        decisions = decide(
+            scored_candidates=above_threshold[:3],
+            positions=[],
+            account_cash=cash,
+            portfolio_value=portfolio,
+            regime_result=regime,
+            rs_map=rs_map,
+            kelly_history=kelly_history,
+            strategy=strategy,
+            news_headlines=news_headlines,
+        )
+        llm_elapsed = time.time() - t0
+        _ok(f"LLM responded in {llm_elapsed:.1f}s")
 
     print()
     for i, d in enumerate(decisions, 1):
