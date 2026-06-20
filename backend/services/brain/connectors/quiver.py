@@ -125,7 +125,7 @@ def get_darkpool_signal(symbol: str) -> dict:
         if pct_from_52w_high >= -0.05 and above_50ma and above_200ma:
             result = {
                 "signal": "accumulating",
-                "conviction_boost": 15,
+                "conviction_boost": 8,
                 "details": (
                     f"FMP: {pct_from_52w_high:.0%} from 52w-high, "
                     f"above MA50(${ma50:.0f}) + MA200(${ma200:.0f})"
@@ -134,7 +134,7 @@ def get_darkpool_signal(symbol: str) -> dict:
         elif above_50ma and golden_cross:
             result = {
                 "signal": "accumulating",
-                "conviction_boost": 8,
+                "conviction_boost": 4,
                 "details": f"FMP: above MA50(${ma50:.0f}), golden cross (MA50 > MA200)",
             }
         else:
