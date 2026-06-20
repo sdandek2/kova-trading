@@ -366,9 +366,9 @@ _header("TEST A: SELL / ROTATION (mock open positions)")
 from types import SimpleNamespace as _NS
 
 _mock_positions = [
-    _NS(symbol="NVDA", side="long", qty=5,  avg_entry_price=280.00, unrealized_pl_percent=+18.5),
-    _NS(symbol="INTC", side="long", qty=15, avg_entry_price=145.00, unrealized_pl_percent=-8.2),
-    _NS(symbol="META", side="long", qty=3,  avg_entry_price=320.00, unrealized_pl_percent=+2.1),
+    _NS(symbol="NVDA", side="long", qty=5,  avg_entry_price=280.00, current_price=332.00, unrealized_pl_percent=+18.5),
+    _NS(symbol="INTC", side="long", qty=15, avg_entry_price=145.00, current_price=133.10, unrealized_pl_percent=-8.2),
+    _NS(symbol="META", side="long", qty=3,  avg_entry_price=320.00, current_price=326.70, unrealized_pl_percent=+2.1),
 ]
 
 print("  Mock positions injected (one strong winner, one loser, one flat):")
