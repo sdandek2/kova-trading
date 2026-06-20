@@ -1593,14 +1593,19 @@ async def run_trading_cycle():
                     min_score=50,
                 )
             )
-            _scored = [c for c in (_all_scored or []) if c.score >= 60]
+            # Bull regime: lower bar to 55 (regime bonus makes signals more reliable).
+            # Chop/Bear: keep at 60 (no regime bonus, need stronger confirmation).
+            _min_trade_score = 55 if (
+                _brain_regime and _brain_regime.regime == "bull"
+            ) else 60
+            _scored = [c for c in (_all_scored or []) if c.score >= _min_trade_score]
 
-            # Register near-miss candidates (scored 50–59) for price followup
+            # Register near-miss candidates for price followup
             try:
                 from services.db import log_near_miss as _log_nm_inline
                 _now_utc_nm_reg = datetime.now(timezone.utc)
                 for _nm_c in (_all_scored or []):
-                    if 50 <= _nm_c.score < 60 and _nm_c.suggested_action != "skip":
+                    if 50 <= _nm_c.score < _min_trade_score and _nm_c.suggested_action != "skip":
                         _nm_id = _log_nm_inline(
                             symbol=_nm_c.symbol,
                             score=_nm_c.score,

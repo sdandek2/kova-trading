@@ -79,6 +79,16 @@ def get_macro_context() -> dict:
             elif u_price < u_ma10 * 0.9:
                 context["vix_level"] = "low_fear"
 
+        # Fetch actual VIX index level for detect_regime() numeric scoring
+        try:
+            import yfinance as _yf
+            _vix_info = _yf.Ticker("^VIX").info or {}
+            _vix_num = float(_vix_info.get("regularMarketPrice") or _vix_info.get("previousClose") or 0)
+            if _vix_num > 0:
+                context["vix_value"] = _vix_num
+        except Exception:
+            pass
+
         # Determine regime + guidance
         # Key fix: UVXY alone cannot trigger bear mode. A fear spike on a bull
         # day (SPY trending up) is a volatility event, not a regime change.
