@@ -25,7 +25,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://financialmodelingprep.com/stable"
-_CACHE_TTL = 14_400  # 4h — MA50/MA200 are daily but we want reasonably fresh data
+_CACHE_TTL = 86_400  # 24h — MA50/MA200 are daily values, no point re-fetching intraday
 
 _cache: dict[str, tuple[dict, float]] = {}
 
