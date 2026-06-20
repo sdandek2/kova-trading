@@ -134,11 +134,12 @@ all_candidates = score_universe(
     min_score=50,
 )
 sys.stderr = sys.__stderr__
-above_60  = [c for c in all_candidates if c.score >= 60]
-near_miss = [c for c in all_candidates if 50 <= c.score < 60]
+_min_trade_score = 55 if (regime and regime.regime == "bull") else 60
+above_60  = [c for c in all_candidates if c.score >= _min_trade_score]
+near_miss = [c for c in all_candidates if 50 <= c.score < _min_trade_score]
 print(f"    Scored {len(all_candidates)} candidates in {time.time()-t0:.1f}s")
-print(f"    ≥60 (would trade) : {len(above_60)}")
-print(f"    50-59 (near-miss) : {len(near_miss)}")
+print(f"    ≥{_min_trade_score} (would trade) : {len(above_60)}")
+print(f"    50-{_min_trade_score-1} (near-miss) : {len(near_miss)}")
 
 # ── 8. Print results ─────────────────────────────────────────────────────────
 def _macd_str(h):

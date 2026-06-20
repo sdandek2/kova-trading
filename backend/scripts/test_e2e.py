@@ -181,10 +181,11 @@ all_candidates = score_universe(
 sys.stderr = sys.__stderr__
 elapsed = time.time() - t0
 
-above_threshold = [c for c in all_candidates if c.score >= 60]
-near_miss       = [c for c in all_candidates if 50 <= c.score < 60]
+_min_trade_score = 55 if (regime and regime.regime == "bull") else 60
+above_threshold = [c for c in all_candidates if c.score >= _min_trade_score]
+near_miss       = [c for c in all_candidates if 50 <= c.score < _min_trade_score]
 _ok(f"Scored {len(all_candidates)} candidates in {elapsed:.0f}s")
-_ok(f"≥60 (would trade): {len(above_threshold)}  |  50-59 (near-miss): {len(near_miss)}")
+_ok(f"≥{_min_trade_score} (would trade): {len(above_threshold)}  |  50-{_min_trade_score-1} (near-miss): {len(near_miss)}")
 
 # ── 8. Score breakdown ────────────────────────────────────────────────────────
 def _macd_arrow(h):
