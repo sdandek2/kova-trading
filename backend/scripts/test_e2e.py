@@ -196,10 +196,11 @@ for c in above_threshold:
     ma50  = d.get("ma50")
     ma200 = d.get("ma200")
     px    = c.price
+    _rsi_s = f"{c.rsi:.0f}" if c.rsi is not None else "n/a"
+    _rs_s  = f"{c.rs_percentile:.0f}th" if c.rs_percentile else "n/a"
     print(f"  [{c.score:>3}] {c.symbol:<6}  ${px:<8.2f}  {c.suggested_action.upper():<6}"
-          f"  RSI={c.rsi:.0f if c.rsi else 'n/a':<5}  MACD={_macd_arrow(c.macd_hist):<10}"
-          f"  RS={c.rs_percentile:.0f if c.rs_percentile else '?'}th"
-          f"  rv={c.rel_volume:.1f}x")
+          f"  RSI={_rsi_s:<5}  MACD={_macd_arrow(c.macd_hist):<10}"
+          f"  RS={_rs_s}  rv={c.rel_volume:.1f}x")
     bd = {k: v for k, v in (c.score_breakdown or {}).items() if v != 0}
     if bd:
         parts = "  ".join(f"{k}={v:+d}" for k, v in sorted(bd.items(), key=lambda x: -abs(x[1])))
