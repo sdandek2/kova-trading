@@ -1756,13 +1756,13 @@ async def run_trading_cycle():
                                        earnings_map.get(decision.symbol) == "today/tomorrow")
                 _is_news_driven = bool(_urgent_ctx)
                 if _has_earnings_today or _is_news_driven:
-                    _entry_cutoff = 15 * 60 + 15  # 3:15 PM for catalyst trades
+                    _entry_cutoff = 15 * 60 + 35  # 3:35 PM for catalyst trades (10 min buffer before EOD flat)
                     _reason_tag = "earnings play" if _has_earnings_today else "breaking news"
                 else:
                     _entry_cutoff = 14 * 60        # 2:00 PM for regular trades
                     _reason_tag = ""
                 if _mins_now >= _entry_cutoff:
-                    _cutoff_str = "3:15 PM" if _entry_cutoff > 14 * 60 else "2:00 PM"
+                    _cutoff_str = "3:35 PM" if _entry_cutoff > 14 * 60 else "2:00 PM"
                     logger.info(
                         f"Late-day entry block: skipping {decision.action} {decision.symbol} "
                         f"after {_cutoff_str} ET"
