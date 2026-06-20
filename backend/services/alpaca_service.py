@@ -25,10 +25,12 @@ logger = logging.getLogger(__name__)
 
 from services.connector_health import track_api
 
+_paper_mode = "paper-api" in settings.alpaca_base_url
+
 trading_client = TradingClient(
     settings.alpaca_api_key,
     settings.alpaca_secret_key,
-    paper=True,
+    paper=_paper_mode,
 )
 
 data_client = StockHistoricalDataClient(
@@ -439,7 +441,7 @@ def get_portfolio_history(period: str = "1W") -> list[dict]:
         import requests as _requests
         # Use Alpaca REST API directly — alpaca-py TradingClient
         # doesn't expose get_portfolio_history in all versions
-        base = "https://paper-api.alpaca.markets"
+        base = settings.alpaca_base_url
         headers = {
             "APCA-API-KEY-ID": settings.alpaca_api_key,
             "APCA-API-SECRET-KEY": settings.alpaca_secret_key,
