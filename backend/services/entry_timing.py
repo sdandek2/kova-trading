@@ -12,8 +12,11 @@ _LEVERAGED_ETFS = {
 }
 
 _BROAD_ETFS = {
-    "QQQ", "SPY", "IWM", "XLE", "XLK", "XLF", "XLV", "XLI", "GLD",
-    "SLV", "EEM", "EFA", "VTI", "VOO", "ARKK", "ARKW", "ARKG",
+    "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "HYG", "LQD", "IEF",
+    "XLF", "XLK", "XLE", "XLV", "XLI", "XLY", "XLB", "XLP", "XLU", "XLRE",
+    "SMH", "XBI", "XME", "GDX", "USO", "IAU", "IBIT", "GBTC", "VOO", "VTI",
+    "AGG", "SOXX", "ARKK", "ARKW", "ARKG", "ARKF", "ARKE", "SCO", "OIH",
+    "EWY", "FXI", "EEM", "EFA", "VWO", "UVXY", "SVXY", "SNDQ", "IUXX",
 }
 
 # ── Rejection cooldown ─────────────────────────────────────────────────────
