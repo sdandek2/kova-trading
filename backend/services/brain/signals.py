@@ -207,7 +207,7 @@ def _score_symbol(
 
     try:
         from services.brain.connectors.fmp import get_estimate_revision
-        rev = get_estimate_revision(symbol)
+        rev = get_estimate_revision(symbol, current_price=price)
         if rev.get("signal") not in ("unavailable", "unchanged"):
             breakdown["earnings_rev"] = rev.get("conviction_boost", 0)
             score += breakdown["earnings_rev"]

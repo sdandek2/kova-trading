@@ -1,42 +1,31 @@
 """
-Phase 7I — Institutional positioning via yfinance (FREE, no API key needed).
+Phase 7I — Institutional positioning via Financial Modeling Prep (FMP) API.
 
-Uses yfinance institutional holders to approximate dark pool accumulation.
-Real dark pool data is delayed/expensive; institutional holder changes are a
-reasonable free proxy — large funds disclose positions quarterly via 13F.
+Replaces the original yfinance implementation which got rate-limited (429) by Yahoo
+Finance on Railway's cloud IP daily, blocking all conviction boosts for the day.
 
-Signal: top 10 institutional holders as % of float
-  inst_pct >= 70%  → strong institutional backing +15 pts
-  inst_pct >= 50%  → moderate institutional backing +8 pts
-  inst_pct <  20%  → low institutional interest (retail-driven) 0 pts
+Uses FMP company profile to get institutional ownership %.
+API key env var: FMP_API_KEY (shared with fmp_earnings.py; 250 calls/day free tier)
+Cache: 24h per symbol — quarterly 13F data doesn't change intraday.
 
-Note: this data is quarterly (SEC 13F), not real-time. Lower conviction than
-real dark pool data, but still useful for filtering out thinly-held stocks.
-Cache: 24 hours per symbol.
-
-Railway IP note: Yahoo Finance rate-limits cloud IPs (429). A daily circuit
-breaker stops all calls after the first 429, retrying the next calendar day.
-yfinance 0.2.54+ fixes the 429 bug that affected earlier versions.
+Signal:
+  inst_pct >= 70%  → strong institutional backing  +15 pts
+  inst_pct >= 50%  → moderate institutional backing  +8 pts
+  inst_pct <  50%  → low institutional interest       0 pts
 """
 import logging
+import os
 import time
-from datetime import date
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# Silence yfinance's own noisy internal logger — it logs every 429 retry as ERROR
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+_API_BASE = "https://financialmodelingprep.com/api/v3"
+_CACHE_TTL = 86_400  # 24h — 13F filings are quarterly; no point re-fetching intraday
 
-_CACHE_TTL = 86_400  # 24h — fetch once per day per symbol, instant on subsequent cycles
-
-# Daily circuit breaker — stop calling Yahoo after first 429, reset next day
-_blocked_date: date | None = None
 _cache: dict[str, tuple[dict, float]] = {}
-# Safety: if any error repeats 10+ times consecutively, back off for the day
-_consecutive_errors: int = 0
-_CONSECUTIVE_ERROR_LIMIT = 5
 
-_ETF_SUFFIXES = ("ETF", "ETN", "FUND")
 _KNOWN_ETFS = {
     "SPY","QQQ","IWM","DIA","GLD","SLV","TLT","HYG","LQD","IEF",
     "XLF","XLK","XLE","XLV","XLI","XLY","XLB","XLP","XLU","XLRE",
@@ -44,12 +33,21 @@ _KNOWN_ETFS = {
     "ARKW","ARKG","SMH","GDX","USO","IAU","IBIT","GBTC","VOO","VTI",
     "AGG","SOXX","ARKF","ARKE","SCO","OIH","EWY","IUXX",
 }
+_ETF_SUFFIXES = ("ETF", "ETN", "FUND")
 
 
-def _log_health(result: dict) -> None:
+def _get_api_key() -> str:
+    try:
+        from config import settings
+        return getattr(settings, "fmp_api_key", "") or os.environ.get("FMP_API_KEY", "")
+    except Exception:
+        return os.environ.get("FMP_API_KEY", "")
+
+
+def _log_health(result: dict, no_key: bool = False) -> None:
     try:
         from services.db import log_connector_call
-        status = "ok" if result.get("signal") not in ("unavailable",) else "unavailable"
+        status = "no_key" if no_key else ("ok" if result.get("signal") != "unavailable" else "unavailable")
         log_connector_call("quiver", status, result.get("details", ""))
     except Exception:
         pass
@@ -61,7 +59,7 @@ def _unavailable(reason: str) -> dict:
 
 def get_darkpool_signal(symbol: str) -> dict:
     """
-    Return institutional positioning signal for a symbol using yfinance.
+    Return institutional positioning signal for a symbol using FMP API.
 
     Returns:
         {
@@ -70,88 +68,72 @@ def get_darkpool_signal(symbol: str) -> dict:
           "details": str
         }
     """
-    global _blocked_date, _consecutive_errors
-
     cached = _cache.get(symbol)
     if cached and time.time() < cached[1]:
         return cached[0]
 
-    # ETFs and index products have no institutional holder data
     if symbol in _KNOWN_ETFS or any(symbol.endswith(s) for s in _ETF_SUFFIXES):
         return _unavailable("ETF — no institutional holder data")
 
-    # Daily circuit breaker — Yahoo rate-limits Railway IP after a burst
-    today = date.today()
-    if _blocked_date == today:
-        return _unavailable("Yahoo Finance rate-limited today — retry tomorrow")
+    api_key = _get_api_key()
+    if not api_key:
+        result = _unavailable("FMP_API_KEY not set")
+        _log_health(result, no_key=True)
+        return result
 
     try:
-        result = _fetch_institutional_data(symbol)
-        if result.get("signal") != "unavailable":
-            _consecutive_errors = 0  # successful fetch — reset counter
-            logger.info("yfinance institutional %s: %s", symbol, result.get("details", "ok"))
+        resp = httpx.get(
+            f"{_API_BASE}/profile/{symbol}",
+            params={"apikey": api_key},
+            timeout=10,
+            headers={"User-Agent": "Kova Trading kova@trading.com"},
+        )
+        if resp.status_code in (401, 403):
+            result = _unavailable(f"FMP auth error {resp.status_code}")
+            _log_health(result)
+            return result
+        if resp.status_code != 200:
+            result = _unavailable(f"FMP HTTP {resp.status_code}")
+            _cache[symbol] = (result, time.time() + 3600)
+            _log_health(result)
+            return result
+
+        data = resp.json()
+        if isinstance(data, list):
+            data = data[0] if data else {}
+
+        # institutionalOwnershipPercentage is a 0.0–1.0 decimal in FMP profile
+        raw_pct = data.get("institutionalOwnershipPercentage") or 0
+        inst_pct = float(raw_pct) * 100
+
+        if inst_pct >= 70:
+            result = {
+                "signal": "accumulating",
+                "conviction_boost": 15,
+                "details": f"FMP: institutions hold {inst_pct:.0f}% of float (strong backing)",
+            }
+        elif inst_pct >= 50:
+            result = {
+                "signal": "accumulating",
+                "conviction_boost": 8,
+                "details": f"FMP: institutions hold {inst_pct:.0f}% of float",
+            }
+        elif inst_pct > 0:
+            result = {
+                "signal": "neutral",
+                "conviction_boost": 0,
+                "details": f"FMP: institutions hold {inst_pct:.0f}% of float (below 50% threshold)",
+            }
         else:
-            _consecutive_errors += 1
-            if _consecutive_errors >= _CONSECUTIVE_ERROR_LIMIT:
-                _blocked_date = date.today()
-                logger.warning(
-                    f"yfinance: {_consecutive_errors} consecutive failures — "
-                    f"circuit breaker engaged for today"
-                )
-            logger.debug("yfinance institutional %s unavailable: %s", symbol, result.get("details", ""))
+            result = _unavailable("FMP: institutional ownership data not available")
+
+        _cache[symbol] = (result, time.time() + _CACHE_TTL)
+        _log_health(result)
+        logger.info("FMP institutional %s: %s", symbol, result.get("details", "ok"))
+        return result
+
     except Exception as e:
-        _consecutive_errors += 1
-        logger.warning("yfinance institutional %s error: %s", symbol, e)
         result = _unavailable(str(e))
-
-    _cache[symbol] = (result, time.time() + _CACHE_TTL)
-    _log_health(result)
-    return result
-
-
-def _fetch_institutional_data(symbol: str) -> dict:
-    global _blocked_date
-
-    try:
-        import yfinance as yf
-    except ImportError as e:
-        return _unavailable(f"yfinance import failed: {e}")
-    except Exception as e:
-        return _unavailable(f"yfinance load error: {type(e).__name__}: {e}")
-
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
-    except Exception as e:
-        err = str(e)
-        if "429" in err or "Too Many Requests" in err:
-            _blocked_date = date.today()
-            logger.warning("yfinance: Yahoo Finance 429 — circuit breaker engaged for today")
-            return _unavailable("Yahoo Finance rate-limited (429) — blocked for today")
-        return _unavailable(f"yfinance fetch error: {err}")
-
-    # institutionsPercentHeld is 0.0-1.0
-    inst_pct = float(info.get("institutionsPercentHeld") or 0) * 100
-
-    if inst_pct == 0:
-        # Fallback: try to derive from institutional holders DataFrame
-        try:
-            holders = ticker.institutional_holders
-            if holders is not None and not holders.empty and "% Out" in holders.columns:
-                inst_pct = float(holders["% Out"].sum()) * 100
-        except Exception:
-            pass
-
-    if inst_pct == 0:
-        return _unavailable("institutional data not available")
-
-    if inst_pct >= 70:
-        return {"signal": "accumulating", "conviction_boost": 15,
-                "details": f"institutions hold {inst_pct:.0f}% of float (strong backing)"}
-
-    if inst_pct >= 50:
-        return {"signal": "accumulating", "conviction_boost": 8,
-                "details": f"institutions hold {inst_pct:.0f}% of float"}
-
-    return {"signal": "neutral", "conviction_boost": 0,
-            "details": f"institutions hold {inst_pct:.0f}% of float (below 50% threshold)"}
+        _log_health(result)
+        logger.warning("FMP institutional %s error: %s", symbol, e)
+        return result
