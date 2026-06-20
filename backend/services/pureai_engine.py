@@ -32,7 +32,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # ── Defaults (app-configurable via /pureai/config, stored in DB cache) ───────
-_SETTINGS_CACHE_KEY = "pureai:settings"
+_SETTINGS_CACHE_KEY  = "pureai:settings"
+_RESERVE_CACHE_KEY   = "pureai:reserved_cash"
 _DEFAULT_SETTINGS = {
     "enabled": True,
     "max_buys_per_cycle": 3,        # user-requested default; 0..N buys per cycle
@@ -40,6 +41,7 @@ _DEFAULT_SETTINGS = {
     "max_position_pct": 0.15,       # hard cap per position
     "max_searches_per_cycle": 8,
     "model": "claude-opus-4-8",     # app-configurable; env var is the hard default
+    "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
 }
 
 PUREAI_MODEL_OPTIONS = [
@@ -62,13 +64,44 @@ def get_pureai_settings() -> dict:
 
 def update_pureai_settings(updates: dict) -> dict:
     merged = {**get_pureai_settings(), **{k: v for k, v in updates.items()
-                                          if k in _DEFAULT_SETTINGS}}
+                                          if k in _DEFAULT_SETTINGS and k != "model_options"}}
     try:
         from services.db import cache_set
         cache_set(_SETTINGS_CACHE_KEY, merged, 365 * 24 * 3600)
     except Exception as e:
         logger.error(f"PureAI settings save failed: {e}")
     return merged
+
+
+# ── Profit reserve ───────────────────────────────────────────────────────────
+
+def get_pureai_reserve() -> float:
+    try:
+        from services.db import cache_get
+        v = cache_get(_RESERVE_CACHE_KEY)
+        return float(v) if v is not None else 0.0
+    except Exception:
+        return 0.0
+
+
+def _add_to_pureai_reserve(amount: float) -> float:
+    try:
+        from services.db import cache_get, cache_set
+        current = get_pureai_reserve()
+        new_total = round(current + amount, 2)
+        cache_set(_RESERVE_CACHE_KEY, new_total, 365 * 24 * 3600)
+        logger.info(f"PureAI reserve: +${amount:.2f} → total ${new_total:.2f}")
+        return new_total
+    except Exception as e:
+        logger.error(f"PureAI reserve update error: {e}")
+        return 0.0
+
+
+def _add_to_pureai_reserve_if_configured(profit: float):
+    cfg = get_pureai_settings()
+    pct = float(cfg.get("profit_reserve_pct", 0))
+    if pct > 0 and profit > 0:
+        _add_to_pureai_reserve(round(profit * pct / 100, 2))
 
 
 # ── Alpaca clients (separate account) ────────────────────────────────────────
@@ -198,6 +231,8 @@ def _log_position_close(symbol: str, exit_price: float, reason: str):
                 WHERE id = %s
             """, (exit_price, pl, pl_pct, reason, pos_id))
         conn.commit()
+        if pl > 0:
+            _add_to_pureai_reserve_if_configured(pl)
     except Exception as e:
         logger.error(f"PureAI position close log failed: {e}")
 
@@ -570,6 +605,7 @@ def get_pureai_status() -> dict:
             out["win_rate"] = round(100 * wins / closed, 1) if closed else None
     except Exception:
         pass
+    out["reserved_cash"] = get_pureai_reserve()
     return out
 
 

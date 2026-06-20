@@ -500,8 +500,9 @@ def get_tradeable_universe() -> list[str]:
     try:
         from alpaca.data.historical.screener import ScreenerClient
         from alpaca.data.requests import MostActivesRequest
+        from alpaca.data.enums import MostActivesBy
         sc = ScreenerClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        actives = sc.get_most_actives(MostActivesRequest(top=100))
+        actives = sc.get_most_actives(MostActivesRequest(top=100, by=MostActivesBy.VOLUME))
         add([i.symbol for i in actives.most_actives], "most_actives")
         logger.info(f"Most actives: {[i.symbol for i in actives.most_actives]}")
     except Exception as e:
@@ -590,11 +591,13 @@ def get_tradeable_universe() -> list[str]:
         import re as _re
 
         def _bc_price_ok(sym: str) -> bool:
-            """Skip penny stocks under $3 — pump targets, not real options signals."""
+            """Skip penny stocks under $3 and symbols with no yfinance data (e.g. indices)."""
             try:
                 import yfinance as _yf
-                _p = (_yf.Ticker(sym).info or {}).get("regularMarketPrice") or \
-                     (_yf.Ticker(sym).info or {}).get("previousClose") or 999
+                _info = _yf.Ticker(sym).info or {}
+                _p = _info.get("regularMarketPrice") or _info.get("previousClose") or 0
+                if not _p:
+                    return False  # no price data → not a tradeable stock (e.g. IUXX)
                 return float(_p) >= 3.0
             except Exception:
                 return True  # allow through if check fails — score gate handles it

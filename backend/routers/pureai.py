@@ -16,6 +16,12 @@ class PureAISettings(BaseModel):
     max_position_pct: Optional[float] = None
     max_searches_per_cycle: Optional[int] = None
     model: Optional[str] = None
+    profit_reserve_pct: Optional[float] = None
+
+
+class ReserveResetRequest(BaseModel):
+    confirm: bool = False
+    amount: Optional[float] = None
 
 
 @router.get("/status")
@@ -46,3 +52,40 @@ def run_cycle():
 @router.get("/decisions")
 def decisions(limit: int = 20):
     return pureai_engine.get_recent_decisions(limit=min(limit, 100))
+
+
+@router.get("/reserve")
+def get_reserve():
+    """Return current PureAI profit reserve balance and settings."""
+    reserved = pureai_engine.get_pureai_reserve()
+    cfg = pureai_engine.get_pureai_settings()
+    reserve_pct = float(cfg.get("profit_reserve_pct", 0.0))
+    return {
+        "reserved_cash":      round(reserved, 2),
+        "profit_reserve_pct": reserve_pct,
+        "enabled":            reserve_pct > 0,
+        "message":            f"${reserved:,.2f} set aside from Pure-AI profits — not used for trading."
+                              if reserved > 0 else "No profits reserved yet.",
+    }
+
+
+@router.post("/reserve/reset")
+def reset_reserve(req: ReserveResetRequest):
+    """Withdraw from the PureAI profit reserve. Requires confirm=True."""
+    if not req.confirm:
+        return {"error": "Pass confirm=true to withdraw the reserve balance."}
+    from services.db import cache_set
+    current = pureai_engine.get_pureai_reserve()
+    if req.amount is not None:
+        if float(req.amount) < 0:
+            return {"error": "amount must be non-negative"}
+        deduct = min(float(req.amount), current)
+    else:
+        deduct = current
+    new_balance = round(current - deduct, 2)
+    cache_set(pureai_engine._RESERVE_CACHE_KEY, new_balance, 365 * 24 * 3600)
+    return {
+        "withdrawn":   round(deduct, 2),
+        "new_balance": new_balance,
+        "message":     f"${deduct:,.2f} withdrawn from Pure-AI reserve. New balance: ${new_balance:,.2f}",
+    }
