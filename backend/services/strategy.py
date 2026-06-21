@@ -6,6 +6,7 @@ STRATEGIES = {
         "key": "conservative",
         "name": "Conservative",
         "max_position_pct": 0.05,
+        "max_positions": 20,          # 1 / 0.05 = 20 full positions
         "min_confidence": "high",
         "default_take_profit_pct": 0.05,   # 5% TP
         "default_stop_loss_pct": 0.03,     # 3% trailing stop
@@ -20,6 +21,7 @@ STRATEGIES = {
         "key": "balanced",
         "name": "Balanced",
         "max_position_pct": 0.10,
+        "max_positions": 10,          # 1 / 0.10 = 10 full positions
         "min_confidence": "medium",
         "default_take_profit_pct": 0.10,   # 10% TP
         "default_stop_loss_pct": 0.04,     # 4% trailing stop
@@ -34,6 +36,7 @@ STRATEGIES = {
         "key": "aggressive",
         "name": "Aggressive",
         "max_position_pct": 0.15,
+        "max_positions": 6,           # 1 / 0.15 = 6.67 → 6 full positions
         "min_confidence": "medium",
         "risk_per_trade_pct": 0.015,       # 1.5% of portfolio risked per trade
         "sector_cap": 2,                   # allow 2 positions per sector

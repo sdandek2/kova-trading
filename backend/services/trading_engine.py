@@ -38,6 +38,8 @@ _RISK_DEFAULTS = {
     "max_penny_position_pct": 3.0,  # max position size % for stocks under $5 (stored as %, e.g. 3.0 = 3%)
     "cycle_interval_seconds": 600,  # how often the bot runs (seconds); 600=10min, 300=5min
     "profit_reserve_pct": 0.0,      # % of each realized profit moved to reserve (0 = disabled)
+    "max_positions": 6,             # max total open long positions (0 = no limit)
+    "sector_cap": 2,                # max positions in same sector (0 = no limit)
 }
 
 _RESERVE_CACHE_KEY = "user_pref:reserved_cash"
@@ -776,6 +778,7 @@ async def run_trading_cycle():
                         getattr(_brain_regime, "regime", None)
                         or (macro.get("market_regime") if macro else None)
                     ),
+                    max_unrealized_pct=prev.get("max_unrealized_pct"),
                 )
                 # Log signal performance for weekly weight adjustment
                 try:
@@ -1061,6 +1064,11 @@ async def run_trading_cycle():
             # Trail tightens automatically as gains grow — locks in more of a
             # big winner once position is up 15% or 25%.
             _pnl_for_trail = position.unrealized_pl_percent
+            # Track peak unrealized gain for post-mortem (how much did we give back?)
+            _prev_peak = (_previous_positions.get(position.symbol) or {}).get("max_unrealized_pct")
+            if _prev_peak is None or _pnl_for_trail > _prev_peak:
+                if position.symbol in _previous_positions:
+                    _previous_positions[position.symbol]["max_unrealized_pct"] = _pnl_for_trail
             if _pnl_for_trail >= 25.0:
                 trail_pct = 0.02   # up 25%+ → tight 2% trail, protect most of the gain
             elif _pnl_for_trail >= 15.0:
@@ -1782,6 +1790,7 @@ async def run_trading_cycle():
                     prompt_override=_pov,
                     urgent_news_context=_urgent_ctx,
                     trading_window=_urgent_window,
+                    risk_settings=_risk_settings,
                 )
             )
             logger.info(f"Phase 2 Brain produced {len(_brain_decisions)} decisions")
@@ -2794,6 +2803,7 @@ async def run_trading_cycle():
                         macd_at_entry=getattr(_prev_scored_short, "macd_hist", None),
                         rs_percentile=getattr(_prev_scored_short, "rs_percentile", None),
                         vix_level=getattr(_brain_regime, "vix_level", None),
+                        entry_score=getattr(_prev_scored_short, "score", None),
                     )
                     # Seed low watermark for new short position and immediately persist
                     _short_low_watermarks[decision.symbol] = fill_price
@@ -2804,6 +2814,7 @@ async def run_trading_cycle():
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "short",
+                        "max_unrealized_pct": None,
                         "score_breakdown": getattr(_prev_scored_short, "score_breakdown", {}) if _prev_scored_short else {},
                     }
                 elif decision.action == "buy" and fill_price > 0:
@@ -2823,6 +2834,7 @@ async def run_trading_cycle():
                         macd_at_entry=getattr(_prev_scored, "macd_hist", None),
                         rs_percentile=getattr(_prev_scored, "rs_percentile", None),
                         vix_level=getattr(_brain_regime, "vix_level", None),
+                        entry_score=getattr(_prev_scored, "score", None),
                     )
                     # Seed watermark for new position
                     _position_high_watermarks[decision.symbol] = fill_price
@@ -2833,6 +2845,7 @@ async def run_trading_cycle():
                         "entry_time": datetime.now(timezone.utc),
                         "exit_reason": "unknown",
                         "side": "long",
+                        "max_unrealized_pct": None,
                         "score_breakdown": getattr(_prev_scored, "score_breakdown", {}) if _prev_scored else {},
                     }
                 elif decision.action == "sell" and fill_price:
@@ -2847,6 +2860,7 @@ async def run_trading_cycle():
                         quantity=prev.get("qty"),
                         entry_time=prev.get("entry_time"),
                         side=prev.get("side", "long"),
+                        max_unrealized_pct=prev.get("max_unrealized_pct"),
                     )
                     try:
                         from services.brain.learning import on_trade_closed

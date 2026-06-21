@@ -91,6 +91,7 @@ def decide(
     prompt_override: str = "",
     urgent_news_context: list = None,
     trading_window: str = "regular",  # "premarket" | "regular" | "afterhours"
+    risk_settings: dict = None,
 ) -> list[TradeDecision]:
     """
     Main entry point. Takes pre-scored candidates from signals.py and
@@ -134,18 +135,28 @@ def decide(
         "setups you might otherwise skip — only if signal is genuine.\n"
     ) if afternoon_pressure else ""
 
-    thin_portfolio = len([p for p in positions if getattr(p, "side", "long") == "long"]) < 2
+    _long_count = len([p for p in positions if getattr(p, "side", "long") == "long"])
+    # risk_settings takes precedence; 0 means no limit (very large number)
+    _rs = risk_settings or {}
+    _max_positions_raw = _rs.get("max_positions") if _rs.get("max_positions") is not None else strategy.get("max_positions", 6)
+    _max_positions = int(_max_positions_raw) if _max_positions_raw else 0
+    _no_pos_limit = _max_positions == 0
+    thin_portfolio = _long_count < 2
     thin_note = (
         f"\n⚠️ PORTFOLIO THIN: only {len(positions)} positions open. "
         "Prioritise building positions on any quality setup.\n"
     ) if thin_portfolio else ""
+    full_portfolio_note = (
+        f"\n🚫 PORTFOLIO FULL: {_long_count}/{_max_positions} positions open. "
+        "Do NOT open new BUY positions — only SELL/rotate or HOLD.\n"
+    ) if (not _no_pos_limit and _long_count >= _max_positions) else ""
 
     prompt = f"""You are managing a real portfolio. Evaluate the pre-screened candidates below and approve 1-3 trades.
 
 ## Market Regime: {regime.upper()} ({regime_result.confidence:.0%} confidence)
 {regime_instructions}
 {vix_note} | {breadth_note}
-{afternoon_note}{thin_note}
+{afternoon_note}{thin_note}{full_portfolio_note}
 ## Portfolio
 Value: ${portfolio_value:,.2f} | Cash: ${account_cash:,.2f} ({cash_pct:.0f}%) | Max per position: ${max_pos:,.2f}
 Strategy: {strategy.get('name')} — {strategy.get('prompt_modifier', '')}
@@ -169,6 +180,7 @@ Strategy: {strategy.get('name')} — {strategy.get('prompt_modifier', '')}
 - Inverse ETFs (SQQQ/SPXU/TZA/SDOW): always BUY action — they profit from falls.
 - Leveraged ETFs: only in BULL regime with low/normal VIX.
 - NEVER issue sell or buy on a [SHORT] position — engine manages those.
+- BUY on an already-held symbol = adding to a winner (pyramid). Only do this if the existing position is well below the per-position size cap AND the signal is still strong (score ≥ 65). Never add if already at full size.
 - take_profit_pct: 0.05-0.09 stocks (9% hard cap enforced by engine), 0.10-0.20 leveraged ETFs, 0.06-0.09 inverse ETFs
 - stop_loss_pct: 0.03-0.05 (tight — cut losers fast)
 - confidence=high: signal score ≥ 70 — strong multi-signal confluence, approve at full Kelly size
@@ -276,6 +288,34 @@ Return valid JSON only — no markdown:
 
         candidate = None  # reset each iteration — sell branch never sets this
         if action in ("buy", "short"):
+            # Hard guards for BUY actions
+            if action == "buy":
+                _max_pos_dollars = portfolio_value * strategy.get("max_position_pct", 0.15)
+                _existing_pos = next(
+                    (p for p in positions if p.symbol == sym and getattr(p, "side", "long") == "long"),
+                    None
+                )
+                if _existing_pos:
+                    # Add-on buy (pyramid): block only if zero room left under the cap.
+                    # Sizing logic below will naturally cap shares to what fits in the remaining room.
+                    _existing_value = float(_existing_pos.qty) * float(
+                        getattr(_existing_pos, "current_price", None)
+                        or getattr(_existing_pos, "avg_entry_price", 0) or 0
+                    )
+                    _room = _max_pos_dollars - _existing_value
+                    if _room <= 0:
+                        logger.info(f"Skipping add-on BUY {sym} — position already at cap (${_existing_value:.0f} / ${_max_pos_dollars:.0f})")
+                        continue
+                    logger.info(f"Add-on BUY {sym} — ${_room:.0f} room remaining under cap")
+                else:
+                    # New position — check max positions limit (0 = no limit)
+                    if not _no_pos_limit:
+                        _open_longs = len([p for p in positions if getattr(p, "side", "long") == "long"])
+                        _buys_so_far = sum(1 for d in decisions if getattr(d, "action", "") == "buy")
+                        if _open_longs + _buys_so_far >= _max_positions:
+                            logger.info(f"Skipping BUY {sym} — at max positions ({_max_positions})")
+                            continue
+
             # Find pre-scored candidate for this symbol
             candidate = next((c for c in scored_candidates if c.symbol == sym), None)
             price = candidate.price if candidate else 0.0
@@ -305,24 +345,42 @@ Return valid JSON only — no markdown:
                     strategy_key=strategy_key,
                     rs_percentile=rs_pct,
                 )
-                max_by_strategy = int((portfolio_value * strategy.get("max_position_pct", 0.15)) / price)
-                max_by_cash = int(remaining_cash / price) if action == "buy" else max_by_strategy
-                max_shares = min(max_by_strategy, max_by_cash)
-                if qty_suggestion:
-                    final_qty = min(int(qty_suggestion), max_shares)
+                _full_pos_dollars = portfolio_value * strategy.get("max_position_pct", 0.15)
+                if _existing_pos:
+                    # Add-on: floor to int — 4.3 shares of room → buy 4, 0.28 → 0 (skip)
+                    _used = float(_existing_pos.qty) * float(
+                        getattr(_existing_pos, "current_price", None)
+                        or getattr(_existing_pos, "avg_entry_price", 0) or 0
+                    )
+                    _addon_dollars = min(max(0, _full_pos_dollars - _used), remaining_cash)
+                    final_qty = int(_addon_dollars / price) if price > 0 else 0
                 else:
-                    final_qty = min(_kelly.shares, max_shares)
-                final_qty = max(1, final_qty)
+                    max_by_strategy = int(_full_pos_dollars / price)
+                    max_by_cash = int(remaining_cash / price)
+                    max_shares = min(max_by_strategy, max_by_cash)
+                    if qty_suggestion:
+                        final_qty = max(1, min(int(qty_suggestion), max_shares))
+                    else:
+                        final_qty = max(1, min(_kelly.shares, max_shares))
             except Exception as _ke:
                 logger.warning(f"Kelly sizing failed for {sym}: {_ke}")
-                max_by_strategy = int((portfolio_value * strategy.get("max_position_pct", 0.15)) / price)
-                max_by_cash = int(remaining_cash / price) if action == "buy" else max_by_strategy
-                max_shares = min(max_by_strategy, max_by_cash)
-                size_pct = 1.0 if confidence == "high" else 0.75
-                final_qty = max(1, int(max_shares * size_pct))
+                _full_pos_dollars = portfolio_value * strategy.get("max_position_pct", 0.15)
+                if _existing_pos:
+                    _used = float(_existing_pos.qty) * float(
+                        getattr(_existing_pos, "current_price", None)
+                        or getattr(_existing_pos, "avg_entry_price", 0) or 0
+                    )
+                    _addon_dollars = min(max(0, _full_pos_dollars - _used), remaining_cash)
+                    final_qty = int(_addon_dollars / price) if price > 0 else 0
+                else:
+                    max_by_strategy = int(_full_pos_dollars / price)
+                    max_by_cash = int(remaining_cash / price)
+                    max_shares = min(max_by_strategy, max_by_cash)
+                    size_pct = 1.0 if confidence == "high" else 0.75
+                    final_qty = max(1, int(max_shares * size_pct))
 
-            if action == "buy" and final_qty < 1:
-                logger.info(f"Skipping {sym} — insufficient cash")
+            if action == "buy" and final_qty <= 0:
+                logger.info(f"Skipping {sym} — insufficient cash or no room")
                 continue
             if action == "buy":
                 remaining_cash -= price * final_qty

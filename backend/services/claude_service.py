@@ -674,15 +674,19 @@ Respond in valid JSON only, no markdown — only include approved trades (put an
             from services.sector_momentum import get_sector_for_symbol
             if sym not in _LEV_ETFS:
                 sym_sector = get_sector_for_symbol(sym)
-                sector_cap = current_strategy.get("sector_cap", 1)
+                # risk_settings takes precedence; 0 = no limit
+                from services.trading_engine import _risk_settings as _te_rs
+                _raw_sc = _te_rs.get("sector_cap") if _te_rs.get("sector_cap") is not None else current_strategy.get("sector_cap", 2)
+                sector_cap = int(_raw_sc) if _raw_sc else 0
                 existing_sector_count = sum(1 for s in sectors_bought if s == sym_sector)
                 held_in_sector = [p.symbol for p in positions if p.symbol not in _LEV_ETFS and get_sector_for_symbol(p.symbol) == sym_sector]
-                if existing_sector_count >= sector_cap and sym_sector not in ("Unknown", "Broad"):
-                    logger.info(f"Skipping {sym} — already buying {existing_sector_count} {sym_sector} stocks this cycle (cap={sector_cap})")
-                    continue
-                if len(held_in_sector) >= sector_cap and sym_sector not in ("Unknown", "Broad"):
-                    logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (cap={sector_cap})")
-                    continue
+                if sector_cap > 0:
+                    if existing_sector_count >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                        logger.info(f"Skipping {sym} — already buying {existing_sector_count} {sym_sector} stocks this cycle (cap={sector_cap})")
+                        continue
+                    if len(held_in_sector) >= sector_cap and sym_sector not in ("Unknown", "Broad"):
+                        logger.info(f"Skipping {sym} — already hold {held_in_sector} in {sym_sector} (cap={sector_cap})")
+                        continue
                 sectors_bought.append(sym_sector)
             else:
                 logger.debug(f"{sym} is a leveraged ETF — skipping sector cap check")

@@ -17,6 +17,8 @@ class RiskSettings(BaseModel):
     max_penny_position_pct: Optional[float] = 3.0 # max position size % for stocks under $5 (vs normal sizing)
     cycle_interval_seconds: Optional[int] = 600   # bot cycle frequency in seconds (600=10min, 300=5min)
     profit_reserve_pct: Optional[float] = 0.0     # % of each realized profit to move to reserve (0 = disabled)
+    max_positions: Optional[int] = 6              # max total open long positions (0 = no limit)
+    sector_cap: Optional[int] = 2                 # max positions in same sector (0 = no limit)
 
 
 @router.get("/settings", response_model=RiskSettings)

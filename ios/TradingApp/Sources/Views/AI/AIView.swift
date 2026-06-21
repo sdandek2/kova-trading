@@ -457,6 +457,27 @@ struct RiskSettingsCard: View {
                         unit: "trades"
                     ) { saveSettings() }
 
+                    // ── Position Limits ──
+                    RiskSectionHeader(title: "POSITION LIMITS")
+
+                    RiskStepperRow(
+                        label: "Max Open Positions",
+                        hint: "Total long positions allowed at once. Set to 0 for no limit — cash becomes the only constraint.",
+                        value: $settings.max_positions,
+                        range: 0...999,
+                        unit: settings.max_positions == 0 ? "unlimited" : "positions"
+                    ) { saveSettings() }
+
+                    Divider().padding(.leading, 16)
+
+                    RiskStepperRow(
+                        label: "Max Per Sector",
+                        hint: "Max positions in the same sector (e.g. 2 tech stocks max). Set to 0 for no sector limit.",
+                        value: $settings.sector_cap,
+                        range: 0...999,
+                        unit: settings.sector_cap == 0 ? "unlimited" : "per sector"
+                    ) { saveSettings() }
+
                     Divider().padding(.leading, 16)
 
                     RiskPercentSliderRow(

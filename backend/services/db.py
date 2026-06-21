@@ -162,6 +162,14 @@ def _ensure_table(conn):
             ADD COLUMN IF NOT EXISTS vix_level TEXT
         """)
         cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS entry_score FLOAT
+        """)
+        cur.execute("""
+            ALTER TABLE position_log
+            ADD COLUMN IF NOT EXISTS max_unrealized_pct FLOAT
+        """)
+        cur.execute("""
             ALTER TABLE near_miss_log
             ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(20) DEFAULT 'below_threshold'
         """)
@@ -629,7 +637,8 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
                       setup_type: str = None, entry_hour_et: int = None,
                       signal_type: str = None,
                       rsi_at_entry: float = None, macd_at_entry: float = None,
-                      rs_percentile: float = None, vix_level: str = None) -> Optional[int]:
+                      rs_percentile: float = None, vix_level: str = None,
+                      entry_score: float = None) -> Optional[int]:
     """
     Record that a new position was opened.
     side: "long" | "short"
@@ -649,12 +658,14 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
                 INSERT INTO position_log
                     (symbol, side, entry_time, entry_price, quantity, strategy,
                      claude_reasoning, market_regime, setup_type, entry_hour_et,
-                     signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level,
+                     entry_score)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (symbol, side, datetime.now(timezone.utc), entry_price, quantity,
                   strategy, claude_reasoning, market_regime, setup_type, entry_hour_et,
-                  signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level))
+                  signal_type, rsi_at_entry, macd_at_entry, rs_percentile, vix_level,
+                  entry_score))
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:
@@ -665,7 +676,8 @@ def log_position_open(symbol: str, entry_price: float, quantity: int,
 def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                        entry_price: float = None, quantity: int = None,
                        entry_time: datetime = None, side: str = "long",
-                       market_regime: str = None) -> None:
+                       market_regime: str = None,
+                       max_unrealized_pct: float = None) -> None:
     """
     Update the most recent open position_log row for *symbol* with exit data.
     Also handles the case where no open row exists (logs a standalone closed row).
@@ -716,16 +728,17 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 hold_mins = int((now - et).total_seconds() / 60) if et else None
                 cur.execute("""
                     UPDATE position_log SET
-                        exit_time         = %s,
-                        exit_price        = %s,
-                        realized_pl       = %s,
-                        realized_pl_pct   = %s,
+                        exit_time          = %s,
+                        exit_price         = %s,
+                        realized_pl        = %s,
+                        realized_pl_pct    = %s,
                         hold_duration_mins = %s,
-                        exit_reason       = %s,
-                        market_regime     = COALESCE(market_regime, %s)
+                        exit_reason        = %s,
+                        market_regime      = COALESCE(market_regime, %s),
+                        max_unrealized_pct = COALESCE(max_unrealized_pct, %s)
                     WHERE id = %s
                 """, (now, exit_price, realized_pl, realized_pl_pct,
-                      hold_mins, exit_reason, market_regime, pos_id))
+                      hold_mins, exit_reason, market_regime, max_unrealized_pct, pos_id))
             else:
                 # No open row — insert a closed record directly
                 ep = entry_price or 0
