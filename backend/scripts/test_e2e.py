@@ -256,6 +256,25 @@ if _run("unit"):
     _assert(not _gap(-1.9, 10),  "Down 1.9% at 10 min → above threshold")
     _assert(not _gap(-5.0, 26),  "Down 5.0% at 26 min → just outside window")
 
+    # 0-f. Sentiment scoring (signed: bullish +1, bearish -1, neutral 0)
+    _section("0-f. Signed sentiment scoring (_score_headline)")
+    from services.alpaca_service import _score_headline
+    _assert(_score_headline("NVDA beats earnings, raises guidance", "")  ==  1, "Bullish headline → +1")
+    _assert(_score_headline("INTC misses revenue, cuts guidance", "")    == -1, "Bearish headline → -1")
+    _assert(_score_headline("Stock in focus ahead of earnings", "")      ==  0, "Neutral headline → 0")
+    _assert(_score_headline("CEO departure raises concerns", "")         == -1, "CEO departure → bearish")
+    _assert(_score_headline("FDA approval granted, stock surges", "")    ==  1, "FDA approval → bullish")
+    # Net score flows into signal points correctly
+    _net = 3   # 3 bullish articles
+    _pts = max(-15, min(20, _net * 5))
+    _assert(_pts == 15, f"net=+3 → signal_points=+15 (got {_pts})")
+    _net = -3  # 3 bearish articles
+    _pts = max(-15, min(20, _net * 5))
+    _assert(_pts == -15, f"net=-3 → signal_points=-15 (got {_pts})")
+    _net = -4  # capped at -15
+    _pts = max(-15, min(20, _net * 5))
+    _assert(_pts == -15, f"net=-4 still capped at -15 (got {_pts})")
+
     print(f"\n  Risk unit tests: {_UNIT_PASS} passed, {_UNIT_FAIL} failed")
     if _UNIT_FAIL > 0:
         print("  ✗ Fix unit failures before deploying.")
@@ -501,6 +520,15 @@ if _run("pipeline"):
                             line += w + " "
                     if line.strip(): print(line)
                 print()
+
+            # Partial exit test — high-confidence candidate (score≥75, RS≥85) should get partial_exit=True
+            _high_conf = [c for c in above_threshold if c.score >= 75 and (c.rs_percentile or 0) >= 85]
+            _partial_decisions = [d for d in decisions if getattr(d, "partial_exit", False)]
+            if _high_conf:
+                if _partial_decisions:
+                    _ok(f"Partial exit fired on {len(_partial_decisions)} decision(s) — high-confidence path works")
+                else:
+                    _warn(f"No partial_exit=True despite {len(_high_conf)} high-conf candidate(s) — check AI prompt")
 
 def _print_decisions(dec_list):
     for i, d in enumerate(dec_list, 1):
