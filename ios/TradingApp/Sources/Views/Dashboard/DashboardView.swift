@@ -48,16 +48,14 @@ struct DashboardView: View {
     private var mainContent: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // ── Rolling ticker ─────────────────────────────────────────
-                if !vm.positions.isEmpty {
-                    LiveTickerBanner(positions: vm.positions)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            LakshmiTheme.brandGradient.opacity(0.05)
-                                .overlay(Divider().frame(maxHeight: .infinity, alignment: .bottom))
-                        )
-                }
+                // ── Rolling ticker — always visible ────────────────────────
+                LiveTickerBanner(positions: vm.positions)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        LakshmiTheme.brandGradient.opacity(0.06)
+                            .overlay(Divider().frame(maxHeight: .infinity, alignment: .bottom))
+                    )
 
                 VStack(spacing: 20) {
                     // ── Hero portfolio block ───────────────────────────────
@@ -126,15 +124,20 @@ private struct HeroChartBlock: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Animated orb background ────────────────────────────────────
+            // ── Dark branded hero — value + P&L ───────────────────────────
             ZStack {
                 AnimatedOrbBackground()
 
-                VStack(spacing: 4) {
-                    // Portfolio value
+                VStack(spacing: 6) {
+                    Text("PORTFOLIO")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .tracking(3)
+                        .foregroundStyle(.white.opacity(0.40))
+
                     Text(formatCurrency(account.portfolioValue))
-                        .font(.system(size: 46, weight: .bold, design: .rounded))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
                         .tracking(-1.5)
+                        .foregroundStyle(.white)
                         .contentTransition(.numericText())
                         .animation(.spring(response: 0.5, dampingFraction: 0.8), value: account.portfolioValue)
                         .scaleEffect(breathe ? 1.008 : 1.0)
@@ -146,14 +149,14 @@ private struct HeroChartBlock: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 16)
-                .padding(.bottom, 20)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
                 .onAppear { breathe = true }
             }
 
-            // ── Inline chart ───────────────────────────────────────────────
-            InlineChart(points: points, isPositive: isPositive)
-                .frame(height: 180)
+            // ── Inline chart on dark bg ────────────────────────────────────
+            InlineChart(points: points, isPositive: isPositive, onDark: true)
+                .frame(height: 170)
                 .padding(.horizontal, 4)
 
             // ── Period picker ──────────────────────────────────────────────
@@ -169,11 +172,11 @@ private struct HeroChartBlock: View {
                             .font(.caption.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .foregroundStyle(selectedPeriod == p ? .white : .secondary)
+                            .foregroundStyle(selectedPeriod == p ? .white : .white.opacity(0.40))
                             .background {
                                 if selectedPeriod == p {
                                     RoundedRectangle(cornerRadius: 7)
-                                        .fill(LakshmiTheme.blueGradient)
+                                        .fill(LakshmiTheme.brandGradient)
                                         .matchedGeometryEffect(id: "periodBG", in: periodNS)
                                 }
                             }
@@ -182,15 +185,28 @@ private struct HeroChartBlock: View {
                 }
             }
             .padding(4)
-            .background(Color(.tertiarySystemBackground).opacity(0.7))
+            .background(Color.white.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .padding(.horizontal, LakshmiTheme.pagePad)
             .padding(.top, 10)
             .padding(.bottom, 16)
         }
-        .background(LakshmiTheme.card)
+        .background {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.10, green: 0.05, blue: 0.24),
+                        Color(red: 0.05, green: 0.08, blue: 0.28),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                RoundedRectangle(cornerRadius: LakshmiTheme.radius)
+                    .stroke(LakshmiTheme.brandGradient.opacity(0.30), lineWidth: 1)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
-        .shadow(color: LakshmiTheme.purple.opacity(0.08), radius: 12, x: 0, y: 4)
+        .shadow(color: LakshmiTheme.purple.opacity(0.45), radius: 24, x: 0, y: 10)
     }
 
     private func formatCurrency(_ v: Double) -> String {
@@ -209,24 +225,24 @@ private struct AnimatedOrbBackground: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(LakshmiTheme.purple.opacity(0.22))
-                .frame(width: 240, height: 240)
-                .blur(radius: 70)
-                .offset(x: move ? 70 : -50, y: move ? -30 : 50)
+                .fill(LakshmiTheme.purple.opacity(0.55))
+                .frame(width: 260, height: 260)
+                .blur(radius: 65)
+                .offset(x: move ? 80 : -45, y: move ? -35 : 55)
                 .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
 
             Circle()
-                .fill(LakshmiTheme.blue.opacity(0.18))
-                .frame(width: 200, height: 200)
-                .blur(radius: 65)
-                .offset(x: move ? -80 : 60, y: move ? 70 : -40)
+                .fill(LakshmiTheme.blue.opacity(0.45))
+                .frame(width: 210, height: 210)
+                .blur(radius: 60)
+                .offset(x: move ? -85 : 65, y: move ? 75 : -45)
                 .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
 
             Circle()
-                .fill(LakshmiTheme.pink.opacity(0.12))
-                .frame(width: 150, height: 150)
-                .blur(radius: 55)
-                .offset(x: move ? 20 : -30, y: move ? -60 : 30)
+                .fill(LakshmiTheme.pink.opacity(0.35))
+                .frame(width: 170, height: 170)
+                .blur(radius: 50)
+                .offset(x: move ? 25 : -35, y: move ? -65 : 35)
                 .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
         }
         .onAppear { move = true }
@@ -242,14 +258,17 @@ private struct AnimatedOrbBackground: View {
 private struct InlineChart: View {
     let points: [PortfolioPoint]
     let isPositive: Bool
-    @Environment(\.colorScheme) private var scheme
+    var onDark: Bool = false
 
     private var lineColor: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
+    private var labelColor: Color { onDark ? .white.opacity(0.35) : .secondary }
+    private var gridColor: Color  { onDark ? .white.opacity(0.12) : Color(.separator).opacity(0.4) }
+    private var areaOpacity: Double { onDark ? 0.38 : 0.20 }
 
     var body: some View {
         if points.isEmpty {
             Text("No history yet")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(onDark ? .white.opacity(0.40) : .secondary)
                 .font(.subheadline)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -261,7 +280,7 @@ private struct InlineChart: View {
 
                 AreaMark(x: .value("Date", pt.date), y: .value("Equity", pt.equity))
                     .foregroundStyle(LinearGradient(
-                        colors: [lineColor.opacity(scheme == .dark ? 0.30 : 0.20), .clear],
+                        colors: [lineColor.opacity(areaOpacity), .clear],
                         startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.catmullRom)
             }
@@ -269,10 +288,10 @@ private struct InlineChart: View {
             .chartYAxis {
                 AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4]))
-                        .foregroundStyle(Color(.separator).opacity(0.4))
+                        .foregroundStyle(gridColor)
                     AxisValueLabel {
                         if let val = v.as(Double.self) {
-                            Text("$\(Int(val / 1000))k").font(.caption2).foregroundStyle(.secondary)
+                            Text("$\(Int(val / 1000))k").font(.caption2).foregroundStyle(labelColor)
                         }
                     }
                 }

@@ -13,15 +13,15 @@ struct ContentView: View {
                     .tag(0)
                     .toolbar(.hidden, for: .tabBar)
 
-                SignalsView()
+                PureAIView()
                     .tag(1)
                     .toolbar(.hidden, for: .tabBar)
 
-                BotTabView()
+                WheelView()
                     .tag(2)
                     .toolbar(.hidden, for: .tabBar)
 
-                WheelView()
+                SignalsView()
                     .tag(3)
                     .toolbar(.hidden, for: .tabBar)
 

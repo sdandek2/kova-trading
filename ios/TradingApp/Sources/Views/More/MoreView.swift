@@ -1,10 +1,17 @@
 import SwiftUI
 
 struct MoreView: View {
+    @State private var showBot = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    // ── Lakshmi AI Bot ─────────────────────────────────────
+                    MoreSection(title: "AI Trading Bot") {
+                        MoreBotLink()
+                    }
+
                     // ── Trading history ────────────────────────────────────
                     MoreSection(title: "History & Reports") {
                         MoreNavLink(icon: "list.bullet.rectangle", title: "Orders", subtitle: "All placed orders", color: LakshmiTheme.blue) {
@@ -49,13 +56,6 @@ struct MoreView: View {
                         }
                         MoreNavLink(icon: "banknote", title: "Profit Reserve", subtitle: "Set aside profit from trading", color: LakshmiTheme.positive) {
                             ProfitReserveView()
-                        }
-                    }
-
-                    // ── Experiments ────────────────────────────────────────
-                    MoreSection(title: "Experiments") {
-                        MoreNavLink(icon: "brain.head.profile", title: "Pure AI Mode", subtitle: "Claude Opus with web search — no pipeline", color: LakshmiTheme.pink) {
-                            PureAIView()
                         }
                     }
 
@@ -144,6 +144,42 @@ private struct MoreNavLink<Destination: View>: View {
             .padding(.vertical, 11)
         }
         .buttonStyle(PressScaleButtonStyle(scale: 0.97))
+    }
+}
+
+// Bot link uses fullScreenCover so BotTabView's inner NavigationStack gets its own modal context
+private struct MoreBotLink: View {
+    @State private var show = false
+
+    var body: some View {
+        Button { show = true } label: {
+            HStack(spacing: 13) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(LakshmiTheme.purple.opacity(0.13))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "brain")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(LakshmiTheme.purple)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Lakshmi Bot")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("AI trading decisions · status · config")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+        }
+        .buttonStyle(PressScaleButtonStyle(scale: 0.97))
+        .fullScreenCover(isPresented: $show) { BotTabView() }
     }
 }
 
