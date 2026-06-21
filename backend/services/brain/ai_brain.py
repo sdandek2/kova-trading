@@ -183,6 +183,7 @@ Strategy: {strategy.get('name')} — {strategy.get('prompt_modifier', '')}
 - BUY on an already-held symbol = adding to a winner (pyramid). Only do this if the existing position is well below the per-position size cap AND the signal is still strong (score ≥ 65). Never add if already at full size.
 - take_profit_pct: 0.05-0.09 stocks (9% hard cap enforced by engine), 0.10-0.20 leveraged ETFs, 0.06-0.09 inverse ETFs
 - stop_loss_pct: 0.03-0.05 (tight — cut losers fast)
+- partial_exit: true when confidence=high AND score≥75 AND strong trend likely to extend (RS≥85, MACD strongly positive) — sells half at TP, lets other half run with trailing stop to capture multi-bagger moves. Use false for medium/low confidence or weak trend signals.
 - confidence=high: signal score ≥ 70 — strong multi-signal confluence, approve at full Kelly size
 - confidence=medium: signal score 55-69 — decent setup, approve at 75% size
 - confidence=low: signal score < 55 or earnings today or multiple red flags — skip unless nothing better exists

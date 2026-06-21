@@ -154,56 +154,47 @@ def submit_market_order(
 
             if partial_exit and qty >= 2:
                 # ── Partial exit strategy: sell half at TP, let other half ride with trailing stop ──
-                # Buy with limit order for better fill
-                buy_req = LimitOrderRequest(
+                # Use market order (not limit) so fill is guaranteed before placing sell legs.
+                # Trailing stops require confirmed shares — market fill removes the timing risk.
+                buy_req = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=order_side,
                     time_in_force=TimeInForce.DAY,
-                    limit_price=limit_price,
                 )
                 order = trading_client.submit_order(buy_req)
-                logger.info(f"Partial-exit limit buy: {qty} {symbol} @ limit ${limit_price:.2f} (ask ${ask_price:.2f})")
+                logger.info(f"Partial-exit market buy: {qty} {symbol} (ask ${ask_price:.2f})")
 
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
 
-                # Only place sell legs if the buy actually filled.
-                # Alpaca trailing stops require GTC (DAY is rejected with HTTP 422).
-                # If we placed GTC sell orders before the buy fills, they could
-                # execute independently and open an unintended short position.
-                # By gating on fill confirmation we guarantee the shares exist first.
-                buy_filled = order.filled_avg_price is not None or str(order.status) == "filled"
-                if buy_filled:
-                    # First half: limit sell at TP price (DAY — expires if not hit today)
-                    try:
-                        limit_sell = LimitOrderRequest(
-                            symbol=symbol,
-                            qty=half_qty,
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.DAY,
-                            limit_price=take_profit_price,
-                        )
-                        trading_client.submit_order(limit_sell)
-                        logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
-                    except Exception as e:
-                        logger.warning(f"Partial limit sell failed (non-fatal): {e}")
+                # First half: limit sell at TP price (DAY — expires if not hit today)
+                try:
+                    limit_sell = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=half_qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.DAY,
+                        limit_price=take_profit_price,
+                    )
+                    trading_client.submit_order(limit_sell)
+                    logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+                except Exception as e:
+                    logger.warning(f"Partial limit sell failed (non-fatal): {e}")
 
-                    # Second half: trailing stop — MUST use GTC (Alpaca rejects DAY for trailing stops)
-                    try:
-                        trail_req = TrailingStopOrderRequest(
-                            symbol=symbol,
-                            qty=remaining_qty,
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.GTC,
-                            trail_percent=stop_loss_pct * 100,
-                        )
-                        trading_client.submit_order(trail_req)
-                        logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
-                    except Exception as e:
-                        logger.warning(f"Trailing stop failed (non-fatal): {e}")
-                else:
-                    logger.info(f"Partial-exit buy for {symbol} not yet filled — sell legs deferred until fill confirmed")
+                # Second half: trailing stop — MUST use GTC (Alpaca rejects DAY for trailing stops)
+                try:
+                    trail_req = TrailingStopOrderRequest(
+                        symbol=symbol,
+                        qty=remaining_qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC,
+                        trail_percent=stop_loss_pct * 100,
+                    )
+                    trading_client.submit_order(trail_req)
+                    logger.info(f"Trailing stop on remaining {remaining_qty} {symbol}: {stop_loss_pct*100:.0f}% trail")
+                except Exception as e:
+                    logger.warning(f"Trailing stop failed (non-fatal): {e}")
 
             else:
                 # ── Standard exit: LIMIT BRACKET order (limit entry + TP + SL) ──
