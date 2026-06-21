@@ -1281,38 +1281,49 @@ if _run("calibrate"):
 if _run("project"):
     _header("SECTION 12 — PROFITABILITY PROJECTION")
 
-    # Pull actual win rate from DB if available and enough data
-    _actual_wr = None
+    # Pull actual stats from DB if available
+    _actual_wr    = None
+    _actual_tp    = None   # avg realized_pl_pct on winning trades
+    _actual_sl    = None   # avg realized_pl_pct on losing trades
+    _actual_tpw   = None   # actual trades per week
     if _conn:
         try:
             with _conn.cursor() as _c2:
                 _c2.execute("""
                     SELECT COUNT(*) FILTER (WHERE realized_pl_pct > 0)::float / NULLIF(COUNT(*),0),
                            AVG(CASE WHEN realized_pl_pct > 0 THEN realized_pl_pct END),
-                           ABS(AVG(CASE WHEN realized_pl_pct <= 0 THEN realized_pl_pct END))
+                           ABS(AVG(CASE WHEN realized_pl_pct <= 0 THEN realized_pl_pct END)),
+                           COUNT(*) FILTER (WHERE exit_time >= NOW() - INTERVAL '28 days') / 4.0
                     FROM position_log WHERE exit_time IS NOT NULL AND realized_pl_pct IS NOT NULL
                 """)
                 _r = _c2.fetchone()
                 if _r and _r[0] and _total_trades >= 10:
-                    _actual_wr = float(_r[0])
+                    _actual_wr  = float(_r[0])
+                    _actual_tp  = float(_r[1]) if _r[1] else None
+                    _actual_sl  = float(_r[2]) if _r[2] else None
+                    _actual_tpw = float(_r[3]) if _r[3] else None
         except Exception:
             pass
 
-    PORTFOLIO    = 25_000.0
+    # Portfolio: live from Alpaca (set in pipeline section), fallback $25k
+    PORTFOLIO    = portfolio if portfolio and portfolio > 0 else 25_000.0
     MAX_POS_PCT  = 0.15
-    POS_SIZE     = PORTFOLIO * MAX_POS_PCT    # $3,750
-    AVG_TP_PCT   = 0.10
-    AVG_STOP_PCT = 0.03
-    AVG_WIN_D    = POS_SIZE * AVG_TP_PCT      # $375
-    AVG_LOSS_D   = POS_SIZE * AVG_STOP_PCT    # $112
+    POS_SIZE     = PORTFOLIO * MAX_POS_PCT
+    # Avg TP/SL: use actual DB values if available, else conservative assumptions
+    AVG_TP_PCT   = _actual_tp  if _actual_tp  else 0.09   # 9% = engine cap
+    AVG_STOP_PCT = _actual_sl  if _actual_sl  else 0.05   # 5% = risk_settings default
+    TRADES_PW    = _actual_tpw if _actual_tpw else 5.0
+    AVG_WIN_D    = POS_SIZE * AVG_TP_PCT
+    AVG_LOSS_D   = POS_SIZE * AVG_STOP_PCT
     BE_WR        = AVG_LOSS_D / (AVG_WIN_D + AVG_LOSS_D)
 
-    print(f"\n  Portfolio: ${PORTFOLIO:,.0f}  |  Max position: {MAX_POS_PCT:.0%} = ${POS_SIZE:,.0f}")
-    print(f"  Avg stop: {AVG_STOP_PCT:.0%} (${AVG_LOSS_D:.0f})  |  Avg TP: {AVG_TP_PCT:.0%} (${AVG_WIN_D:.0f})")
+    _src = "live DB" if _actual_tp else "assumed"
+    print(f"\n  Portfolio: ${PORTFOLIO:,.0f} (live)  |  Max position: {MAX_POS_PCT:.0%} = ${POS_SIZE:,.0f}")
+    print(f"  Avg stop: {AVG_STOP_PCT:.0%} (${AVG_LOSS_D:.0f})  |  Avg TP: {AVG_TP_PCT:.0%} (${AVG_WIN_D:.0f})  [{_src}]")
     print(f"  Risk/reward: 1:{AVG_WIN_D/AVG_LOSS_D:.1f}  |  Breakeven win rate: {BE_WR:.1%}")
 
     if _actual_wr and _total_trades >= 10:
-        print(f"\n  ★ Using ACTUAL win rate from DB ({_total_trades} trades): {_actual_wr:.1%}")
+        print(f"\n  ★ Using ACTUAL stats from DB ({_total_trades} trades, {TRADES_PW:.1f}/week)")
         scenarios = {"Actual (DB)": _actual_wr, "Target": 0.55, "Optimistic": 0.65}
     else:
         if _total_trades > 0:
@@ -1321,17 +1332,16 @@ if _run("project"):
             print(f"\n  No trades in DB yet — using assumed scenarios")
         scenarios = {"Conservative": 0.50, "Target": 0.55, "Optimistic": 0.65}
 
-    # Fixed sizing projection (realistic)
-    print(f"\n  Fixed position sizing — 5 trades/week (1/day)")
+    print(f"\n  Fixed position sizing — {TRADES_PW:.0f} trades/week")
     print(f"  {'Scenario':<16} {'Win%':>6} {'EV/trade':>10} {'Weekly':>10} {'Monthly':>10} {'Annual':>10}")
     print(f"  {'─'*16} {'─'*6} {'─'*10} {'─'*10} {'─'*10} {'─'*10}")
     for name, wr in scenarios.items():
         ev = wr * AVG_WIN_D - (1 - wr) * AVG_LOSS_D
-        print(f"  {name:<16} {wr:>5.0%} ${ev:>9.0f} ${ev*5:>9,.0f} ${ev*20:>9,.0f} ${ev*240:>9,.0f} "
-              f"{'✓' if ev > 0 else '✗'}")
+        print(f"  {name:<16} {wr:>5.0%} ${ev:>9.0f} ${ev*TRADES_PW:>9,.0f} ${ev*TRADES_PW*4:>9,.0f} "
+              f"${ev*TRADES_PW*48:>9,.0f} {'✓' if ev > 0 else '✗'}")
 
     print(f"\n  NOTE: Fixed sizing, no compounding, no taxes.")
-    print(f"  Breakeven = {BE_WR:.1%} win rate — the 1:3.3 R:R makes this very achievable.")
+    print(f"  Breakeven = {BE_WR:.1%} win rate.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FINAL SUMMARY
