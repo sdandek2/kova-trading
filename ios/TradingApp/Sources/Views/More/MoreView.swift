@@ -59,6 +59,13 @@ struct MoreView: View {
                         }
                     }
 
+                    // ── Console ────────────────────────────────────────────
+                    MoreSection(title: "Developer") {
+                        MoreNavLink(icon: "terminal.fill", title: "Console", subtitle: "Health monitor · log stream · quick fetch", color: LakshmiTheme.cyan) {
+                            ConsoleView()
+                        }
+                    }
+
                     // ── App ────────────────────────────────────────────────
                     MoreSection(title: "App") {
                         MoreNavLink(icon: "gearshape.fill", title: "Settings", subtitle: "Appearance & preferences", color: .gray) {

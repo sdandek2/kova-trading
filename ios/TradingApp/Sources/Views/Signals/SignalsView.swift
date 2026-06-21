@@ -5,7 +5,10 @@ import SwiftUI
 struct SignalsView: View {
     @StateObject private var insightsVM = InsightsViewModel()
     @StateObject private var newsVM    = NewsViewModel()
-    @State private var segment   = 0
+    // Default to News (index 2) — AI segments only load when explicitly tapped
+    @State private var segment   = 2
+    @State private var picksLoaded  = false
+    @State private var ideasLoaded  = false
     @State private var selectedSymbol: String? = nil
     @State private var showPrediction = false
     @State private var searchText = ""
@@ -22,6 +25,15 @@ struct SignalsView: View {
                     ForEach(segments.indices, id: \.self) { i in
                         Button {
                             withAnimation(LakshmiTheme.springSnappy) { segment = i }
+                            // Lazy-load AI data only on first explicit tap
+                            if i == 0 && !picksLoaded {
+                                picksLoaded = true
+                                Task { await insightsVM.loadDailyPicks() }
+                            }
+                            if i == 1 && !ideasLoaded {
+                                ideasLoaded = true
+                                Task { await insightsVM.loadSuggestions() }
+                            }
                         } label: {
                             HStack(spacing: 5) {
                                 Image(systemName: segIcons[i])
@@ -76,10 +88,8 @@ struct SignalsView: View {
             }
         }
         .task {
-            async let a: () = insightsVM.dailyPicks == nil ? insightsVM.loadDailyPicks() : ()
-            async let b: () = insightsVM.suggestions.isEmpty ? insightsVM.loadSuggestions() : ()
-            async let c: () = newsVM.articles.isEmpty ? newsVM.load() : ()
-            _ = await (a, b, c)
+            // Only News loads on open — AI segments load on explicit tap
+            if newsVM.articles.isEmpty { await newsVM.load() }
         }
     }
 }
