@@ -918,7 +918,7 @@ def get_sentiment_context(symbols: list[str]) -> dict[str, int]:
     scores: dict = defaultdict(int)
     try:
         nc = NewsClient(settings.alpaca_api_key, settings.alpaca_secret_key)
-        news = nc.get_news(NewsRequest(symbols=symbols, limit=50))
+        news = nc.get_news(NewsRequest(symbols=",".join(symbols), limit=50))
         _articles = news.data.get('news', []) if isinstance(getattr(news, 'data', None), dict) else getattr(news, 'news', [])
         for article in _articles:
             headline = (article.get('headline') if isinstance(article, dict) else getattr(article, 'headline', '')) or ''
