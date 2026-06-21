@@ -164,8 +164,9 @@ struct SuggestionCard: View {
                         Text(String(format: "$%.2f", price))
                             .font(.subheadline.weight(.medium))
                         if livePrice != nil {
-                            // Green dot signals this is a live price, not a cached estimate
-                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                            LiveDot(color: LakshmiTheme.positive)
+                                .scaleEffect(0.55)
+                                .frame(width: 10, height: 10)
                         }
                         if let chg = suggestion.five_day_change_pct {
                             Text(String(format: "%@%.1f%% 5d", chg >= 0 ? "+" : "", chg))
@@ -189,14 +190,14 @@ struct SuggestionCard: View {
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.red)
+                            .background(LakshmiTheme.negative)
                             .clipShape(Capsule())
                     } else if suggestion.isShort {
                         Text("SHORT")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.red)
+                            .background(LakshmiTheme.negative)
                             .clipShape(Capsule())
                     }
                 }
@@ -234,6 +235,7 @@ struct SuggestionCard: View {
                             .background(suggestion.isShort ? LakshmiTheme.negative : LakshmiTheme.positive)
                             .clipShape(Capsule())
                     }
+                    .buttonStyle(PressScaleButtonStyle(scale: 0.94))
                 }
         }
         .padding(14)
@@ -279,19 +281,19 @@ struct SuggestionCard: View {
 
     var typeColor: Color {
         switch suggestion.type {
-        case "momentum": return .blue
-        case "defensive": return .gray
-        case "geopolitical": return .orange
-        case "contrarian": return .purple
-        default: return .teal
+        case "momentum":    return LakshmiTheme.blue
+        case "defensive":   return LakshmiTheme.purple
+        case "geopolitical":return LakshmiTheme.amber
+        case "contrarian":  return LakshmiTheme.pink
+        default:            return LakshmiTheme.cyan
         }
     }
 
     var riskColor: Color {
         switch suggestion.risk_level {
-        case "low": return .green
-        case "high": return .red
-        default: return .orange
+        case "low":  return LakshmiTheme.positive
+        case "high": return LakshmiTheme.negative
+        default:     return LakshmiTheme.amber
         }
     }
 }

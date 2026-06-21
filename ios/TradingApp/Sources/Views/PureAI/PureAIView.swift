@@ -38,9 +38,14 @@ struct PureAIView: View {
                 .padding(.top, 8)
             }
             .background(LakshmiTheme.pageBackground.ignoresSafeArea())
-            .navigationTitle("Pure-AI")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
+                        Text("🤖").font(.system(size: 15))
+                        Text("Pure-AI").font(.headline.weight(.bold))
+                    }
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 6) {
                         LakshmiChip(text: vm.isPaper ? "PAPER" : "LIVE",

@@ -97,8 +97,10 @@ struct PredictionContent: View {
                             .foregroundStyle(.primary)
                         if livePrice != nil {
                             HStack(spacing: 3) {
-                                Circle().fill(Color.green).frame(width: 7, height: 7)
-                                Text("LIVE").font(.caption2.weight(.bold)).foregroundStyle(.green)
+                                LiveDot(color: LakshmiTheme.positive)
+                                    .scaleEffect(0.55)
+                                    .frame(width: 10, height: 10)
+                                Text("LIVE").font(.caption2.weight(.bold)).foregroundStyle(LakshmiTheme.positive)
                             }
                         }
                     }
@@ -113,7 +115,7 @@ struct PredictionContent: View {
             }
         }
         .padding(16)
-        .background(Color(.systemBackground))
+        .background(LakshmiTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.07), radius: 8, x: 0, y: 2)
     }
@@ -130,11 +132,11 @@ struct PredictionContent: View {
 
     var recommendationColor: Color {
         switch prediction.recommendation {
-        case "strong_buy": return .green
-        case "buy": return Color.green.opacity(0.75)
-        case "sell": return Color.red.opacity(0.75)
-        case "strong_sell": return .red
-        default: return .gray
+        case "strong_buy": return LakshmiTheme.positive
+        case "buy":        return LakshmiTheme.positive.opacity(0.75)
+        case "sell":       return LakshmiTheme.negative.opacity(0.75)
+        case "strong_sell":return LakshmiTheme.negative
+        default:           return LakshmiTheme.amber
         }
     }
 
@@ -301,7 +303,7 @@ struct PredictionContent: View {
             content()
         }
         .padding(16)
-        .background(Color(.systemBackground))
+        .background(LakshmiTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
     }

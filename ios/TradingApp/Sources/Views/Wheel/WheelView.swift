@@ -31,9 +31,14 @@ struct WheelView: View {
                 .padding(.top, 8)
             }
             .background(LakshmiTheme.pageBackground.ignoresSafeArea())
-            .navigationTitle("Wheel Bot")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
+                        Text("⚙️").font(.system(size: 15))
+                        Text("Wheel Bot").font(.headline.weight(.bold))
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await vm.loadStatus() }

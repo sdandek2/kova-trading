@@ -132,7 +132,7 @@ struct DailyPicksView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(picks) { pick in
+                    ForEach(Array(picks.enumerated()), id: \.element.id) { index, pick in
                         DailyPickCard(
                             pick: pick,
                             accentColor: accentColor,
@@ -142,6 +142,7 @@ struct DailyPicksView: View {
                             selectedSymbol = pick.symbol
                             showPrediction = true
                         }
+                        .cardAppear(delay: Double(index) * 0.06)
                     }
                 }
                 .padding(.horizontal)
@@ -165,16 +166,17 @@ struct DailyPicksView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(plays) { play in
+                    ForEach(Array(plays.enumerated()), id: \.element.id) { index, play in
                         DailyPickCard(
                             pick: play,
-                            accentColor: .red,
+                            accentColor: LakshmiTheme.negative,
                             prefillSide: play.isInverseETF ? "buy" : "short",
                             livePrice: vm.livePrices[play.symbol]
                         ) {
                             selectedSymbol = play.symbol
                             showPrediction = true
                         }
+                        .cardAppear(delay: Double(index) * 0.06)
                     }
                 }
                 .padding(.horizontal)
@@ -215,21 +217,25 @@ struct DailyPicksView: View {
     // MARK: - Chips
 
     func regimeChip(_ regime: String) -> some View {
-        let color: Color = regime == "bull" ? .green : regime == "bear" ? .red : .orange
+        let color: Color = regime == "bull" ? LakshmiTheme.positive : regime == "bear" ? LakshmiTheme.negative : LakshmiTheme.amber
         return Text(regime.uppercased())
             .font(.caption2.weight(.bold))
             .foregroundStyle(color)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .overlay(Capsule().stroke(color, lineWidth: 1))
+            .background(color.opacity(0.10))
+            .overlay(Capsule().stroke(color.opacity(0.40), lineWidth: 1))
+            .clipShape(Capsule())
     }
 
     func geoChip(_ level: String) -> some View {
-        let color: Color = level == "low" ? .green : level == "moderate" ? .orange : level == "elevated" ? .orange : .red
-        return Text("GEO: \(level.uppercased())")
+        let color: Color = level == "low" ? LakshmiTheme.positive : level == "high" ? LakshmiTheme.negative : LakshmiTheme.amber
+        return Text("GEO \(level.uppercased())")
             .font(.caption2.weight(.bold))
             .foregroundStyle(color)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .overlay(Capsule().stroke(color, lineWidth: 1))
+            .background(color.opacity(0.10))
+            .overlay(Capsule().stroke(color.opacity(0.40), lineWidth: 1))
+            .clipShape(Capsule())
     }
 
     func formattedDate(_ iso: String) -> String {
@@ -279,14 +285,14 @@ struct DailyPickCard: View {
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Color.red)
+                                .background(LakshmiTheme.negative)
                                 .clipShape(Capsule())
                         } else if prefillSide == "short" {
                             Text("SHORT")
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Color.red)
+                                .background(LakshmiTheme.negative)
                                 .clipShape(Capsule())
                         }
                     }
@@ -296,7 +302,9 @@ struct DailyPickCard: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if livePrice != nil {
-                                Circle().fill(Color.green).frame(width: 5, height: 5)
+                                LiveDot(color: LakshmiTheme.positive)
+                                    .scaleEffect(0.55)
+                                    .frame(width: 10, height: 10)
                             }
                         }
                     }
@@ -360,20 +368,21 @@ struct DailyPickCard: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
-                        .background(prefillSide == "short" ? Color.red : Color.green)
+                        .background(prefillSide == "short" ? LakshmiTheme.negative : LakshmiTheme.positive)
                         .clipShape(Capsule())
                 }
+                .buttonStyle(PressScaleButtonStyle(scale: 0.94))
             }
         }
         .padding(14)
         .frame(width: 260)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: accentColor.opacity(0.12), radius: 8, x: 0, y: 3)
+        .background(LakshmiTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(accentColor.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: LakshmiTheme.radius)
+                .stroke(accentColor.opacity(0.22), lineWidth: 1)
         )
+        .shadow(color: accentColor.opacity(0.10), radius: 10, x: 0, y: 4)
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .sheet(isPresented: $showTrade) {
