@@ -325,15 +325,17 @@ if _run("pipeline"):
     # 5. News
     _step(5, "News + sentiment")
     try:
-        from services.alpaca_service import get_news
+        from services.alpaca_service import get_news, _score_headline
         articles = get_news(limit=50)
         for a in articles:
             _g = lambda f: a.get(f) if isinstance(a, dict) else getattr(a, f, None)
             hl = _g("headline") or ""
+            sm = _g("summary") or ""
             syms = (a.get("symbols") if isinstance(a, dict) else getattr(a, "symbols", None)) or []
             if hl: news_headlines.append(hl)
+            direction = _score_headline(hl, sm)
             for s in syms:
-                sentiment[s] = sentiment.get(s, 0) + 1
+                sentiment[s] = sentiment.get(s, 0) + direction
         _ok(f"{len(news_headlines)} headlines, {len(sentiment)} symbols mentioned")
         top_news = sorted(sentiment.items(), key=lambda x: -x[1])[:5]
         if top_news:

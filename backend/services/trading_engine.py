@@ -252,12 +252,14 @@ async def run_premarket_scan():
             if art.get("headline")
         ]
 
-        # Derive sentiment from news articles
+        # Derive signed sentiment: +1 bullish, -1 bearish, 0 neutral per article
+        from services.alpaca_service import _score_headline
         sentiment = {}
         for art in news_articles:
+            direction = _score_headline(art.get("headline", ""), art.get("summary", ""))
             for sym in art.get("symbols", []):
                 if sym in universe:
-                    sentiment[sym] = sentiment.get(sym, 0) + 1
+                    sentiment[sym] = sentiment.get(sym, 0) + direction
 
         # Top movers from news (symbols with most mentions)
         top_movers = sorted(sentiment.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -533,12 +535,14 @@ async def run_trading_cycle():
         except Exception as e:
             logger.warning(f"Could not fetch news: {e}")
 
-        # Derive sentiment from news: count articles mentioning each symbol
+        # Derive signed sentiment: +1 bullish, -1 bearish, 0 neutral per article
+        from services.alpaca_service import _score_headline
         sentiment = {}
         for art in news_articles:
+            direction = _score_headline(art.get("headline", ""), art.get("summary", ""))
             for sym in art.get("symbols", []):
                 if sym in universe:
-                    sentiment[sym] = sentiment.get(sym, 0) + 1
+                    sentiment[sym] = sentiment.get(sym, 0) + direction
 
         # Top headlines for AI context (most recent 15)
         news_headlines = [
