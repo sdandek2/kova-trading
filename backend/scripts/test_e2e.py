@@ -919,16 +919,16 @@ if _run("wheel"):
     _yield_aapl = _annual_yield(2.50, 185.0, 30)
     _assert(_yield_aapl > 10.0, f"AAPL $2.50p / $185 / 30dte → {_yield_aapl:.1f}% ann yield > 10%")
 
-    # Dollar premium filter — $0.35 on a $7 stock should be blocked (< $50 per contract)
+    # Dollar premium filter — $0.35 on a $7 stock should be blocked (< $100 per contract)
     _dollar_prem = 0.35 * 100   # $35 per contract
     _assert(_dollar_prem < WHEEL_MIN_DOLLAR_PREMIUM,
             f"$0.35 premium (${_dollar_prem}/contract) correctly below min ${WHEEL_MIN_DOLLAR_PREMIUM}",
             f"${_dollar_prem} vs min ${WHEEL_MIN_DOLLAR_PREMIUM}")
 
-    # $0.60 on a $12 stock → $60 per contract → should pass (>= $50 min)
-    _dollar_prem2 = 0.60 * 100
+    # $1.10 on a $22 stock → $110 per contract → should pass (>= $100 min)
+    _dollar_prem2 = 1.10 * 100
     _assert(_dollar_prem2 >= WHEEL_MIN_DOLLAR_PREMIUM,
-            f"$0.60 premium (${_dollar_prem2}/contract) passes min ${WHEEL_MIN_DOLLAR_PREMIUM}")
+            f"$1.10 premium (${_dollar_prem2}/contract) passes min ${WHEEL_MIN_DOLLAR_PREMIUM}")
 
     # F-3: Open cycle detection (mock — no real Alpaca call)
     _section("F-3. Duplicate cycle guard (mock)")
