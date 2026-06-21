@@ -228,24 +228,24 @@ private struct AnimatedOrbBackground: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(LakshmiTheme.gold.opacity(0.55))
-                .frame(width: 260, height: 260)
-                .blur(radius: 65)
-                .offset(x: move ? 80 : -45, y: move ? -35 : 55)
+                .fill(LakshmiTheme.gold.opacity(0.22))
+                .frame(width: 340, height: 340)
+                .blur(radius: 100)
+                .offset(x: move ? 90 : -60, y: move ? -50 : 40)
                 .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
 
             Circle()
-                .fill(LakshmiTheme.amber.opacity(0.48))
-                .frame(width: 210, height: 210)
-                .blur(radius: 60)
-                .offset(x: move ? -85 : 65, y: move ? 75 : -45)
+                .fill(LakshmiTheme.amber.opacity(0.16))
+                .frame(width: 280, height: 280)
+                .blur(radius: 90)
+                .offset(x: move ? -100 : 70, y: move ? 60 : -55)
                 .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
 
             Circle()
-                .fill(LakshmiTheme.saffron.opacity(0.38))
-                .frame(width: 170, height: 170)
-                .blur(radius: 50)
-                .offset(x: move ? 25 : -35, y: move ? -65 : 35)
+                .fill(LakshmiTheme.saffron.opacity(0.12))
+                .frame(width: 220, height: 220)
+                .blur(radius: 80)
+                .offset(x: move ? 30 : -40, y: move ? -70 : 30)
                 .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
         }
         .onAppear { move = true }
