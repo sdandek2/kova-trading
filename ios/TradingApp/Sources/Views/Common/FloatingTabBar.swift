@@ -5,11 +5,11 @@ struct FloatingTabBar: View {
     var namespace: Namespace.ID
 
     private let items: [(icon: String, filled: String, label: String)] = [
-        ("house",              "house.fill",              "Home"),
-        ("brain.head.profile", "brain.head.profile",      "Pure AI"),
-        ("arrow.2.circlepath", "arrow.2.circlepath",      "Wheel"),
-        ("chart.xyaxis.line",  "chart.xyaxis.line",       "Signals"),
-        ("ellipsis.circle",    "ellipsis.circle.fill",    "More")
+        ("house",                "house.fill",               "Home"),
+        ("list.bullet.rectangle","list.bullet.rectangle.fill","Orders"),
+        ("brain.head.profile",   "brain.head.profile",       "Pure AI"),
+        ("arrow.2.circlepath",   "arrow.2.circlepath",       "Wheel"),
+        ("ellipsis.circle",      "ellipsis.circle.fill",     "More")
     ]
 
     var body: some View {

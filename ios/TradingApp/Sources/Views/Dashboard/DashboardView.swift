@@ -40,7 +40,7 @@ struct DashboardView: View {
             }
             .sheet(isPresented: $showTradeSheet) { TradeSheet() }
         }
-        .tint(LakshmiTheme.purple)
+        .tint(LakshmiTheme.gold)
         .task { await vm.load() }
     }
 
@@ -53,28 +53,31 @@ struct DashboardView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(
-                        LakshmiTheme.brandGradient.opacity(0.06)
+                        LakshmiTheme.brandGradient.opacity(0.08)
                             .overlay(Divider().frame(maxHeight: .infinity, alignment: .bottom))
                     )
 
-                VStack(spacing: 20) {
-                    // ── Hero portfolio block ───────────────────────────────
-                    if let account = vm.account {
-                        HeroChartBlock(
-                            account: account,
-                            points: vm.portfolioHistory,
-                            onPeriodChange: { period in Task { await vm.loadPortfolioHistory(period: period) } }
-                        )
-                        .cardAppear(delay: 0.0)
-                    }
+                // ── Hero portfolio block — full-width (8pt margins) ────────
+                if let account = vm.account {
+                    HeroChartBlock(
+                        account: account,
+                        points: vm.portfolioHistory,
+                        onPeriodChange: { period in Task { await vm.loadPortfolioHistory(period: period) } }
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.top, 12)
+                    .cardAppear(delay: 0.0)
+                }
 
+                // ── Cards below hero ──────────────────────────────────────
+                VStack(spacing: 20) {
                     // ── Stat cards ─────────────────────────────────────────
                     if let account = vm.account {
                         HStack(spacing: 10) {
                             GlassStatCard(icon: "banknote", label: "Cash",
                                           value: formatK(account.cash), color: LakshmiTheme.positive)
                             GlassStatCard(icon: "bolt.fill", label: "Buying Power",
-                                          value: formatK(account.buyingPower), color: LakshmiTheme.purple)
+                                          value: formatK(account.buyingPower), color: LakshmiTheme.gold)
                             GlassStatCard(icon: "clock.arrow.2.circlepath", label: "Day P&L",
                                           value: formatPL(account.dayPl), color: account.dayPl >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative)
                         }
@@ -195,18 +198,18 @@ private struct HeroChartBlock: View {
             ZStack {
                 LinearGradient(
                     colors: [
-                        Color(red: 0.10, green: 0.05, blue: 0.24),
-                        Color(red: 0.05, green: 0.08, blue: 0.28),
+                        Color(red: 0.14, green: 0.08, blue: 0.01),
+                        Color(red: 0.08, green: 0.04, blue: 0.00),
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
                 RoundedRectangle(cornerRadius: LakshmiTheme.radius)
-                    .stroke(LakshmiTheme.brandGradient.opacity(0.30), lineWidth: 1)
+                    .stroke(LakshmiTheme.brandGradient.opacity(0.40), lineWidth: 1)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
-        .shadow(color: LakshmiTheme.purple.opacity(0.45), radius: 24, x: 0, y: 10)
+        .shadow(color: LakshmiTheme.gold.opacity(0.35), radius: 24, x: 0, y: 10)
     }
 
     private func formatCurrency(_ v: Double) -> String {
@@ -225,21 +228,21 @@ private struct AnimatedOrbBackground: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(LakshmiTheme.purple.opacity(0.55))
+                .fill(LakshmiTheme.gold.opacity(0.55))
                 .frame(width: 260, height: 260)
                 .blur(radius: 65)
                 .offset(x: move ? 80 : -45, y: move ? -35 : 55)
                 .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
 
             Circle()
-                .fill(LakshmiTheme.blue.opacity(0.45))
+                .fill(LakshmiTheme.amber.opacity(0.48))
                 .frame(width: 210, height: 210)
                 .blur(radius: 60)
                 .offset(x: move ? -85 : 65, y: move ? 75 : -45)
                 .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
 
             Circle()
-                .fill(LakshmiTheme.pink.opacity(0.35))
+                .fill(LakshmiTheme.saffron.opacity(0.38))
                 .frame(width: 170, height: 170)
                 .blur(radius: 50)
                 .offset(x: move ? 25 : -35, y: move ? -65 : 35)

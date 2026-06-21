@@ -7,33 +7,46 @@ import SwiftUI
 
 enum LakshmiTheme {
 
-    // ── Brand gradient (matches app icon: pink → purple → blue) ──────────────
+    // ── Primary brand — Lakshmi gold (matches app icon) ──────────────────────
+    static let gold    = Color(red: 1.00, green: 0.80, blue: 0.10)   // bright gold
+    static let amber   = Color(red: 0.96, green: 0.52, blue: 0.05)   // warm amber
+    static let saffron = Color(red: 1.00, green: 0.65, blue: 0.15)   // saffron accent
+
+    static let brandGradient = LinearGradient(
+        colors: [gold, amber],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    // Warm horizontal gradient (used in pickers, badges)
+    static let warmGradient = LinearGradient(
+        colors: [gold, saffron, amber],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
+    // Legacy alias — kept so callers compile; now golden-warm
+    static let blueGradient = LinearGradient(
+        colors: [gold, amber],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
+    // ── Secondary / semantic palette (unchanged — used for charts, signals) ───
     static let pink   = Color(red: 1.00, green: 0.22, blue: 0.85)
     static let purple = Color(red: 0.61, green: 0.38, blue: 1.00)
     static let blue   = Color(red: 0.04, green: 0.52, blue: 1.00)
     static let cyan   = Color(red: 0.00, green: 0.85, blue: 1.00)
 
-    static let brandGradient = LinearGradient(
-        colors: [pink, purple, blue],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-
-    static let blueGradient = LinearGradient(
-        colors: [purple, blue, cyan],
-        startPoint: .leading,
-        endPoint: .trailing
-    )
-
     // ── Subtle tint used for card accents ─────────────────────────────────────
     static let cardTint = LinearGradient(
-        colors: [purple.opacity(0.10), blue.opacity(0.06)],
+        colors: [gold.opacity(0.08), amber.opacity(0.05)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
 
     // ── Semantic colours ──────────────────────────────────────────────────────
-    static let accent:   Color = purple
+    static let accent:   Color = gold
     static let positive: Color = Color(red: 0.18, green: 0.80, blue: 0.44)  // emerald green
     static let negative: Color = Color(red: 1.00, green: 0.27, blue: 0.27)  // vivid red
 
@@ -247,7 +260,7 @@ struct GlowBorderModifier: ViewModifier {
 }
 
 extension View {
-    func glowBorder(color: Color = LakshmiTheme.purple, radius: CGFloat = 8,
+    func glowBorder(color: Color = LakshmiTheme.gold, radius: CGFloat = 8,
                     cornerRadius: CGFloat = LakshmiTheme.radius) -> some View {
         modifier(GlowBorderModifier(color: color, radius: radius, cornerRadius: cornerRadius))
     }

@@ -35,24 +35,13 @@ struct WheelView: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 8) {
-                        // Paper/Live badge
-                        if let mode = vm.status?.mode {
-                            Text(mode.uppercased())
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(mode == "live" ? LakshmiTheme.positive.opacity(0.2) : Color.orange.opacity(0.2))
-                                .foregroundStyle(mode == "live" ? LakshmiTheme.positive : .orange)
-                                .clipShape(Capsule())
-                        }
-                        Button {
-                            Task { await vm.loadStatus() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15))
-                        }
-                        .disabled(vm.isLoading)
+                    Button {
+                        Task { await vm.loadStatus() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15))
                     }
+                    .disabled(vm.isLoading)
                 }
             }
             .refreshable {

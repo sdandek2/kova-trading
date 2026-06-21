@@ -13,15 +13,15 @@ struct ContentView: View {
                     .tag(0)
                     .toolbar(.hidden, for: .tabBar)
 
-                PureAIView()
+                OrdersView()
                     .tag(1)
                     .toolbar(.hidden, for: .tabBar)
 
-                WheelView()
+                PureAIView()
                     .tag(2)
                     .toolbar(.hidden, for: .tabBar)
 
-                SignalsView()
+                WheelView()
                     .tag(3)
                     .toolbar(.hidden, for: .tabBar)
 
@@ -32,7 +32,7 @@ struct ContentView: View {
             // Reserve space so content doesn't hide behind custom tab bar
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 90) }
 
-            // ── Floating tab bar ──────────────────────────────────────────
+            // ── Floating tab bar + safe-area fill ────────────────────────
             VStack(spacing: 0) {
                 // Macro calendar nudge (Jan 1–7 only)
                 if shouldShowMacroBanner {
@@ -43,9 +43,15 @@ struct ContentView: View {
                 }
                 FloatingTabBar(selected: $selectedTab, namespace: tabNS)
             }
+            // Fill the gap between the capsule and the screen bottom edge
+            .background(
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .ignoresSafeArea(edges: .bottom)
+            )
         }
         .ignoresSafeArea(edges: .bottom)
-        .tint(LakshmiTheme.purple)
+        .tint(LakshmiTheme.gold)
         .animation(LakshmiTheme.springSnappy, value: selectedTab)
     }
 

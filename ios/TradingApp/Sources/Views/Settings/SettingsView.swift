@@ -29,7 +29,7 @@ struct SettingsView: View {
                                 if colorSchemePreference == option {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(LakshmiTheme.purple)
+                                        .foregroundStyle(LakshmiTheme.gold)
                                 }
                             }
                         }
@@ -43,14 +43,14 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("App") { Text("Lakshmi").foregroundStyle(.secondary) }
                     LabeledContent("Version") { Text("1.0.0").foregroundStyle(.secondary) }
-                    LabeledContent("AI Model") { Text("Gemini 2.5 Pro").foregroundStyle(.secondary) }
+                    LabeledContent("AI Model") { Text("Claude Sonnet 4.6").foregroundStyle(.secondary) }
                 } header: {
                     Label("About", systemImage: "info.circle")
                         .font(.caption.weight(.semibold))
                 }
             }
             .navigationTitle("Settings")
-            .tint(LakshmiTheme.purple)
+            .tint(LakshmiTheme.gold)
         }
     }
 

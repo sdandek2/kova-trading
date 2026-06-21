@@ -63,7 +63,6 @@ MONITORED_CONNECTORS = [
     "finnhub",
     "sec_insider",
     "fmp_earnings",
-    "quiver",
     "unusual_whales",
     "macro_fred",
     # Core trading infrastructure

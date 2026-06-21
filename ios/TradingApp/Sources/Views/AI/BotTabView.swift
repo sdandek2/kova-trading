@@ -10,6 +10,7 @@ struct BotTabView: View {
     @State private var circuitLimit      = 4.0
     @State private var settingsExpanded  = false
     @Namespace private var heroNS
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -71,6 +72,15 @@ struct BotTabView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
                         Text("🪷").font(.system(size: 16))

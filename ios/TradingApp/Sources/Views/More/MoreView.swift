@@ -12,11 +12,15 @@ struct MoreView: View {
                         MoreBotLink()
                     }
 
+                    // ── Signals & News ─────────────────────────────────────
+                    MoreSection(title: "Signals & News") {
+                        MoreNavLink(icon: "waveform.path.ecg.rectangle.fill", title: "Signals", subtitle: "Daily picks · AI ideas · market news", color: LakshmiTheme.amber) {
+                            SignalsView()
+                        }
+                    }
+
                     // ── Trading history ────────────────────────────────────
                     MoreSection(title: "History & Reports") {
-                        MoreNavLink(icon: "list.bullet.rectangle", title: "Orders", subtitle: "All placed orders", color: LakshmiTheme.blue) {
-                            OrdersView()
-                        }
                         MoreNavLink(icon: "chart.bar.xaxis", title: "Trade History", subtitle: "Closed positions + decisions", color: LakshmiTheme.purple) {
                             TradeHistoryView()
                         }
