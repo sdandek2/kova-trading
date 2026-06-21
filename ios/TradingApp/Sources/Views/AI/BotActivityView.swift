@@ -15,8 +15,13 @@ struct BotActivityView: View {
                         .foregroundStyle(.blue).font(.system(size: 16))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Bot Activity Log")
-                        .font(.headline).foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text("Bot Activity Log")
+                            .font(.headline).foregroundStyle(.primary)
+                        if !isLoading && !events.isEmpty {
+                            LiveDot(color: LakshmiTheme.blue)
+                        }
+                    }
                     Text(isLoading ? "Loading..." : "\(events.count) recent events")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -24,7 +29,7 @@ struct BotActivityView: View {
                 if isLoading {
                     ProgressView().scaleEffect(0.8)
                 } else if !events.isEmpty {
-                    Button(action: { withAnimation { isExpanded.toggle() } }) {
+                    Button(action: { withAnimation(LakshmiTheme.springSnappy) { isExpanded.toggle() } }) {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -38,20 +43,32 @@ struct BotActivityView: View {
                 // Always show the most recent event
                 if let latest = events.first {
                     BotActivityRow(event: latest)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        ))
                 }
 
                 // Show the rest if expanded
                 if isExpanded && events.count > 1 {
-                    ForEach(events.dropFirst()) { event in
+                    ForEach(Array(events.dropFirst().enumerated()), id: \.element.id) { index, event in
                         Divider().padding(.leading, 52)
                         BotActivityRow(event: event)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
                     }
                 }
 
                 if events.count > 1 {
-                    Button(action: { withAnimation { isExpanded.toggle() } }) {
-                        Text(isExpanded ? "Show less" : "Show \(events.count - 1) more events")
-                            .font(.caption).foregroundStyle(.blue)
+                    Button(action: { withAnimation(LakshmiTheme.springSnappy) { isExpanded.toggle() } }) {
+                        HStack(spacing: 4) {
+                            Text(isExpanded ? "Show less" : "Show \(events.count - 1) more events")
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption2)
+                        }
+                        .font(.caption).foregroundStyle(.blue)
                     }
                     .padding(.horizontal, 16).padding(.bottom, 12).padding(.top, 4)
                 }

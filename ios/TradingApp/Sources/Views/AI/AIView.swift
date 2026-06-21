@@ -72,6 +72,7 @@ struct AIView: View {
                                 .cornerRadius(14)
                             }
                             .foregroundColor(.primary)
+                            .buttonStyle(PressScaleButtonStyle())
 
                             // ── Reports & History ──
                             HStack(spacing: 12) {
@@ -110,6 +111,7 @@ struct AIView: View {
                                 .cornerRadius(14)
                             }
                             .foregroundColor(.primary)
+                            .buttonStyle(PressScaleButtonStyle())
 
                             HStack(spacing: 12) {
                                 NavigationLink {
@@ -147,6 +149,7 @@ struct AIView: View {
                                 .cornerRadius(14)
                             }
                             .foregroundColor(.primary)
+                            .buttonStyle(PressScaleButtonStyle())
 
                             // ════════════════════════════════
                             // SETTINGS — Bot configuration
@@ -262,8 +265,13 @@ struct RecentAIDecisionsCard: View {
                         .foregroundStyle(.purple).font(.system(size: 16))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Recent AI Decisions")
-                        .font(.headline).foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text("Recent AI Decisions")
+                            .font(.headline).foregroundStyle(.primary)
+                        if !decisions.isEmpty {
+                            LiveDot(color: LakshmiTheme.purple)
+                        }
+                    }
                     Text("\(decisions.count) decisions")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -279,9 +287,10 @@ struct RecentAIDecisionsCard: View {
                         .font(.caption2).foregroundStyle(.blue)
                     }
                 }
-                Button(action: { withAnimation { isExpanded.toggle() } }) {
+                Button(action: { withAnimation(LakshmiTheme.springSnappy) { isExpanded.toggle() } }) {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption).foregroundStyle(.secondary)
+                        .animation(LakshmiTheme.springSnappy, value: isExpanded)
                 }
             }
             .padding()
@@ -296,6 +305,10 @@ struct RecentAIDecisionsCard: View {
                 // Always show the most recent decision in full
                 if let latest = decisions.first {
                     AIDecisionRow(event: latest, showFullMessage: true)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .opacity
+                        ))
                 }
 
                 // Show the rest in compact form if expanded
@@ -303,13 +316,17 @@ struct RecentAIDecisionsCard: View {
                     ForEach(decisions.dropFirst()) { event in
                         Divider().padding(.leading, 52)
                         AIDecisionRow(event: event, showFullMessage: false)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
 
                 if decisions.count > 1 {
-                    Button(action: { withAnimation { isExpanded.toggle() } }) {
-                        Text(isExpanded ? "Show less" : "Show \(decisions.count - 1) more decisions")
-                            .font(.caption).foregroundStyle(.blue)
+                    Button(action: { withAnimation(LakshmiTheme.springSnappy) { isExpanded.toggle() } }) {
+                        HStack(spacing: 4) {
+                            Text(isExpanded ? "Show less" : "Show \(decisions.count - 1) more decisions")
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down").font(.caption2)
+                        }
+                        .font(.caption).foregroundStyle(.blue)
                     }
                     .padding(.horizontal, 16).padding(.bottom, 12)
                 }

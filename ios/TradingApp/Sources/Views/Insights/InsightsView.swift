@@ -56,7 +56,7 @@ struct InsightsView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal)
                         } else {
-                            ForEach(vm.suggestions) { suggestion in
+                            ForEach(Array(vm.suggestions.enumerated()), id: \.element.id) { index, suggestion in
                                 SuggestionCard(
                                     suggestion: suggestion,
                                     livePrice: vm.livePrices[suggestion.symbol]
@@ -65,6 +65,7 @@ struct InsightsView: View {
                                     showPrediction = true
                                 }
                                 .padding(.horizontal)
+                                .cardAppear(delay: Double(index) * 0.07)
                             }
                         }
                     }
@@ -241,6 +242,7 @@ struct SuggestionCard: View {
         .shadow(color: LakshmiTheme.purple.opacity(0.07), radius: 8, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
+        .buttonStyle(PressScaleButtonStyle())
         .sheet(isPresented: $showTrade) {
             TradeSheet(prefillSymbol: suggestion.symbol, prefillSide: suggestion.prefillSide, prefillQty: suggestedQty)
         }

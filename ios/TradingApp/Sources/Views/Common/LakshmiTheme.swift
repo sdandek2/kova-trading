@@ -129,6 +129,131 @@ struct LakshmiChip: View {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Animation constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+extension LakshmiTheme {
+    static let springSnappy = Animation.spring(response: 0.30, dampingFraction: 0.72)
+    static let springBouncy = Animation.spring(response: 0.48, dampingFraction: 0.62)
+    static let springSmooth = Animation.spring(response: 0.45, dampingFraction: 0.88)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Shimmer modifier  (skeleton-loading sweep)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct ShimmerModifier: ViewModifier {
+    @State private var phase: CGFloat = -1.2
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                LinearGradient(
+                    colors: [.white.opacity(0), .white.opacity(0.35), .white.opacity(0)],
+                    startPoint: UnitPoint(x: phase, y: 0.5),
+                    endPoint:   UnitPoint(x: phase + 0.6, y: 0.5)
+                )
+                .blendMode(.overlay)
+                .allowsHitTesting(false)
+            )
+            .onAppear {
+                withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
+                    phase = 1.4
+                }
+            }
+    }
+}
+
+extension View {
+    func shimmer() -> some View { modifier(ShimmerModifier()) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Card appear  (fade-up entrance, supports stagger delay)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct CardAppearModifier: ViewModifier {
+    let delay: Double
+    @State private var visible = false
+    func body(content: Content) -> some View {
+        content
+            .opacity(visible ? 1 : 0)
+            .offset(y: visible ? 0 : 18)
+            .onAppear {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.82).delay(delay)) {
+                    visible = true
+                }
+            }
+    }
+}
+
+extension View {
+    func cardAppear(delay: Double = 0) -> some View { modifier(CardAppearModifier(delay: delay)) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Press scale  (tactile feedback on tap)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct PressScaleButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.96
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: configuration.isPressed)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Live dot  (pulsing indicator for real-time data)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct LiveDot: View {
+    var color: Color = LakshmiTheme.positive
+    @State private var pulsing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.3))
+                .frame(width: 16, height: 16)
+                .scaleEffect(pulsing ? 2.4 : 1)
+                .opacity(pulsing ? 0 : 0.7)
+                .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+        .onAppear { pulsing = true }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Glow border modifier
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct GlowBorderModifier: ViewModifier {
+    let color: Color
+    let radius: CGFloat
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(color.opacity(0.55), lineWidth: 1)
+            )
+            .shadow(color: color.opacity(0.22), radius: radius, x: 0, y: 0)
+    }
+}
+
+extension View {
+    func glowBorder(color: Color = LakshmiTheme.purple, radius: CGFloat = 8,
+                    cornerRadius: CGFloat = LakshmiTheme.radius) -> some View {
+        modifier(GlowBorderModifier(color: color, radius: radius, cornerRadius: cornerRadius))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // P&L badge
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -136,6 +261,7 @@ struct PLBadge: View {
     let value: Double
     let percentValue: Double
     var showArrow: Bool = true
+    @State private var didAppear = false
 
     private var isPositive: Bool { value >= 0 }
     private var color: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
@@ -149,11 +275,17 @@ struct PLBadge: View {
             Text(String(format: "%@$%.2f (%.2f%%)",
                         isPositive ? "+" : "", abs(value), abs(percentValue)))
                 .font(.subheadline.weight(.semibold))
+                .contentTransition(.numericText())
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: value)
         }
         .foregroundStyle(color)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(color.opacity(0.12))
         .clipShape(Capsule())
+        .scaleEffect(didAppear ? 1 : 0.85)
+        .opacity(didAppear ? 1 : 0)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: didAppear)
+        .onAppear { didAppear = true }
     }
 }
