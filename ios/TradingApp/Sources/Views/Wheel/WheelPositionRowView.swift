@@ -7,6 +7,7 @@ import SwiftUI
 struct WheelPositionRowView: View {
     let position: WheelPosition
     @Environment(\.colorScheme) private var colorScheme
+    @State private var barProgress: Double = 0
 
     private var phaseColor: Color {
         switch position.phase {
@@ -81,7 +82,7 @@ struct WheelPositionRowView: View {
                     }
                 }
 
-                // Theta decay bar
+                // Theta decay bar (animates from 0 → actual on appear)
                 if position.phase == "put_open" || position.phase == "call_open" {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
@@ -95,10 +96,14 @@ struct WheelPositionRowView: View {
                                         startPoint: .leading, endPoint: .trailing
                                     )
                                 )
-                                .frame(width: geo.size.width * dteProgress, height: 4)
+                                .frame(width: geo.size.width * barProgress, height: 4)
+                                .animation(.spring(response: 0.9, dampingFraction: 0.8).delay(0.2), value: barProgress)
                         }
                     }
                     .frame(height: 4)
+                    .onAppear {
+                        withAnimation { barProgress = dteProgress }
+                    }
                 }
             }
 

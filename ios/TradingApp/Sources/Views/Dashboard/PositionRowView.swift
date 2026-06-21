@@ -3,6 +3,8 @@ import SwiftUI
 struct PositionRowView: View {
     let position: Position
     @Environment(\.colorScheme) private var colorScheme
+    @GestureState private var pressing = false
+    @State private var glowPulse = false
 
     private var isShort: Bool { position.side == "short" }
     private var plColor: Color { position.unrealizedPl >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative }
@@ -40,6 +42,8 @@ struct PositionRowView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(String(format: "$%.2f", position.currentPrice))
                     .font(.subheadline.weight(.semibold))
+                    .contentTransition(.numericText())
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: position.currentPrice)
 
                 HStack(spacing: 3) {
                     Text(String(format: "%@$%.2f",
@@ -60,5 +64,24 @@ struct PositionRowView: View {
         .padding(.horizontal, 14)
         .background(LakshmiTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
+        .overlay(
+            RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm)
+                .strokeBorder(
+                    plColor.opacity(position.unrealizedPl != 0 ? 0.20 : 0),
+                    lineWidth: 1
+                )
+        )
+        .scaleEffect(pressing ? 0.97 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.65), value: pressing)
+        .shadow(
+            color: plColor.opacity(position.unrealizedPl != 0 ? (glowPulse ? 0.28 : 0.06) : 0),
+            radius: glowPulse ? 12 : 4, x: 0, y: 2
+        )
+        .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: glowPulse)
+        .onAppear { if position.unrealizedPl != 0 { glowPulse = true } }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .updating($pressing) { _, state, _ in state = true }
+        )
     }
 }

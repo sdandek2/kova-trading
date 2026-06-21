@@ -23,6 +23,7 @@ struct DashboardView: View {
                                         Task { await vm.loadPortfolioHistory(period: period) }
                                     }
                                 )
+                                .cardAppear(delay: 0.0)
                             }
 
                             // ── Quick stats strip ─────────────────────────
@@ -30,11 +31,13 @@ struct DashboardView: View {
                                 QuickStatsStrip(account: account)
                                     .padding(.top, 14)
                                     .padding(.horizontal, LakshmiTheme.pagePad)
+                                    .cardAppear(delay: 0.1)
                             }
 
                             // ── Positions ─────────────────────────────────
                             PositionsSection(positions: vm.positions)
                                 .padding(.top, 20)
+                                .cardAppear(delay: 0.18)
                         }
                         .padding(.bottom, 24)
                     }
@@ -74,6 +77,8 @@ private struct HeroChartBlock: View {
     let points: [PortfolioPoint]
     var onPeriodChange: ((String) -> Void)?
     @State private var selectedPeriod = "1W"
+    @State private var breathe = false
+    @Namespace private var periodNS
     let periods = ["1D", "1W", "1M", "3M"]
     @Environment(\.colorScheme) private var scheme
 
@@ -88,12 +93,20 @@ private struct HeroChartBlock: View {
                 Text(formatCurrency(account.portfolioValue))
                     .font(.system(size: 44, weight: .bold, design: .rounded))
                     .tracking(-1.5)
+                    .contentTransition(.numericText())
+                    .animation(.spring(response: 0.5, dampingFraction: 0.8), value: account.portfolioValue)
+                    .scaleEffect(breathe ? 1.008 : 1.0)
+                    .animation(.easeInOut(duration: 3.5).repeatForever(autoreverses: true), value: breathe)
 
-                PLBadge(value: account.dayPl, percentValue: account.dayPlPercent)
+                HStack(spacing: 8) {
+                    PLBadge(value: account.dayPl, percentValue: account.dayPlPercent)
+                    LiveDot(color: account.dayPl >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
             .padding(.bottom, 18)
+            .onAppear { breathe = true }
 
             // ── Inline chart ───────────────────────────────────────────
             InlineChart(points: points, isPositive: isPositive)
@@ -104,8 +117,10 @@ private struct HeroChartBlock: View {
             HStack(spacing: 4) {
                 ForEach(periods, id: \.self) { p in
                     Button {
-                        selectedPeriod = p
-                        onPeriodChange?(p)
+                        withAnimation(LakshmiTheme.springSnappy) {
+                            selectedPeriod = p
+                            onPeriodChange?(p)
+                        }
                     } label: {
                         Text(p)
                             .font(.caption.weight(.semibold))
@@ -116,11 +131,11 @@ private struct HeroChartBlock: View {
                                 if selectedPeriod == p {
                                     RoundedRectangle(cornerRadius: 7)
                                         .fill(LakshmiTheme.blueGradient)
-                                } else {
-                                    Color.clear
+                                        .matchedGeometryEffect(id: "periodBG", in: periodNS)
                                 }
                             }
                     }
+                    .buttonStyle(PressScaleButtonStyle(scale: 0.94))
                 }
             }
             .padding(4)
@@ -130,6 +145,8 @@ private struct HeroChartBlock: View {
             .padding(.top, 10)
             .padding(.bottom, 16)
         }
+        .background { AnimatedOrbBackground() }
+        .clipShape(Rectangle())
     }
 
     private func formatCurrency(_ v: Double) -> String {
@@ -170,6 +187,7 @@ private struct InlineChart: View {
                         startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.catmullRom)
             }
+            .shadow(color: lineColor.opacity(0.45), radius: 8, x: 0, y: 2)
             .chartXAxis(.hidden)
             .chartYAxis {
                 AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
@@ -241,6 +259,45 @@ private struct DashStatPill: View {
 // MARK: - Positions section
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Animated orb background
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct AnimatedOrbBackground: View {
+    @State private var move = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(LakshmiTheme.purple.opacity(0.22))
+                .frame(width: 240, height: 240)
+                .blur(radius: 70)
+                .offset(x: move ? 70 : -50, y: move ? -30 : 50)
+                .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
+
+            Circle()
+                .fill(LakshmiTheme.blue.opacity(0.18))
+                .frame(width: 200, height: 200)
+                .blur(radius: 65)
+                .offset(x: move ? -80 : 60, y: move ? 70 : -40)
+                .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
+
+            Circle()
+                .fill(LakshmiTheme.pink.opacity(0.12))
+                .frame(width: 150, height: 150)
+                .blur(radius: 55)
+                .offset(x: move ? 20 : -30, y: move ? -60 : 30)
+                .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
+        }
+        .onAppear { move = true }
+        .allowsHitTesting(false)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Positions section
+// ─────────────────────────────────────────────────────────────────────────────
+
 private struct PositionsSection: View {
     let positions: [Position]
 
@@ -276,8 +333,9 @@ private struct PositionsSection: View {
                 .padding(.horizontal, LakshmiTheme.pagePad)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(positions) { pos in
+                    ForEach(Array(positions.enumerated()), id: \.element.id) { index, pos in
                         PositionRowView(position: pos)
+                            .cardAppear(delay: Double(index) * 0.06)
                     }
                 }
                 .padding(.horizontal, LakshmiTheme.pagePad)
