@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1E83288DA99B4F449DB6C7C0 /* LiveTickerBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39026015AFA4091AD44953E /* LiveTickerBanner.swift */; };
+		E7CF96CFC3694F63ACCF0BD5 /* FloatingTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803F62D52662456C8288FF29 /* FloatingTabBar.swift */; };
+		A8125A3E956540BFA812FE1E /* SignalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CDCA89ABE7492DB393BB48 /* SignalsView.swift */; };
+		539CD9F764B740B0A08E5849 /* BotTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F0F1B168394C1BBEF5D190 /* BotTabView.swift */; };
+		DC4F727495274377BD78B591 /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 245FAE2AF24A4D9783B54C7E /* MoreView.swift */; };
 		08734D83A33524112EFAEF0D /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A5C590ECEA5AAE28DB263D /* APIService.swift */; };
 		192503AB8BAEC7326B3782D4 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6143A960A98DED56CD87E91 /* DashboardView.swift */; };
 		21D6A98300A2D1FF80794619 /* NewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296B9E41E949870FF3C92A49 /* NewsView.swift */; };
@@ -79,6 +84,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C39026015AFA4091AD44953E /* LiveTickerBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LiveTickerBanner.swift; path = Sources/Views/Common/LiveTickerBanner.swift; sourceTree = "<group>"; };
+		803F62D52662456C8288FF29 /* FloatingTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FloatingTabBar.swift; path = Sources/Views/Common/FloatingTabBar.swift; sourceTree = "<group>"; };
+		36CDCA89ABE7492DB393BB48 /* SignalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SignalsView.swift; path = Sources/Views/Signals/SignalsView.swift; sourceTree = "<group>"; };
+		25F0F1B168394C1BBEF5D190 /* BotTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BotTabView.swift; path = Sources/Views/AI/BotTabView.swift; sourceTree = "<group>"; };
+		245FAE2AF24A4D9783B54C7E /* MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MoreView.swift; path = Sources/Views/More/MoreView.swift; sourceTree = "<group>"; };
 		0719B0817272613D70676E77 /* PerformanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PerformanceView.swift; path = Sources/Views/AI/PerformanceView.swift; sourceTree = "<group>"; };
 		0BD1A3F7191A1F5C92D35F04 /* News.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = News.swift; path = Sources/Models/News.swift; sourceTree = "<group>"; };
 		13F2E87D7B52A1FEB042993B /* WatchlistEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchlistEditorView.swift; path = Sources/Views/AI/WatchlistEditorView.swift; sourceTree = "<group>"; };
@@ -213,6 +223,7 @@
 				E5F6A7B8C9D0E5F6A7B8C9D0 /* PositionLog.swift */,
 				E6F7A8B9C0D1E6F7A8B9C0D1 /* TradeHistoryView.swift */,
 				E7F8A9B0C1D2E7F8A9B0C1D2 /* BotActivityView.swift */,
+				25F0F1B168394C1BBEF5D190 /* BotTabView.swift */,
 				E8F9A0B1C2D3E8F9A0B1C2D3 /* CircuitBreakerBanner.swift */,
 				A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */,
 				A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */,
@@ -228,7 +239,10 @@
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
 				9F8E7D6C5B4A9F8E7D6C5B4A /* LakshmiTheme.swift */,
+				C39026015AFA4091AD44953E /* LiveTickerBanner.swift */,
+				803F62D52662456C8288FF29 /* FloatingTabBar.swift */,
 				F2A3B4C5D6E7F2A3B4C5D6E7 /* SettingsView.swift */,
+				245FAE2AF24A4D9783B54C7E /* MoreView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
 				BB22CC33DD44EE55FF66AA11 /* TradeSheet.swift */,
 				B6143A960A98DED56CD87E91 /* DashboardView.swift */,
@@ -236,6 +250,7 @@
 				ADC6D1F769C0615A14CB7530 /* PositionRowView.swift */,
 				483E5E2B8F5DC09AE452359C /* DailyPicksView.swift */,
 				2C661F21175C2DAF4306AD83 /* InsightsView.swift */,
+				36CDCA89ABE7492DB393BB48 /* SignalsView.swift */,
 				65F2FD9F63FDC11769555DCB /* PredictionDetailView.swift */,
 				79112B7E1D7644E4B7D2C89C /* SignalWeightsView.swift */,
 				0DF922D3D03F47EDB356379A /* ConnectorHealthView.swift */,
@@ -355,7 +370,10 @@
 				7ABFB19CDEDECF435C9E3568 /* ErrorView.swift in Sources */,
 				88E924C2FA451B19763F0A3A /* LoadingView.swift in Sources */,
 				F1A2B3C4D5E6F1A2B3C4D5E6 /* LakshmiTheme.swift in Sources */,
+				1E83288DA99B4F449DB6C7C0 /* LiveTickerBanner.swift in Sources */,
+				E7CF96CFC3694F63ACCF0BD5 /* FloatingTabBar.swift in Sources */,
 				E1F2A3B4C5D6E1F2A3B4C5D6 /* SettingsView.swift in Sources */,
+				DC4F727495274377BD78B591 /* MoreView.swift in Sources */,
 				6F15AD912154589D7CD91D4C /* AccountCardView.swift in Sources */,
 				AA11BB22CC33DD44EE55FF66 /* TradeSheet.swift in Sources */,
 				192503AB8BAEC7326B3782D4 /* DashboardView.swift in Sources */,
@@ -363,6 +381,7 @@
 				AD7B474336C66DBF6EA55DF8 /* PositionRowView.swift in Sources */,
 				2B126CD370D52EEEEE17D076 /* DailyPicksView.swift in Sources */,
 				AC6B2F0E28A1E5667C7B1F52 /* InsightsView.swift in Sources */,
+				A8125A3E956540BFA812FE1E /* SignalsView.swift in Sources */,
 				2CD79508EC4E15422342E422 /* PredictionDetailView.swift in Sources */,
 				32BC0235F47D40B8AD16D319 /* SignalWeightsView.swift in Sources */,
 				A6987673EB9E4D04877B12CB /* ConnectorHealthView.swift in Sources */,
@@ -376,6 +395,7 @@
 				D4E5F6A7B8C9D4E5F6A7B8C9 /* PositionLog.swift in Sources */,
 				D5E6F7A8B9C0D5E6F7A8B9C0 /* TradeHistoryView.swift in Sources */,
 				D6E7F8A9B0C1D6E7F8A9B0C1 /* BotActivityView.swift in Sources */,
+				539CD9F764B740B0A08E5849 /* BotTabView.swift in Sources */,
 				D7E8F9A0B1C2D7E8F9A0B1C2 /* CircuitBreakerBanner.swift in Sources */,
 				F1E2D3C4B5A6F1E2D3C4B5A6 /* EODReport.swift in Sources */,
 				F2E3D4C5B6A7F2E3D4C5B6A7 /* EODReportView.swift in Sources */,

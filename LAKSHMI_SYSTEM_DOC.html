@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lakshmi — AI Trading System</title>
+<style>
+  :root {
+    --gold: #f6c347; --gold-dim: #d4a017; --gold-glow: rgba(246,195,71,0.18);
+    --bg: #08080f; --surface: #0f0f1a; --border: #1e1e2e; --border2: #2a2a3e;
+    --text: #e2e8f0; --muted: #64748b; --muted2: #94a3b8;
+    --green: #4ade80; --red: #f87171; --blue: #60a5fa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; overflow-x: hidden; }
+
+  /* SCROLL PROGRESS */
+  #scroll-progress { position: fixed; top: 0; left: 0; height: 2px; width: 0%; background: linear-gradient(90deg, var(--gold-dim), var(--gold), #ffe77a); z-index: 1000; box-shadow: 0 0 8px var(--gold); transition: width 0.1s linear; }
+
+  /* CANVAS */
+  #pcanvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; opacity: 0.35; }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; position: relative; z-index: 1; }
+
+  /* HERO */
+  .hero { position: relative; text-align: center; padding: 80px 24px 60px; border-bottom: 1px solid var(--border); background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(246,195,71,0.06) 0%, transparent 70%); overflow: hidden; }
+  .hero-icon { font-size: 72px; margin-bottom: 20px; display: inline-block; animation: float 4s ease-in-out infinite; filter: drop-shadow(0 0 24px rgba(246,195,71,0.55)); }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+  .hero h1 { font-size: 60px; font-weight: 800; background: linear-gradient(135deg, #ffe77a 0%, var(--gold) 40%, var(--gold-dim) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: -2px; line-height: 1.1; animation: shimmer 4s ease-in-out infinite; background-size: 200% 100%; }
+  @keyframes shimmer { 0%{background-position:100% 0} 50%{background-position:0% 0} 100%{background-position:100% 0} }
+  .hero .tagline { font-size: 17px; color: var(--muted2); margin-top: 10px; opacity: 0; animation: fadeUp 0.8s 0.4s forwards; }
+  .hero .meta { display: flex; gap: 12px; justify-content: center; margin-top: 28px; flex-wrap: wrap; opacity: 0; animation: fadeUp 0.8s 0.6s forwards; }
+  .badge { background: rgba(255,255,255,0.04); border: 1px solid var(--border2); border-radius: 20px; padding: 6px 16px; font-size: 12px; color: var(--muted2); transition: border-color 0.3s, box-shadow 0.3s; cursor: default; }
+  .badge:hover { border-color: var(--gold); box-shadow: 0 0 12px var(--gold-glow); }
+  .badge span { color: var(--gold); font-weight: 600; }
+
+  /* TICKER */
+  .ticker-wrap { margin-top: 32px; overflow: hidden; width: 100%; opacity: 0; animation: fadeUp 0.8s 0.8s forwards; }
+  .ticker { display: flex; gap: 40px; width: max-content; animation: tickmove 28s linear infinite; }
+  .ticker-item { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .ticker-item .sym { color: var(--gold); font-weight: 700; margin-right: 5px; }
+  .ticker-item .up { color: var(--green); }
+  .ticker-item .dn { color: var(--red); }
+  @keyframes tickmove { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+
+  /* SECTIONS */
+  .section { margin-top: 56px; opacity: 0; transform: translateY(28px); transition: opacity 0.7s ease, transform 0.7s ease; }
+  .section.visible { opacity: 1; transform: translateY(0); }
+  .section-title { font-size: 20px; font-weight: 700; color: #f1f5f9; margin-bottom: 22px; padding-bottom: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; position: relative; }
+  .section-title::after { content: ''; position: absolute; bottom: -1px; left: 0; height: 2px; width: 0; background: linear-gradient(90deg, var(--gold), transparent); transition: width 0.9s ease; }
+  .section.visible .section-title::after { width: 220px; }
+  .section-title .icon { font-size: 18px; }
+
+  /* CARDS */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s; cursor: default; }
+  .card:hover { border-color: rgba(246,195,71,0.4); box-shadow: 0 0 24px var(--gold-glow), 0 8px 32px rgba(0,0,0,0.4); transform: translateY(-3px); }
+  .card h3 { font-size: 11px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .card .value { font-size: 30px; font-weight: 800; color: #f1f5f9; margin: 4px 0; }
+  .card p { font-size: 12px; color: var(--muted2); line-height: 1.5; margin-top: 4px; }
+
+  /* FLOW */
+  .flow { display: flex; align-items: center; flex-wrap: wrap; margin: 20px 0; gap: 0; }
+  .flow-step { background: var(--surface); border: 1px solid var(--border2); border-radius: 12px; padding: 14px 16px; text-align: center; min-width: 100px; transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s; cursor: default; }
+  .flow-step:hover { border-color: var(--gold); box-shadow: 0 0 16px var(--gold-glow); transform: translateY(-4px) scale(1.04); z-index: 2; position: relative; }
+  .flow-step .num   { font-size: 10px; color: var(--gold); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .flow-step .label { font-size: 13px; font-weight: 700; color: #f1f5f9; margin-top: 4px; }
+  .flow-step .sub   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .flow-arrow { color: var(--gold); font-size: 16px; padding: 0 4px; flex-shrink: 0; animation: parrow 2s ease-in-out infinite; }
+  @keyframes parrow { 0%,100%{opacity:0.3} 50%{opacity:1} }
+
+  /* TABLE */
+  .table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
+  th { text-align: left; padding: 10px 14px; background: var(--surface); color: var(--gold); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 14px; border-bottom: 1px solid rgba(30,30,46,0.7); color: #cbd5e1; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background 0.2s; }
+  tbody tr:hover td { background: rgba(246,195,71,0.03); }
+
+  /* POINT BARS */
+  .pcell { display: flex; align-items: center; gap: 8px; }
+  .pbar-w { flex: 1; max-width: 80px; height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden; }
+  .pbar { height: 100%; border-radius: 2px; width: 0; transition: width 1.2s ease; background: linear-gradient(90deg,#166534,var(--green)); }
+
+  /* PILLS */
+  .pill { display: inline-block; border-radius: 5px; padding: 2px 9px; font-size: 11px; font-weight: 700; }
+  .pg { background: rgba(74,222,128,0.12); color: var(--green); }
+  .pr { background: rgba(248,113,113,0.12); color: var(--red); }
+  .py { background: rgba(251,191,36,0.12);  color: #fbbf24; }
+  .pb { background: rgba(96,165,250,0.12);  color: var(--blue); }
+
+  /* REGIME */
+  .regime-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+  .rbox { border-radius: 14px; padding: 22px; border: 1px solid; transition: transform 0.3s, box-shadow 0.3s; cursor: default; }
+  .rbox:hover { transform: translateY(-4px); }
+  .rbull { background: rgba(5,46,22,0.5);  border-color: #166534; }
+  .rchop { background: rgba(45,31,0,0.5);  border-color: #92400e; }
+  .rbear { background: rgba(45,10,10,0.5); border-color: #991b1b; }
+  .rbull:hover { box-shadow: 0 8px 32px rgba(74,222,128,0.12); }
+  .rchop:hover { box-shadow: 0 8px 32px rgba(251,191,36,0.12); }
+  .rbear:hover { box-shadow: 0 8px 32px rgba(248,113,113,0.12); }
+  .rdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; animation: dpulse 2s ease-in-out infinite; }
+  .rbull .rdot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .rchop .rdot { background: #fbbf24; box-shadow: 0 0 8px #fbbf24; }
+  .rbear .rdot { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+  @keyframes dpulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .rbox h3 { font-size: 15px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; }
+  .rbull h3 { color: var(--green); }
+  .rchop h3 { color: #fbbf24; }
+  .rbear h3 { color: var(--red); }
+  .rbox p { font-size: 12px; color: var(--muted2); line-height: 1.9; }
+
+  /* ACCOUNTS */
+  .accounts { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+  .abox { background: var(--surface); border: 1px solid var(--border2); border-radius: 14px; padding: 22px; transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s; cursor: default; }
+  .abox:hover { border-color: rgba(246,195,71,0.35); box-shadow: 0 0 28px var(--gold-glow); transform: translateY(-4px); }
+  .abox .anum { font-size: 28px; margin-bottom: 4px; }
+  .abox .albl { font-size: 10px; color: var(--gold); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .abox h3 { font-size: 16px; font-weight: 700; color: #f1f5f9; margin-bottom: 8px; }
+  .abox p  { font-size: 12px; color: var(--muted2); line-height: 1.7; }
+
+  /* E2E */
+  .e2e-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px,1fr)); gap: 14px; }
+  .ecard { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s; cursor: default; }
+  .ecard:hover { border-color: rgba(246,195,71,0.3); box-shadow: 0 0 20px var(--gold-glow); transform: translateY(-3px); }
+  .ehdr { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .etag { background: rgba(246,195,71,0.1); border: 1px solid rgba(246,195,71,0.3); border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 700; color: var(--gold); }
+  .ecard h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+  .ecard ul { list-style: none; margin-top: 8px; }
+  .ecard ul li { font-size: 12px; color: var(--muted2); padding: 3px 0; display: flex; gap: 6px; }
+  .ecard ul li::before { content: "✓"; color: var(--green); font-weight: 700; flex-shrink: 0; }
+
+  /* RULE BARS */
+  .rbar-w { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .rbar   { height: 100%; border-radius: 2px; background: linear-gradient(90deg,rgba(246,195,71,0.4),var(--gold)); width: 0; transition: width 1.2s ease; }
+
+  /* PROJ */
+  .proj-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+  .pcard { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s; cursor: default; }
+  .pcard:hover { border-color: rgba(246,195,71,0.3); box-shadow: 0 0 24px var(--gold-glow); transform: translateY(-3px); }
+  .pscen { font-size: 11px; color: var(--gold); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .pamt  { font-size: 36px; font-weight: 800; color: var(--green); letter-spacing: -1px; }
+  .psub  { font-size: 12px; color: var(--muted2); margin-top: 4px; }
+  .pstats { display: flex; gap: 20px; margin-top: 14px; flex-wrap: wrap; }
+  .pstat  { font-size: 12px; color: var(--muted); }
+  .pstat span { color: #f1f5f9; font-weight: 600; }
+  .pbw { height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; margin-top: 14px; overflow: hidden; }
+  .pb  { height: 100%; border-radius: 2px; width: 0; transition: width 1.4s ease; }
+
+  /* ROADMAP */
+  .roadmap { display: flex; flex-direction: column; position: relative; }
+  .roadmap::before { content: ''; position: absolute; left: 18px; top: 0; bottom: 0; width: 1px; background: linear-gradient(180deg,var(--gold) 0%,transparent 100%); opacity: 0.2; }
+  .rm { display: flex; gap: 20px; padding: 16px 0; opacity: 0; transform: translateX(-20px); transition: opacity 0.5s ease, transform 0.5s ease; }
+  .rm.visible { opacity: 1; transform: translateX(0); }
+  .rmdot { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; background: var(--surface); border: 2px solid var(--border2); display: flex; align-items: center; justify-content: center; font-size: 14px; transition: border-color 0.3s, box-shadow 0.3s; position: relative; z-index: 1; }
+  .rm:hover .rmdot { border-color: var(--gold); box-shadow: 0 0 12px var(--gold-glow); }
+  .rmtxt h4 { font-size: 14px; font-weight: 600; color: #f1f5f9; }
+  .rmtxt .rmmeta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .rmtxt .rmgate { font-size: 11px; color: var(--gold); margin-top: 4px; }
+
+  /* ENDPOINTS */
+  .eplist { display: flex; flex-direction: column; gap: 10px; }
+  .epitem { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; align-items: flex-start; gap: 16px; transition: border-color 0.3s, transform 0.3s; cursor: default; }
+  .epitem:hover { border-color: rgba(246,195,71,0.3); transform: translateX(4px); }
+  .meth { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; flex-shrink: 0; margin-top: 1px; font-family: monospace; }
+  .mget  { background: rgba(96,165,250,0.12); color: var(--blue); border: 1px solid rgba(96,165,250,0.2); }
+  .mpost { background: rgba(74,222,128,0.12); color: var(--green); border: 1px solid rgba(74,222,128,0.2); }
+  .epath { font-size: 13px; font-weight: 600; color: var(--gold); font-family: 'SF Mono','Monaco',monospace; }
+  .edesc { font-size: 12px; color: var(--muted2); margin-top: 3px; }
+
+  code { background: rgba(246,195,71,0.08); border: 1px solid rgba(246,195,71,0.15); color: var(--gold); padding: 2px 7px; border-radius: 4px; font-family: 'SF Mono','Monaco',monospace; font-size: 12px; }
+
+  @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+
+  .footer { text-align: center; margin-top: 80px; padding: 28px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .footer strong { color: var(--gold); }
+
+  @media (max-width:700px) {
+    .hero h1 { font-size: 36px; }
+    .regime-row, .accounts, .proj-grid { grid-template-columns: 1fr; }
+    .flow-step { min-width: 80px; padding: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="scroll-progress"></div>
+<canvas id="pcanvas"></canvas>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-icon">🪷</div>
+  <h1>Lakshmi</h1>
+  <p class="tagline">AI-Powered Algorithmic Trading System &nbsp;·&nbsp; Full System Reference</p>
+  <div class="meta">
+    <div class="badge">Version <span>1.0</span></div>
+    <div class="badge">Portfolio <span>$25,000</span></div>
+    <div class="badge">Backend <span>Railway · FastAPI</span></div>
+    <div class="badge">AI <span>Claude Sonnet + Gemini Pro</span></div>
+    <div class="badge">Broker <span>Alpaca</span></div>
+    <div class="badge">Updated <span>June 2026</span></div>
+  </div>
+  <div class="ticker-wrap">
+    <div class="ticker">
+      <span class="ticker-item"><span class="sym">NVDA</span><span class="up">▲ +3.4%</span></span>
+      <span class="ticker-item"><span class="sym">AAPL</span><span class="up">▲ +1.2%</span></span>
+      <span class="ticker-item"><span class="sym">TSLA</span><span class="dn">▼ −0.8%</span></span>
+      <span class="ticker-item"><span class="sym">MSFT</span><span class="up">▲ +2.1%</span></span>
+      <span class="ticker-item"><span class="sym">META</span><span class="up">▲ +4.7%</span></span>
+      <span class="ticker-item"><span class="sym">AMZN</span><span class="up">▲ +1.9%</span></span>
+      <span class="ticker-item"><span class="sym">GOOGL</span><span class="dn">▼ −0.3%</span></span>
+      <span class="ticker-item"><span class="sym">SPY</span><span class="up">▲ +0.7%</span></span>
+      <span class="ticker-item"><span class="sym">QQQ</span><span class="up">▲ +1.1%</span></span>
+      <span class="ticker-item"><span class="sym">SQQQ</span><span class="dn">▼ −3.2%</span></span>
+      <span class="ticker-item"><span class="sym">NVDA</span><span class="up">▲ +3.4%</span></span>
+      <span class="ticker-item"><span class="sym">AAPL</span><span class="up">▲ +1.2%</span></span>
+      <span class="ticker-item"><span class="sym">TSLA</span><span class="dn">▼ −0.8%</span></span>
+      <span class="ticker-item"><span class="sym">MSFT</span><span class="up">▲ +2.1%</span></span>
+      <span class="ticker-item"><span class="sym">META</span><span class="up">▲ +4.7%</span></span>
+      <span class="ticker-item"><span class="sym">AMZN</span><span class="up">▲ +1.9%</span></span>
+      <span class="ticker-item"><span class="sym">GOOGL</span><span class="dn">▼ −0.3%</span></span>
+      <span class="ticker-item"><span class="sym">SPY</span><span class="up">▲ +0.7%</span></span>
+      <span class="ticker-item"><span class="sym">QQQ</span><span class="up">▲ +1.1%</span></span>
+      <span class="ticker-item"><span class="sym">SQQQ</span><span class="dn">▼ −3.2%</span></span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ACCOUNTS -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🏗</span> Three Trading Accounts</div>
+    <div class="accounts">
+      <div class="abox">
+        <div class="anum">🪷</div>
+        <div class="albl">Account 1 — Main</div>
+        <h3>Lakshmi</h3>
+        <p>Momentum + swing trading. Multi-signal composite scoring. Claude Sonnet decides buy/sell/short. Up to 21 positions, 5 sectors max. EOD flat every day.</p>
+      </div>
+      <div class="abox">
+        <div class="anum">☸️</div>
+        <div class="albl">Account 2 — Income</div>
+        <h3>Wheel Bot</h3>
+        <p>Options wheel strategy. Sell cash-secured puts → assigned → sell covered calls. Separate Alpaca paper account. Min $100 premium per contract.</p>
+      </div>
+      <div class="abox">
+        <div class="anum">🤖</div>
+        <div class="albl">Account 3 — Experiment</div>
+        <h3>Pure AI</h3>
+        <p>Claude Opus 4.8 + live web search only. No signal pipeline — raw AI judgment. 30-day ablation vs Lakshmi to measure how much the pipeline adds.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- PIPELINE -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🔄</span> Trading Pipeline — Every Cycle</div>
+    <div class="flow">
+      <div class="flow-step"><div class="num">Step 1</div><div class="label">Universe</div><div class="sub">~222 symbols</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 2</div><div class="label">Snapshot</div><div class="sub">Price + Bars</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 3</div><div class="label">Regime</div><div class="sub">Bull/Bear/Chop</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 4</div><div class="label">RS Rank</div><div class="sub">205 symbols</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 5</div><div class="label">News</div><div class="sub">Signed sentiment</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 6</div><div class="label">Weights</div><div class="sub">Adaptive DB</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 7</div><div class="label">Score</div><div class="sub">0–100 composite</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 8</div><div class="label">Claude AI</div><div class="sub">Buy/Sell/Short</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Step 9</div><div class="label">Execute</div><div class="sub">Alpaca orders</div></div>
+    </div>
+  </div>
+
+  <!-- SIGNAL SCORING -->
+  <div class="section">
+    <div class="section-title"><span class="icon">📊</span> Signal Scoring — 0 to 100 Composite</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal</th><th>Max Pts</th><th>Weight</th><th>Source</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Relative Strength</td><td><div class="pcell"><span class="pill pg">+25</span><div class="pbar-w"><div class="pbar" data-w="100"></div></div></div></td><td>Adaptive</td><td>Alpaca bars (1yr)</td><td>RS ≥ 90th percentile of 205-symbol universe = full score</td></tr>
+          <tr><td>MACD Histogram</td><td><div class="pcell"><span class="pill pg">+20</span><div class="pbar-w"><div class="pbar" data-w="80"></div></div></div></td><td>Adaptive</td><td>Alpaca bars (daily)</td><td>Positive divergence = bullish momentum crossover</td></tr>
+          <tr><td>Regime Alignment</td><td><div class="pcell"><span class="pill pg">+20</span><div class="pbar-w"><div class="pbar" data-w="80"></div></div></div></td><td>Fixed</td><td>SPY + VIX + FRED</td><td>Bull+buy or Bear+short = full score; misaligned = penalty</td></tr>
+          <tr><td>Options Flow (unusual)</td><td><div class="pcell"><span class="pill pg">+18</span><div class="pbar-w"><div class="pbar" data-w="72"></div></div></div></td><td>Adaptive</td><td>Barchart unusual</td><td>Very unusual call sweep = +18; put sweep = −18</td></tr>
+          <tr><td>News Sentiment (signed)</td><td><div class="pcell"><span class="pill pg">+20</span><div class="pbar-w"><div class="pbar" data-w="80"></div></div></div></td><td>Adaptive</td><td>Alpaca/Benzinga + RSS</td><td>+5 bullish / −5 bearish per article. Cap: −15 to +20</td></tr>
+          <tr><td>Volume Spike</td><td><div class="pcell"><span class="pill pg">+15</span><div class="pbar-w"><div class="pbar" data-w="60"></div></div></div></td><td>Adaptive</td><td>Alpaca real-time</td><td>≥ 2× average daily volume = full score</td></tr>
+          <tr><td>SEC Insider Buys</td><td><div class="pcell"><span class="pill pg">+15</span><div class="pbar-w"><div class="pbar" data-w="60"></div></div></div></td><td>Adaptive</td><td>SEC EDGAR</td><td>≥$500k purchase = +15; $100–500k = +8</td></tr>
+          <tr><td>RSI Oversold</td><td><div class="pcell"><span class="pill pg">+12</span><div class="pbar-w"><div class="pbar" data-w="48"></div></div></div></td><td>Adaptive</td><td>Alpaca bars</td><td>RSI 30–50 = +5 to +12. RSI >70 overbought = −10</td></tr>
+          <tr><td>FMP Earnings Beat</td><td><div class="pcell"><span class="pill pg">+12</span><div class="pbar-w"><div class="pbar" data-w="48"></div></div></div></td><td>Adaptive</td><td>FMP</td><td>+15% EPS beat = +12; miss = −12</td></tr>
+          <tr><td>Finnhub Analyst Upgrade</td><td><div class="pcell"><span class="pill pg">+10</span><div class="pbar-w"><div class="pbar" data-w="40"></div></div></div></td><td>Adaptive</td><td>Finnhub</td><td>Net upgrade delta +1 = +5; +2 = +10</td></tr>
+          <tr><td>MA20 Trend</td><td><div class="pcell"><span class="pill pg">+10</span><div class="pbar-w"><div class="pbar" data-w="40"></div></div></div></td><td>Adaptive</td><td>Alpaca bars</td><td>Price above MA20 trending up = +3 to +10</td></tr>
+          <tr><td>Dark Pool Prints</td><td><div class="pcell"><span class="pill pg">+8</span><div class="pbar-w"><div class="pbar" data-w="32"></div></div></div></td><td>Adaptive</td><td>Barchart dark pool</td><td>Institutional accumulation off-exchange</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- REGIME -->
+  <div class="section">
+    <div class="section-title"><span class="icon">📡</span> Regime Detection</div>
+    <div class="regime-row">
+      <div class="rbox rbull">
+        <h3><span class="rdot"></span>BULL</h3>
+        <p>SPY above MA200 + MA20 > MA50<br>VIX normal / low<br>Market breadth > 50%<br><br><strong style="color:var(--green)">Actions:</strong> Full-size longs, pyramid up to 2×, partial exits on high confidence<br>Capital multiplier: <strong style="color:var(--green)">1.0–1.1×</strong></p>
+      </div>
+      <div class="rbox rchop">
+        <h3><span class="rdot"></span>CHOP</h3>
+        <p>Mixed signals — no clear trend<br>VIX medium<br>Breadth 35–55%<br><br><strong style="color:#fbbf24">Actions:</strong> Higher score bar (≥60), smaller size, no leveraged ETF pyramids<br>Capital multiplier: <strong style="color:#fbbf24">0.6×</strong></p>
+      </div>
+      <div class="rbox rbear">
+        <h3><span class="rdot"></span>BEAR</h3>
+        <p>SPY below MA200<br>VIX high / extreme<br>Breadth &lt; 35%<br><br><strong style="color:var(--red)">Actions:</strong> Shorts + inverse ETFs (SQQQ/SOXS), longs blocked, min score raised<br>Capital multiplier: <strong style="color:var(--red)">0.4–0.5×</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- RISK RULES -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🛡</span> Risk Rules</div>
+    <div class="cards">
+      <div class="card"><h3>Circuit Breaker</h3><div class="value">−4%</div><p>Daily P&L loss halts all trading for the rest of the day</p></div>
+      <div class="card"><h3>Stop Loss</h3><div class="value">4%</div><p>Default hard stop. ATR trailing stop activates once in profit</p></div>
+      <div class="card"><h3>Take Profit</h3><div class="value">8–9%</div><p>Claude sets per trade. Partial exit at TP on high-confidence positions</p></div>
+      <div class="card"><h3>Max Positions</h3><div class="value">21</div><p>Configurable from iOS app. Sector cap: max 5 per sector</p></div>
+      <div class="card"><h3>Position Size</h3><div class="value">15%</div><p>Max per position. Penny stocks capped at 3%</p></div>
+      <div class="card"><h3>Pyramid Max</h3><div class="value">2×</div><p>Max add-ons per winner. Each add ≤40% remaining cash. Hard limit.</p></div>
+      <div class="card"><h3>EOD Flat</h3><div class="value">3:45 PM</div><p>All positions closed. New entries blocked. No overnight gaps.</p></div>
+      <div class="card"><h3>Gap-Down Exit</h3><div class="value">−2%</div><p>In first 25 minutes: gap &gt;2% down → exit immediately</p></div>
+    </div>
+  </div>
+
+  <!-- AI ENGINE -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🤖</span> AI Decision Engine</div>
+    <div class="table-wrap" style="margin-bottom:14px">
+      <table>
+        <thead><tr><th>Tier</th><th>Model</th><th>Used For</th><th>Cost/Run</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill py">Pro</span> ask_ai_pro</td><td>Claude Sonnet 4.6 / Gemini Pro</td><td>Buy/sell decisions, rotation, bear regime calls</td><td>~$0.10–0.30</td></tr>
+          <tr><td><span class="pill pb">Std</span> ask_ai</td><td>Claude Haiku 4.5 / Gemini Flash</td><td>Position limit checks, G-1/G-2/G-3 guards</td><td>~$0.01</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Feature</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Partial Exit</strong></td><td>High confidence (score≥75, RS≥85, strong MACD) → sell half at TP, trail the rest with GTC stop for multi-bagger potential</td></tr>
+          <tr><td><strong>Kelly Sizing</strong></td><td>Claude reads last 30 closed trades from DB. Adjusts position qty based on recent win rate — conservative sizing after losses</td></tr>
+          <tr><td><strong>Rotation</strong></td><td>Sell losers scoring 20+ pts below new candidates. 0.75× cash haircut for unsettled sell proceeds (T+1 settlement)</td></tr>
+          <tr><td><strong>Fallback Chain</strong></td><td>Primary AI timeout → Gemini Flash backup. Both fail → hold all positions (no crash, no forced sell)</td></tr>
+          <tr><td><strong>JSON Repair</strong></td><td>Malformed AI response → auto-repair attempt. Hallucinated symbols filtered against live universe before orders placed</td></tr>
+          <tr><td><strong>Signed Sentiment</strong></td><td>Every article scored +1 (bullish) / −1 (bearish) / 0 via keyword classifier. Bearish news subtracts from signal score</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- WHEEL BOT -->
+  <div class="section">
+    <div class="section-title"><span class="icon">☸️</span> Wheel Bot Pipeline</div>
+    <div class="flow" style="margin-bottom:20px">
+      <div class="flow-step"><div class="num">Phase 1</div><div class="label">Sell Put</div><div class="sub">Cash-secured</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Expires</div><div class="label">Keep Premium</div><div class="sub">Repeat cycle</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Assigned</div><div class="label">Own Stock</div><div class="sub">At strike price</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Phase 2</div><div class="label">Sell Call</div><div class="sub">Covered call</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Expires</div><div class="label">Keep Premium</div><div class="sub">Repeat call</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="num">Called</div><div class="label">Sell Stock</div><div class="sub">Cycle complete</div></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Value</th><th>Reason</th></tr></thead>
+        <tbody>
+          <tr><td>Min premium/contract</td><td><span class="pill pg">$100</span></td><td>Not worth the risk below this level</td></tr>
+          <tr><td>Min annualised yield</td><td><span class="pill pg">10%</span></td><td>Below this = better off in an index fund</td></tr>
+          <tr><td>Max active positions</td><td><span class="pill py">5</span></td><td>Capital concentration limit</td></tr>
+          <tr><td>IV/HV ratio (edge signal)</td><td><span class="pill pb">&gt;1.5×</span></td><td>Options overpriced vs actual moves = premium worth selling</td></tr>
+          <tr><td>Early close threshold</td><td><span class="pill py">50% profit</span></td><td>Close at 50% max profit to free capital faster</td></tr>
+          <tr><td>Fresh DB score</td><td><span class="pill pr">&lt;60</span></td><td>Expected — IV history builds over weeks, improves organically</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- E2E TESTS -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🧪</span> E2E Test Suite</div>
+    <div class="e2e-grid">
+      <div class="ecard"><div class="ehdr"><span class="etag">Section 0</span><h3>Risk Unit Tests — 34 checks</h3></div><ul><li>ATR calculation (4 test cases)</li><li>Trailing stop tightening at +15% and +25%</li><li>Position sizing — volatility-adjusted qty</li><li>Circuit breaker — strict &lt;−4.0% boundary</li><li>Gap-down exit — 25-min window, &lt;−2%</li><li>Signed sentiment — bullish/bearish/neutral + signal_points math</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Pipeline</span><h3>Full Live Pipeline</h3></div><ul><li>Universe fetch (222 symbols)</li><li>Snapshot — live price + volume</li><li>Regime detection — bull / bear / chop</li><li>RS ranking of 205 symbols</li><li>News + signed sentiment scoring</li><li>Adaptive signal weights from DB</li><li>Top 30 candidates scored</li><li>LLM decision + partial exit check</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test A</span><h3>Sell / Rotation</h3></div><ul><li>Mock: winner +18.5%, loser −8.2%, flat +2.1%</li><li>Claude must sell loser first</li><li>Buy best candidates with freed cash</li><li>Verify: 1 sell + 2 buys pattern</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test B</span><h3>Bear Regime</h3></div><ul><li>Force: BEAR + VIX=HIGH + breadth=22%</li><li>Re-score universe with bear weights</li><li>Inject SQQQ + SOXS inverse ETFs</li><li>Verify: shorts issued + inverse ETF picked</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test C</span><h3>Gemini vs Haiku</h3></div><ul><li>Same candidates → both models decide</li><li>Compare decisions side by side</li><li>Flag disagreements for manual review</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test D</span><h3>AI Failure Modes</h3></div><ul><li>Bad JSON → no crash, returns empty list</li><li>Empty response → handled gracefully</li><li>Hallucinated symbol → filtered out</li><li>Primary AI timeout → Gemini fallback fires</li><li>Hold-only response → 0 buy decisions</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test E</span><h3>Chop Regime</h3></div><ul><li>Force: CHOP + VIX=MEDIUM + breadth=48%</li><li>Verify fewer candidates qualify (higher bar)</li><li>Verify fewer buys issued vs bull regime</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test F</span><h3>Wheel Bot Pipeline</h3></div><ul><li>Import check + MIN_PREMIUM = $100</li><li>Annualised yield calculation</li><li>Duplicate cycle guard (no double puts)</li><li>fill_price=0 guard (skip bad fills)</li><li>get_wheel_positions() smoke test</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Test G</span><h3>Position Limits</h3></div><ul><li>G-1: Pyramid add-on — cash room check</li><li>G-2: Low cash guard (10% available)</li><li>G-3: Max positions — no 7th position</li><li>G-4: Sector cap (soft — Claude guided)</li><li>G-5: Earnings guard (soft — Claude guided)</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Sect. 10</span><h3>Pipeline Health</h3></div><ul><li>All pipeline steps — pass / fail summary</li><li>Universe, snapshot, regime, VIX, RS, news</li><li>Candidates scored, LLM responded</li><li>Sell / rotation + bear / short paths</li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Sect. 11</span><h3>Model Calibration</h3></div><ul><li>Live DB: win rate per signal type</li><li>Adaptive weight self-tuning check</li><li>Run on Railway: <code>railway run … calibrate</code></li></ul></div>
+      <div class="ecard"><div class="ehdr"><span class="etag">Sect. 12</span><h3>Profitability Projection</h3></div><ul><li>Live portfolio value from Alpaca</li><li>Avg TP / SL from real closed trades in DB</li><li>Conservative / Target / Optimistic scenarios</li><li>Breakeven win rate calculation</li></ul></div>
+    </div>
+    <div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px">
+      <p style="font-size:12px;color:var(--muted2)">Full suite: <code>python3 backend/scripts/test_e2e.py</code> &nbsp;|&nbsp; Unit only: <code>test_e2e.py unit</code> &nbsp;|&nbsp; Calibrate on Railway: <code>railway run python3 backend/scripts/test_e2e.py calibrate</code></p>
+    </div>
+  </div>
+
+  <!-- RULE VALIDATION -->
+  <div class="section">
+    <div class="section-title"><span class="icon">✅</span> Rule Validation — 292 Checks</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Category</th><th>Checks</th><th style="width:130px">Coverage</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Short Trigger Guards (all 3 conditions required)</td><td>11</td><td><div class="rbar-w"><div class="rbar" data-w="25"></div></div></td></tr>
+          <tr><td>2</td><td>Score Thresholds (buy ≥55, skip &lt;45)</td><td>16</td><td><div class="rbar-w"><div class="rbar" data-w="37"></div></div></td></tr>
+          <tr><td>3</td><td>Regime Capital Multiplier Rules</td><td>8</td><td><div class="rbar-w"><div class="rbar" data-w="18"></div></div></td></tr>
+          <tr><td>4</td><td>FRED Confidence → Capital Multiplier</td><td>15</td><td><div class="rbar-w"><div class="rbar" data-w="35"></div></div></td></tr>
+          <tr><td>5</td><td>Barchart ETF Exclusion List (68 symbols blocked)</td><td>47</td><td><div class="rbar-w"><div class="rbar" data-w="100"></div></div></td></tr>
+          <tr><td>6</td><td>Position Sizing Rules</td><td>7</td><td><div class="rbar-w"><div class="rbar" data-w="16"></div></div></td></tr>
+          <tr><td>7</td><td>Signal Boost Ranges</td><td>22</td><td><div class="rbar-w"><div class="rbar" data-w="51"></div></div></td></tr>
+          <tr><td>8</td><td>Regime Alignment Bonus / Penalty Rules</td><td>8</td><td><div class="rbar-w"><div class="rbar" data-w="18"></div></div></td></tr>
+          <tr><td>9</td><td>Universe Injection Guards</td><td>29</td><td><div class="rbar-w"><div class="rbar" data-w="67"></div></div></td></tr>
+          <tr><td>10</td><td>Circuit Breaker &amp; Risk Limit Rules</td><td>14</td><td><div class="rbar-w"><div class="rbar" data-w="33"></div></div></td></tr>
+          <tr><td>11</td><td>Negative / Rejection Tests</td><td>57</td><td><div class="rbar-w"><div class="rbar" data-w="100"></div></div></td></tr>
+          <tr><td>12</td><td>Wheel Bot Safety, Isolation, Config Rules</td><td>26</td><td><div class="rbar-w"><div class="rbar" data-w="60"></div></div></td></tr>
+          <tr><td>—</td><td>Wheel iOS JSON Contract (Swift decode safety)</td><td>32</td><td><div class="rbar-w"><div class="rbar" data-w="74"></div></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- BACKTEST -->
+  <div class="section">
+    <div class="section-title"><span class="icon">📈</span> Backtest Results — 2020–2026 (38 symbols)</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Year</th><th>Trades</th><th>Win %</th><th>Avg Win</th><th>Avg Loss</th><th>Sharpe</th><th>Max DD</th><th>Return</th></tr></thead>
+        <tbody>
+          <tr><td>2020</td><td>229</td><td>54.6%</td><td style="color:var(--green)">+5.60%</td><td style="color:var(--red)">−5.74%</td><td>0.87</td><td>7.7%</td><td style="color:var(--green);font-weight:700">+5.0%</td></tr>
+          <tr><td>2021</td><td>198</td><td>54.0%</td><td style="color:var(--green)">+4.50%</td><td style="color:var(--red)">−3.68%</td><td>1.66</td><td>2.0%</td><td style="color:var(--green);font-weight:700">+7.0%</td></tr>
+          <tr><td>2022</td><td>247</td><td>48.6%</td><td style="color:var(--green)">+3.85%</td><td style="color:var(--red)">−4.00%</td><td style="color:var(--red)">−0.52</td><td>5.6%</td><td style="color:var(--red);font-weight:700">−2.6%</td></tr>
+          <tr><td>2023</td><td>215</td><td>58.6%</td><td style="color:var(--green)">+5.45%</td><td style="color:var(--red)">−4.01%</td><td style="color:var(--green)">2.98</td><td>1.9%</td><td style="color:var(--green);font-weight:700">+15.7%</td></tr>
+          <tr><td>2024</td><td>205</td><td>54.6%</td><td style="color:var(--green)">+5.18%</td><td style="color:var(--red)">−3.98%</td><td style="color:var(--green)">2.31</td><td>3.6%</td><td style="color:var(--green);font-weight:700">+10.9%</td></tr>
+          <tr><td>2025</td><td>247</td><td>51.8%</td><td style="color:var(--green)">+5.01%</td><td style="color:var(--red)">−4.07%</td><td>1.33</td><td>4.8%</td><td style="color:var(--green);font-weight:700">+6.6%</td></tr>
+          <tr><td>2026*</td><td>105</td><td>46.7%</td><td style="color:var(--green)">+6.50%</td><td style="color:var(--red)">−3.82%</td><td>1.99</td><td>2.8%</td><td style="color:var(--green);font-weight:700">+4.5%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--muted)">$100k → ~$156k (+56%) compounded 2020–2026. Avg Sharpe: 1.52. *2026 partial year. Premium signals (Barchart, SEC, Finnhub) absent from backtest — expected to lift live win rate to 60%+.</p>
+  </div>
+
+  <!-- PROJECTIONS -->
+  <div class="section">
+    <div class="section-title"><span class="icon">💰</span> Profitability Projection — $25k Portfolio</div>
+    <div class="proj-grid">
+      <div class="pcard">
+        <div class="pscen">Conservative</div>
+        <div class="pamt">$18,000</div>
+        <div class="psub">per year</div>
+        <div class="pstats"><div class="pstat">Win rate <span>50%</span></div><div class="pstat">EV/trade <span>$75</span></div><div class="pstat">Monthly <span>$1,500</span></div></div>
+        <div class="pbw"><div class="pb" data-w="48" style="background:linear-gradient(90deg,#166534,var(--green))"></div></div>
+      </div>
+      <div class="pcard" style="border-color:rgba(246,195,71,0.4);box-shadow:0 0 24px var(--gold-glow)">
+        <div class="pscen" style="color:#fbbf24">Target ← Goal</div>
+        <div class="pamt">$24,300</div>
+        <div class="psub">per year</div>
+        <div class="pstats"><div class="pstat">Win rate <span>55%</span></div><div class="pstat">EV/trade <span>$101</span></div><div class="pstat">Monthly <span>$2,025</span></div></div>
+        <div class="pbw"><div class="pb" data-w="65" style="background:linear-gradient(90deg,#92400e,#fbbf24)"></div></div>
+      </div>
+      <div class="pcard">
+        <div class="pscen">Optimistic</div>
+        <div class="pamt">$36,900</div>
+        <div class="psub">per year</div>
+        <div class="pstats"><div class="pstat">Win rate <span>65%</span></div><div class="pstat">EV/trade <span>$154</span></div><div class="pstat">Monthly <span>$3,075</span></div></div>
+        <div class="pbw"><div class="pb" data-w="100" style="background:linear-gradient(90deg,#1d4ed8,var(--blue))"></div></div>
+      </div>
+    </div>
+    <p style="margin-top:12px;font-size:12px;color:var(--muted)">Fixed sizing, no compounding, no taxes. Avg TP: 9% · Avg SL: 5% · R/R: 1:1.8 · Breakeven win rate: <strong style="color:var(--gold)">35.7%</strong></p>
+  </div>
+
+  <!-- ROADMAP -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🗺</span> Roadmap</div>
+    <div class="roadmap">
+      <div class="rm"><div class="rmdot">🚀</div><div class="rmtxt"><h4>Real money launch (Lakshmi $3–5k)</h4><div class="rmmeta">Target: ~2 weeks</div><div class="rmgate">Gate: 30 clean paper trades first</div></div></div>
+      <div class="rm"><div class="rmdot">📊</div><div class="rmtxt"><h4>Day-60 calibration review</h4><div class="rmmeta">Target: ~Aug 6, 2026</div><div class="rmgate">Gate: signal SQL + regime attribution rerun</div></div></div>
+      <div class="rm"><div class="rmdot">🔀</div><div class="rmtxt"><h4>Strategy split — Phase 2</h4><div class="rmmeta">Target: Month 3</div><div class="rmgate">Gate: 90-day Sharpe ≥ 1.5</div></div></div>
+      <div class="rm"><div class="rmdot">☸️</div><div class="rmtxt"><h4>Wheel bugs fixed — real options money</h4><div class="rmmeta">Target: Before options capital deployed</div><div class="rmgate">Gate: M2/M3/M4/M7 bugs fixed (assignment + P&L accuracy)</div></div></div>
+      <div class="rm"><div class="rmdot">📈</div><div class="rmtxt"><h4>Options engine — calls / spreads / condors</h4><div class="rmmeta">Target: Month 3–6</div><div class="rmgate">Gate: Check Railway logs for current firing rate first</div></div></div>
+      <div class="rm"><div class="rmdot">₿</div><div class="rmtxt"><h4>Crypto allocation — BTC/ETH 10–15%</h4><div class="rmmeta">Target: Month 6</div><div class="rmgate">Gate: Bull regime only, separate volatility-adjusted sizing</div></div></div>
+      <div class="rm"><div class="rmdot">🎯</div><div class="rmtxt"><h4>60%+ live win rate target</h4><div class="rmmeta">Target: Month 6 (Dec 2026)</div><div class="rmgate">Gate: Premium signals live + options engine firing consistently</div></div></div>
+    </div>
+  </div>
+
+  <!-- ENDPOINTS -->
+  <div class="section">
+    <div class="section-title"><span class="icon">🔌</span> Key API Endpoints</div>
+    <div class="eplist">
+      <div class="epitem"><span class="meth mget">GET</span><div><div class="epath">/health</div><div class="edesc">Railway health check — no auth required</div></div></div>
+      <div class="epitem"><span class="meth mget">GET</span><div><div class="epath">/api/news</div><div class="edesc">Latest headlines from 10+ RSS feeds + Alpaca/Benzinga</div></div></div>
+      <div class="epitem"><span class="meth mget">GET</span><div><div class="epath">/api/sentiment?symbols=NVDA,INTC</div><div class="edesc">Signed sentiment per symbol: net_score, signal_points, sentiment label, matched articles</div></div></div>
+      <div class="epitem"><span class="meth mget">GET</span><div><div class="epath">/api/status</div><div class="edesc">Bot status, regime, open positions, today's P&L</div></div></div>
+      <div class="epitem"><span class="meth mget">GET</span><div><div class="epath">/wheel/status</div><div class="edesc">Wheel bot status, active cycles, premium collected</div></div></div>
+      <div class="epitem"><span class="meth mpost">POST</span><div><div class="epath">/api/settings</div><div class="edesc">Update risk settings (max_positions, sector_cap, stop_loss_pct, etc.)</div></div></div>
+    </div>
+    <p style="margin-top:14px;font-size:12px;color:var(--muted2)">All endpoints require <code>X-API-Key: KOVA_API_KEY</code> header. Only <code>/health</code> is exempt. APIKeyMiddleware covers all other routes.</p>
+  </div>
+
+</div>
+
+<div class="footer">
+  <strong>Lakshmi</strong> Trading System &nbsp;·&nbsp; FastAPI + Claude AI + Alpaca &nbsp;·&nbsp; June 2026 &nbsp;·&nbsp; May Lakshmi bless every trade 🪷
+</div>
+
+<script>
+// SCROLL PROGRESS
+window.addEventListener('scroll', () => {
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  document.getElementById('scroll-progress').style.width = (window.scrollY / max * 100) + '%';
+}, { passive: true });
+
+// PARTICLE CANVAS
+(function () {
+  const canvas = document.getElementById('pcanvas');
+  const ctx = canvas.getContext('2d');
+  let W = canvas.width  = window.innerWidth;
+  let H = canvas.height = window.innerHeight;
+  window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; });
+
+  const pts = Array.from({ length: 50 }, () => ({
+    x: Math.random() * window.innerWidth,
+    y: Math.random() * window.innerHeight,
+    r: Math.random() * 1.4 + 0.3,
+    vx: (Math.random() - 0.5) * 0.2,
+    vy: (Math.random() - 0.5) * 0.2,
+    a: Math.random() * 0.5 + 0.1,
+  }));
+
+  const G = 'rgba(246,195,71,';
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    pts.forEach(p => {
+      p.x = (p.x + p.vx + W) % W;
+      p.y = (p.y + p.vy + H) % H;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, 6.283);
+      ctx.fillStyle = G + p.a + ')';
+      ctx.fill();
+    });
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (d < 130) {
+          ctx.beginPath();
+          ctx.moveTo(pts[i].x, pts[i].y);
+          ctx.lineTo(pts[j].x, pts[j].y);
+          ctx.strokeStyle = G + (0.07 * (1 - d/130)) + ')';
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// SECTION REVEAL + BARS
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    e.target.classList.add('visible');
+    setTimeout(() => {
+      e.target.querySelectorAll('.pbar[data-w]').forEach(b => b.style.width = b.dataset.w + '%');
+      e.target.querySelectorAll('.rbar[data-w]').forEach(b => b.style.width = b.dataset.w + '%');
+      e.target.querySelectorAll('.pb[data-w]').forEach(b => b.style.width = b.dataset.w + '%');
+    }, 200);
+  });
+}, { threshold: 0.1 });
+document.querySelectorAll('.section').forEach(s => io.observe(s));
+
+// ROADMAP STAGGER
+const io2 = new IntersectionObserver((entries) => {
+  entries.forEach((e, i) => {
+    if (e.isIntersecting) setTimeout(() => e.target.classList.add('visible'), i * 90);
+  });
+}, { threshold: 0.1 });
+document.querySelectorAll('.rm').forEach(el => io2.observe(el));
+</script>
+</body>
+</html>

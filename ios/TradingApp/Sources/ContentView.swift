@@ -1,106 +1,90 @@
 import SwiftUI
 
-// ── Macro calendar annual update reminder ────────────────────────────────────
-// Shows Jan 1–7 each year until the user confirms they've updated
-// FOMC / CPI / Jobs date sets in macro_calendar.py for the new year.
-private struct MacroCalendarReminderBanner: View {
+struct ContentView: View {
+    @State private var selectedTab = 0
+    @Namespace private var tabNS
     @AppStorage("macroCalendarConfirmedYear") private var confirmedYear: Int = 0
 
-    private var shouldShow: Bool {
-        let cal  = Calendar.current
-        let now  = Date()
-        let year = cal.component(.year,  from: now)
-        let month = cal.component(.month, from: now)
-        let day   = cal.component(.day,   from: now)
-        return month == 1 && day <= 7 && confirmedYear != year
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // ── Page content ──────────────────────────────────────────────
+            TabView(selection: $selectedTab) {
+                DashboardView()
+                    .tag(0)
+                    .toolbar(.hidden, for: .tabBar)
+
+                SignalsView()
+                    .tag(1)
+                    .toolbar(.hidden, for: .tabBar)
+
+                BotTabView()
+                    .tag(2)
+                    .toolbar(.hidden, for: .tabBar)
+
+                WheelView()
+                    .tag(3)
+                    .toolbar(.hidden, for: .tabBar)
+
+                MoreView()
+                    .tag(4)
+                    .toolbar(.hidden, for: .tabBar)
+            }
+            // Reserve space so content doesn't hide behind custom tab bar
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 90) }
+
+            // ── Floating tab bar ──────────────────────────────────────────
+            VStack(spacing: 0) {
+                // Macro calendar nudge (Jan 1–7 only)
+                if shouldShowMacroBanner {
+                    MacroBanner { confirmedYear = Calendar.current.component(.year, from: Date()) }
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 6)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                FloatingTabBar(selected: $selectedTab, namespace: tabNS)
+            }
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .tint(LakshmiTheme.purple)
+        .animation(LakshmiTheme.springSnappy, value: selectedTab)
     }
 
-    var body: some View {
-        if shouldShow {
-            HStack(spacing: 10) {
-                Image(systemName: "calendar.badge.exclamationmark")
-                    .foregroundStyle(.white)
-                    .font(.system(size: 18))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Update Macro Calendar Dates")
-                        .font(.subheadline).fontWeight(.bold).foregroundStyle(.white)
-                    Text("Add FOMC, CPI & Jobs dates for \(Calendar.current.component(.year, from: Date())) in macro_calendar.py")
-                        .font(.caption).foregroundStyle(.white.opacity(0.9))
-                }
-
-                Spacer()
-
-                Button {
-                    confirmedYear = Calendar.current.component(.year, from: Date())
-                } label: {
-                    Text("Done ✓")
-                        .font(.caption).fontWeight(.semibold)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(.white.opacity(0.25))
-                        .clipShape(Capsule())
-                        .foregroundStyle(.white)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.orange)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
+    private var shouldShowMacroBanner: Bool {
+        let cal = Calendar.current
+        let now = Date()
+        let month = cal.component(.month, from: now)
+        let day   = cal.component(.day,   from: now)
+        let year  = cal.component(.year,  from: now)
+        return month == 1 && day <= 7 && confirmedYear != year
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Macro calendar banner (compact version for floating area)
 
-struct ContentView: View {
+private struct MacroBanner: View {
+    let onDismiss: () -> Void
+
     var body: some View {
-        VStack(spacing: 0) {
-            MacroCalendarReminderBanner()
-            TabView {
-                DashboardView()
-                    .tabItem {
-                        Label("Dashboard", systemImage: "house.fill")
-                    }
-
-                OrdersView()
-                    .tabItem {
-                        Label("Orders", systemImage: "list.bullet.rectangle")
-                    }
-
-                NewsView()
-                    .tabItem {
-                        Label("News", systemImage: "newspaper.fill")
-                    }
-
-                AIView()
-                    .tabItem {
-                        Label("AI Agent", systemImage: "brain")
-                    }
-
-                InsightsView()
-                    .tabItem {
-                        Label("Insights", systemImage: "lightbulb.fill")
-                    }
-
-                WheelView()
-                    .tabItem {
-                        Label("Wheel", systemImage: "arrow.2.circlepath")
-                    }
-
-                PureAIView()
-                    .tabItem {
-                        Label("Pure AI", systemImage: "brain.head.profile")
-                    }
-
-                SettingsView()
-                    .tabItem {
-                        Label("Settings", systemImage: "gearshape.fill")
-                    }
+        HStack(spacing: 10) {
+            Image(systemName: "calendar.badge.exclamationmark")
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update Macro Calendar").font(.caption.weight(.bold)).foregroundStyle(.white)
+                Text("Add FOMC/CPI/Jobs dates for \(Calendar.current.component(.year, from: Date()))")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.85))
             }
-            .tint(LakshmiTheme.purple)
+            Spacer()
+            Button(action: onDismiss) {
+                Text("Done ✓")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.white.opacity(0.25))
+                    .clipShape(Capsule())
+                    .foregroundStyle(.white)
+            }
         }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
