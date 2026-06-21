@@ -1303,7 +1303,8 @@ def check_expirations():
                     total_prem = float(pos.get("total_premium_collected") or 0)
                     cost = float(pos.get("cost_basis") or 0)
                     call_strike = float(pos.get("call_strike") or 0)
-                    stock_pl = (call_strike - cost) * 100 if call_strike > 0 else 0
+                    shares = int(pos.get("shares_qty") or 100)
+                    stock_pl = (call_strike - cost) * shares if call_strike > 0 else 0
                     total_pl = stock_pl + total_prem
                     logger.info(f"Wheel CALL expired: {pos['symbol']} ${stock_pl:.2f} stock + ${total_prem:.2f} prem = ${total_pl:.2f}")
                     _add_to_profit_reserve_if_configured(total_pl)

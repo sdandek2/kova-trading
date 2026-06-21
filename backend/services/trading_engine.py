@@ -418,7 +418,8 @@ async def run_trading_cycle():
         account = await loop.run_in_executor(None, alpaca_service.get_account)
         # Bug fix: cast to float — Alpaca SDK can return Decimal or string in some versions,
         # which causes TypeError on f"{:.2f}" formatting and comparison with negative threshold.
-        _day_pl_pct = float(account.day_pl_percent)
+        # Guard against None (returned pre-market when day P&L is undefined).
+        _day_pl_pct = float(account.day_pl_percent or 0)
         circuit_breaker_active = _day_pl_pct < -_risk_settings["daily_loss_limit_pct"]
         if circuit_breaker_active:
             logger.warning(
