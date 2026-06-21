@@ -85,11 +85,16 @@ def get_positions() -> list[Position]:
     return result
 
 
-def get_orders(limit: int = 50) -> list[Order]:
+def get_orders(limit: int = 50, status: str = "all", symbol: str = None) -> list[Order]:
     from alpaca.trading.requests import GetOrdersRequest
     from alpaca.trading.enums import QueryOrderStatus
 
-    request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit)
+    _status_map = {"open": QueryOrderStatus.OPEN, "closed": QueryOrderStatus.CLOSED}
+    _qs = _status_map.get(status, QueryOrderStatus.ALL)
+    _kwargs = dict(status=_qs, limit=limit)
+    if symbol:
+        _kwargs["symbols"] = [symbol]
+    request = GetOrdersRequest(**_kwargs)
     raw = trading_client.get_orders(filter=request)
     result = []
     for o in raw:

@@ -745,7 +745,7 @@ async def run_trading_cycle():
                 is_prev_short = prev.get("side") == "short"
                 inferred_reason = None
                 try:
-                    recent_orders = alpaca_service.get_orders(limit=20)
+                    recent_orders = alpaca_service.get_orders(status="closed", symbol=sym, limit=10)
                     # Longs close via a sell order; shorts close via a buy-to-cover order
                     close_side = "buy" if is_prev_short else "sell"
                     for o in recent_orders:
@@ -1119,9 +1119,9 @@ async def run_trading_cycle():
                         _previous_positions[position.symbol]["exit_reason"] = "gap_down_exit"
                     # Cancel any open bracket/GTC orders first
                     try:
-                        open_orders = alpaca_service.get_orders(limit=20)
+                        open_orders = alpaca_service.get_orders(status="open", symbol=position.symbol, limit=10)
                         for o in open_orders:
-                            if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                            if o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
                                 alpaca_service.cancel_order(o.id)
                     except Exception:
                         pass
@@ -1171,9 +1171,9 @@ async def run_trading_cycle():
                         if position.symbol in _previous_positions:
                             _previous_positions[position.symbol]["exit_reason"] = "stale_exit"
                         try:
-                            open_orders = alpaca_service.get_orders(limit=20)
+                            open_orders = alpaca_service.get_orders(status="open", symbol=position.symbol, limit=10)
                             for o in open_orders:
-                                if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                                if o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
                                     alpaca_service.cancel_order(o.id)
                         except Exception:
                             pass
@@ -1348,9 +1348,9 @@ async def run_trading_cycle():
                     if position.symbol in _previous_positions:
                         _previous_positions[position.symbol]["exit_reason"] = "momentum_decay"
                     try:
-                        open_orders = alpaca_service.get_orders(limit=20)
+                        open_orders = alpaca_service.get_orders(status="open", symbol=position.symbol, limit=10)
                         for o in open_orders:
-                            if o.symbol == position.symbol and o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
+                            if o.side == "sell" and o.status in ("new", "partially_filled", "accepted"):
                                 alpaca_service.cancel_order(o.id)
                     except Exception:
                         pass
@@ -1476,10 +1476,10 @@ async def run_trading_cycle():
                 # Longs: cancel GTC limit sell / stop-loss legs placed at entry via bracket order
                 # Without this, the orphaned GTC order can fill later and create an unintended position
                 try:
-                    open_orders = alpaca_service.get_orders(limit=20)
+                    open_orders = alpaca_service.get_orders(status="open", symbol=position.symbol, limit=10)
                     cancel_side = "buy" if is_short else "sell"
                     for o in open_orders:
-                        if o.symbol == position.symbol and o.side == cancel_side and o.status in ("new", "partially_filled", "accepted"):
+                        if o.side == cancel_side and o.status in ("new", "partially_filled", "accepted"):
                             alpaca_service.cancel_order(o.id)
                             logger.info(f"Cancelled open {cancel_side} order {o.id} for {position.symbol} before engine exit")
                 except Exception as ce:
@@ -2603,9 +2603,9 @@ async def run_trading_cycle():
             # holding shares in reserve. Cancel those first so Alpaca frees the qty.
             if decision.action in ("sell",):
                 try:
-                    open_orders = alpaca_service.get_orders(limit=20)
+                    open_orders = alpaca_service.get_orders(status="open", symbol=decision.symbol, limit=10)
                     for o in open_orders:
-                        if o.symbol == decision.symbol and o.status in ("new", "partially_filled", "accepted"):
+                        if o.status in ("new", "partially_filled", "accepted"):
                             alpaca_service.cancel_order(o.id)
                             logger.info(f"Pre-sell cancel: {o.id} ({o.side}) on {decision.symbol} to free qty for rotation")
                 except Exception as ce:

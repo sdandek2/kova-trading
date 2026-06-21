@@ -2206,13 +2206,14 @@ def run_wheel_cycle():
             # ── Weekly loss cap — pause new trades if we've lost too much this week ──
             try:
                 weekly_loss   = _get_weekly_realized_loss()
-                account_value = 25000.0  # fallback
                 try:
                     account_value = float(_get_wheel_trading_client().get_account().portfolio_value)
+                    loss_cap = account_value * WEEKLY_LOSS_CAP_PCT
                 except Exception:
-                    pass
-                loss_cap = account_value * WEEKLY_LOSS_CAP_PCT
-                if weekly_loss < -loss_cap:
+                    logger.warning("Wheel: could not fetch account value for loss cap — skipping cap check")
+                    account_value = None
+                    loss_cap = None
+                if loss_cap is not None and weekly_loss < -loss_cap:
                     logger.warning(
                         f"Wheel: weekly loss cap hit (${weekly_loss:.0f} > "
                         f"-${loss_cap:.0f} / {WEEKLY_LOSS_CAP_PCT:.0%} of ${account_value:.0f}) "
