@@ -5,18 +5,18 @@ struct PositionRowView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var isShort: Bool { position.side == "short" }
-    private var plColor: Color { position.unrealizedPl >= 0 ? KovaTheme.positive : KovaTheme.negative }
+    private var plColor: Color { position.unrealizedPl >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative }
 
     var body: some View {
         HStack(spacing: 12) {
             // ── Symbol icon ───────────────────────────────────────────────
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isShort ? KovaTheme.negative.opacity(0.12) : KovaTheme.blue.opacity(0.12))
+                    .fill(isShort ? LakshmiTheme.negative.opacity(0.12) : LakshmiTheme.blue.opacity(0.12))
                     .frame(width: 42, height: 42)
                 Text(String(position.symbol.prefix(2)))
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(isShort ? KovaTheme.negative : KovaTheme.blue)
+                    .foregroundStyle(isShort ? LakshmiTheme.negative : LakshmiTheme.blue)
             }
 
             // ── Symbol + details ──────────────────────────────────────────
@@ -25,7 +25,7 @@ struct PositionRowView: View {
                     Text(position.symbol)
                         .font(.subheadline.weight(.bold))
                     if isShort {
-                        KovaChip(text: "SHORT", color: KovaTheme.negative)
+                        LakshmiChip(text: "SHORT", color: LakshmiTheme.negative)
                     }
                 }
                 Text(String(format: "%d shares · avg $%.2f",
@@ -58,7 +58,7 @@ struct PositionRowView: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
-        .background(KovaTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+        .background(LakshmiTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
     }
 }

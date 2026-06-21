@@ -375,7 +375,7 @@ struct AnalyticsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Sprint Review")
                 .font(.headline)
-            Text("What did the market do vs what Kova captured?")
+            Text("What did the market do vs what Lakshmi captured?")
                 .font(.caption).foregroundStyle(.secondary)
 
             if let sr = sprintReview, let date = sr.reviewDate {
@@ -405,7 +405,7 @@ struct AnalyticsView: View {
 
                 if let actual = sr.actualKovaPnl {
                     HStack {
-                        Text("Kova actual:").font(.caption).foregroundStyle(.secondary)
+                        Text("Lakshmi actual:").font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Text(String(format: "%+.1f%%", actual))
                             .font(.caption).bold()

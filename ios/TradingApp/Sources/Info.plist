@@ -4,7 +4,7 @@
 <dict>
     <!-- Local network access (required to reach 192.168.x.x backend) -->
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Kova needs local network access to connect to your trading backend.</string>
+    <string>Lakshmi needs local network access to connect to your trading backend.</string>
 
     <!-- App icon -->
     <key>CFBundleIcons</key>
@@ -20,9 +20,9 @@
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleName</key>
-    <string>Kova</string>
+    <string>Lakshmi</string>
     <key>CFBundleDisplayName</key>
-    <string>Kova</string>
+    <string>Lakshmi</string>
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleVersion</key>

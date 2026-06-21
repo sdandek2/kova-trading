@@ -49,7 +49,7 @@ def _send(title: str, body: str, priority: str = "default", tags: str = "") -> N
 
 def alert_circuit_breaker(day_pl_pct: float, limit_pct: float) -> None:
     _send(
-        title    = "⛔ Kova circuit breaker tripped",
+        title    = "⛔ Lakshmi circuit breaker tripped",
         body     = f"Down {abs(day_pl_pct):.1f}% today (limit {limit_pct}%). New buys blocked for rest of day.",
         priority = "high",
         tags     = "rotating_light",
@@ -58,7 +58,7 @@ def alert_circuit_breaker(day_pl_pct: float, limit_pct: float) -> None:
 
 def alert_cycle_error(error: str) -> None:
     _send(
-        title    = "🔴 Kova cycle error",
+        title    = "🔴 Lakshmi cycle error",
         body     = f"{error[:200]}",
         priority = "high",
         tags     = "warning",
@@ -67,7 +67,7 @@ def alert_cycle_error(error: str) -> None:
 
 def alert_system_start() -> None:
     _send(
-        title    = "✅ Kova started",
+        title    = "✅ Lakshmi started",
         body     = f"Trading engine online — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         priority = "low",
         tags     = "white_check_mark",
@@ -76,7 +76,7 @@ def alert_system_start() -> None:
 
 def alert_system_stop(reason: str = "") -> None:
     _send(
-        title    = "🛑 Kova stopped",
+        title    = "🛑 Lakshmi stopped",
         body     = reason or "Trading engine shut down.",
         priority = "default",
         tags     = "stop_sign",

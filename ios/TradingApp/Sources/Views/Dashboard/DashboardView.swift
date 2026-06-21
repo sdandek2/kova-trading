@@ -29,7 +29,7 @@ struct DashboardView: View {
                             if let account = vm.account {
                                 QuickStatsStrip(account: account)
                                     .padding(.top, 14)
-                                    .padding(.horizontal, KovaTheme.pagePad)
+                                    .padding(.horizontal, LakshmiTheme.pagePad)
                             }
 
                             // ── Positions ─────────────────────────────────
@@ -39,7 +39,7 @@ struct DashboardView: View {
                         .padding(.bottom, 24)
                     }
                     .refreshable { await vm.load() }
-                    .background(KovaTheme.pageBackground)
+                    .background(LakshmiTheme.pageBackground)
                 }
             }
             .navigationTitle("Dashboard")
@@ -49,18 +49,18 @@ struct DashboardView: View {
                     Button { showTradeSheet = true } label: {
                         ZStack {
                             Circle()
-                                .fill(KovaTheme.purple.opacity(0.12))
+                                .fill(LakshmiTheme.purple.opacity(0.12))
                                 .frame(width: 34, height: 34)
                             Image(systemName: "arrow.left.arrow.right")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(KovaTheme.purple)
+                                .foregroundStyle(LakshmiTheme.purple)
                         }
                     }
                 }
             }
             .sheet(isPresented: $showTradeSheet) { TradeSheet() }
         }
-        .tint(KovaTheme.purple)
+        .tint(LakshmiTheme.purple)
         .task { await vm.load() }
     }
 }
@@ -115,7 +115,7 @@ private struct HeroChartBlock: View {
                             .background {
                                 if selectedPeriod == p {
                                     RoundedRectangle(cornerRadius: 7)
-                                        .fill(KovaTheme.blueGradient)
+                                        .fill(LakshmiTheme.blueGradient)
                                 } else {
                                     Color.clear
                                 }
@@ -126,7 +126,7 @@ private struct HeroChartBlock: View {
             .padding(4)
             .background(Color(.tertiarySystemBackground).opacity(0.7))
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, KovaTheme.pagePad)
+            .padding(.horizontal, LakshmiTheme.pagePad)
             .padding(.top, 10)
             .padding(.bottom, 16)
         }
@@ -149,7 +149,7 @@ private struct InlineChart: View {
     let isPositive: Bool
     @Environment(\.colorScheme) private var scheme
 
-    private var lineColor: Color { isPositive ? KovaTheme.positive : KovaTheme.negative }
+    private var lineColor: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
 
     var body: some View {
         if points.isEmpty {
@@ -198,11 +198,11 @@ private struct QuickStatsStrip: View {
             DashStatPill(label: "Cash",
                      value: formatK(account.cash),
                      icon: "banknote",
-                     color: KovaTheme.positive)
+                     color: LakshmiTheme.positive)
             DashStatPill(label: "Buying Power",
                      value: formatK(account.buyingPower),
                      icon: "bolt.fill",
-                     color: KovaTheme.purple)
+                     color: LakshmiTheme.purple)
         }
     }
 
@@ -254,18 +254,18 @@ private struct PositionsSection: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(width: 20, height: 20)
-                        .background(KovaTheme.purple)
+                        .background(LakshmiTheme.purple)
                         .clipShape(Circle())
                 }
                 Spacer()
             }
-            .padding(.horizontal, KovaTheme.pagePad)
+            .padding(.horizontal, LakshmiTheme.pagePad)
 
             if positions.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "chart.pie")
                         .font(.system(size: 36))
-                        .foregroundStyle(KovaTheme.purple.opacity(0.4))
+                        .foregroundStyle(LakshmiTheme.purple.opacity(0.4))
                     Text("No open positions")
                         .foregroundStyle(.secondary)
                         .font(.subheadline)
@@ -273,14 +273,14 @@ private struct PositionsSection: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 32)
                 .kovaCard()
-                .padding(.horizontal, KovaTheme.pagePad)
+                .padding(.horizontal, LakshmiTheme.pagePad)
             } else {
                 VStack(spacing: 8) {
                     ForEach(positions) { pos in
                         PositionRowView(position: pos)
                     }
                 }
-                .padding(.horizontal, KovaTheme.pagePad)
+                .padding(.horizontal, LakshmiTheme.pagePad)
             }
         }
     }

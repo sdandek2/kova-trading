@@ -1,11 +1,11 @@
 import SwiftUI
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KovaTheme — centralised design tokens for the Kova trading app.
+// LakshmiTheme — centralised design tokens for the Kova trading app.
 // Supports light + dark mode automatically via adaptive colours.
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum KovaTheme {
+enum LakshmiTheme {
 
     // ── Brand gradient (matches app icon: pink → purple → blue) ──────────────
     static let pink   = Color(red: 1.00, green: 0.22, blue: 0.85)
@@ -67,38 +67,38 @@ enum KovaTheme {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Standard Kova card surface
-struct KovaCardModifier: ViewModifier {
+struct LakshmiCardModifier: ViewModifier {
     var padded: Bool = true
     func body(content: Content) -> some View {
         content
-            .if(padded) { $0.padding(KovaTheme.cardPad) }
-            .background(KovaTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+            .if(padded) { $0.padding(LakshmiTheme.cardPad) }
+            .background(LakshmiTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
     }
 }
 
 /// Card with a subtle brand-gradient tint overlay
-struct KovaAccentCardModifier: ViewModifier {
+struct LakshmiAccentCardModifier: ViewModifier {
     var padded: Bool = true
     func body(content: Content) -> some View {
         content
-            .if(padded) { $0.padding(KovaTheme.cardPad) }
+            .if(padded) { $0.padding(LakshmiTheme.cardPad) }
             .background {
                 ZStack {
-                    KovaTheme.card
-                    KovaTheme.cardTint
+                    LakshmiTheme.card
+                    LakshmiTheme.cardTint
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
     }
 }
 
 extension View {
     func kovaCard(padded: Bool = true) -> some View {
-        modifier(KovaCardModifier(padded: padded))
+        modifier(LakshmiCardModifier(padded: padded))
     }
     func kovaAccentCard(padded: Bool = true) -> some View {
-        modifier(KovaAccentCardModifier(padded: padded))
+        modifier(LakshmiAccentCardModifier(padded: padded))
     }
 
     /// Conditional modifier helper
@@ -112,9 +112,9 @@ extension View {
 // Reusable chip / badge
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct KovaChip: View {
+struct LakshmiChip: View {
     let text: String
-    var color: Color = KovaTheme.accent
+    var color: Color = LakshmiTheme.accent
     var filled: Bool = true
 
     var body: some View {
@@ -138,7 +138,7 @@ struct PLBadge: View {
     var showArrow: Bool = true
 
     private var isPositive: Bool { value >= 0 }
-    private var color: Color { isPositive ? KovaTheme.positive : KovaTheme.negative }
+    private var color: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
 
     var body: some View {
         HStack(spacing: 4) {

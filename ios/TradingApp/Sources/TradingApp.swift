@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct KovaApp: App {
+struct LakshmiApp: App {
     @StateObject private var wsService = WebSocketService.shared
     @AppStorage("appColorScheme") private var colorSchemePreference: String = "system"
 

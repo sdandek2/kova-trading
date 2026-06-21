@@ -10,10 +10,10 @@ struct WheelPositionRowView: View {
 
     private var phaseColor: Color {
         switch position.phase {
-        case "put_open":         return KovaTheme.blue
+        case "put_open":         return LakshmiTheme.blue
         case "assigned":         return .orange
-        case "call_open":        return KovaTheme.positive
-        case "bear_spread_open": return KovaTheme.negative
+        case "call_open":        return LakshmiTheme.positive
+        case "bear_spread_open": return LakshmiTheme.negative
         default:                 return .secondary
         }
     }
@@ -61,9 +61,9 @@ struct WheelPositionRowView: View {
                 HStack(spacing: 6) {
                     Text(position.symbol)
                         .font(.subheadline.weight(.bold))
-                    KovaChip(text: position.phaseLabel, color: phaseColor)
+                    LakshmiChip(text: position.phaseLabel, color: phaseColor)
                     if position.contractsRemaining < 2 {
-                        KovaChip(text: "1 left", color: .orange)
+                        LakshmiChip(text: "1 left", color: .orange)
                     }
                 }
 
@@ -77,7 +77,7 @@ struct WheelPositionRowView: View {
                             .foregroundStyle(.tertiary)
                         Text(dteRemaining + " left")
                             .font(.caption)
-                            .foregroundStyle(dteProgress > 0.7 ? KovaTheme.positive : .secondary)
+                            .foregroundStyle(dteProgress > 0.7 ? LakshmiTheme.positive : .secondary)
                     }
                 }
 
@@ -91,7 +91,7 @@ struct WheelPositionRowView: View {
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(
                                     LinearGradient(
-                                        colors: [KovaTheme.blue.opacity(0.6), KovaTheme.positive],
+                                        colors: [LakshmiTheme.blue.opacity(0.6), LakshmiTheme.positive],
                                         startPoint: .leading, endPoint: .trailing
                                     )
                                 )
@@ -109,7 +109,7 @@ struct WheelPositionRowView: View {
                 if let total = position.totalPremiumCollected, total > 0 {
                     Text(String(format: "+$%.0f", total))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(KovaTheme.positive)
+                        .foregroundStyle(LakshmiTheme.positive)
                     Text("collected")
                         .font(.caption2)
                         .foregroundStyle(.secondary)

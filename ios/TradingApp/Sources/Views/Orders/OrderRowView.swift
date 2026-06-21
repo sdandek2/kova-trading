@@ -4,7 +4,7 @@ struct OrderRowView: View {
     let order: Order
 
     private var isBuy:  Bool { order.side == "buy" }
-    private var sideColor: Color { isBuy ? KovaTheme.positive : KovaTheme.negative }
+    private var sideColor: Color { isBuy ? LakshmiTheme.positive : LakshmiTheme.negative }
     private var sideLabel: String { order.side.uppercased() }
 
     var body: some View {
@@ -24,7 +24,7 @@ struct OrderRowView: View {
                 HStack(spacing: 6) {
                     Text(order.symbol)
                         .font(.subheadline.weight(.bold))
-                    KovaChip(text: sideLabel, color: sideColor)
+                    LakshmiChip(text: sideLabel, color: sideColor)
                 }
                 Text("\(Int(order.qty)) shares")
                     .font(.caption)
@@ -53,8 +53,8 @@ struct OrderRowView: View {
 
     private func statusColor(_ status: String) -> Color {
         switch status {
-        case "filled":                          return KovaTheme.positive
-        case "canceled", "rejected", "expired": return KovaTheme.negative
+        case "filled":                          return LakshmiTheme.positive
+        case "canceled", "rejected", "expired": return LakshmiTheme.negative
         default:                                return .secondary
         }
     }

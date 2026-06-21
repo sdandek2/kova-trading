@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     logger.info("Trading app backend shut down.")
 
 
-app = FastAPI(title="Kova", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Lakshmi", version="1.0.0", lifespan=lifespan)
 
 # ── API key auth ───────────────────────────────────────────────────────────────
 # Set KOVA_API_KEY in Railway env vars. iOS app must send X-API-Key header.

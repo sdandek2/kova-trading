@@ -9,10 +9,10 @@ struct NewsRowView: View {
                 ForEach(article.symbols.prefix(3), id: \.self) { symbol in
                     Text(symbol)
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(KovaTheme.blue)
+                        .foregroundStyle(LakshmiTheme.blue)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(KovaTheme.blue.opacity(0.12))
+                        .background(LakshmiTheme.blue.opacity(0.12))
                         .clipShape(Capsule())
                 }
                 Spacer()

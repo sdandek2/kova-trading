@@ -21,8 +21,8 @@ struct WheelUniverseView: View {
                             Text("\(count) stocks")
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 7).padding(.vertical, 2)
-                                .background(KovaTheme.purple.opacity(0.12))
-                                .foregroundStyle(KovaTheme.purple)
+                                .background(LakshmiTheme.purple.opacity(0.12))
+                                .foregroundStyle(LakshmiTheme.purple)
                                 .clipShape(Capsule())
                         }
                     }
@@ -42,13 +42,13 @@ struct WheelUniverseView: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .tint(KovaTheme.purple)
+                .tint(LakshmiTheme.purple)
                 .disabled(vm.isRefreshingUniverse)
             }
 
             // ── Score legend ──────────────────────────────────────────────
             HStack(spacing: 12) {
-                ScoreLegendItem(color: KovaTheme.positive, label: "≥80 Strong")
+                ScoreLegendItem(color: LakshmiTheme.positive, label: "≥80 Strong")
                 ScoreLegendItem(color: .orange,            label: "60-79 Good")
                 ScoreLegendItem(color: .secondary,         label: "IV: options richness")
             }
@@ -98,10 +98,10 @@ struct WheelUniverseView: View {
                             Image(systemName: showAll ? "chevron.up" : "chevron.down")
                                 .font(.caption2)
                         }
-                        .foregroundStyle(KovaTheme.purple)
+                        .foregroundStyle(LakshmiTheme.purple)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .background(KovaTheme.purple.opacity(0.06))
+                        .background(LakshmiTheme.purple.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
@@ -133,15 +133,15 @@ struct WheelUniverseRowView: View {
     let stock: WheelUniverseStock
 
     private var scoreColor: Color {
-        if stock.score >= 80 { return KovaTheme.positive }
+        if stock.score >= 80 { return LakshmiTheme.positive }
         if stock.score >= 60 { return .orange }
-        return KovaTheme.negative
+        return LakshmiTheme.negative
     }
 
     private var ivChipColor: Color {
         switch stock.ivProfile?.lowercased() {
-        case "very-high": return KovaTheme.negative
-        case "high":      return KovaTheme.blue
+        case "very-high": return LakshmiTheme.negative
+        case "high":      return LakshmiTheme.blue
         default:          return .secondary
         }
     }

@@ -25,10 +25,10 @@ struct AccountCardView: View {
             .background {
                 // Subtle brand gradient tint at top
                 ZStack(alignment: .top) {
-                    KovaTheme.card
+                    LakshmiTheme.card
                     LinearGradient(
-                        colors: [KovaTheme.purple.opacity(colorScheme == .dark ? 0.18 : 0.09),
-                                 KovaTheme.blue.opacity(colorScheme == .dark ? 0.10 : 0.05),
+                        colors: [LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.18 : 0.09),
+                                 LakshmiTheme.blue.opacity(colorScheme == .dark ? 0.10 : 0.05),
                                  .clear],
                         startPoint: .top,
                         endPoint: .bottom
@@ -38,7 +38,7 @@ struct AccountCardView: View {
 
             // ── Divider line with gradient ────────────────────────────────
             Rectangle()
-                .fill(KovaTheme.purple.opacity(0.15))
+                .fill(LakshmiTheme.purple.opacity(0.15))
                 .frame(height: 1)
 
             // ── Cash + Buying Power ───────────────────────────────────────
@@ -52,17 +52,17 @@ struct AccountCardView: View {
                 StatCell(label: "Buying Power", value: formatCurrency(account.buyingPower), alignment: .trailing)
             }
             .padding(.vertical, 14)
-            .padding(.horizontal, KovaTheme.cardPad)
-            .background(KovaTheme.card)
+            .padding(.horizontal, LakshmiTheme.cardPad)
+            .background(LakshmiTheme.card)
         }
-        .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
         .overlay(
-            RoundedRectangle(cornerRadius: KovaTheme.radius)
-                .strokeBorder(KovaTheme.purple.opacity(colorScheme == .dark ? 0.25 : 0.10), lineWidth: 1)
+            RoundedRectangle(cornerRadius: LakshmiTheme.radius)
+                .strokeBorder(LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.25 : 0.10), lineWidth: 1)
         )
-        .shadow(color: KovaTheme.purple.opacity(colorScheme == .dark ? 0.0 : 0.08),
+        .shadow(color: LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.0 : 0.08),
                 radius: 12, x: 0, y: 4)
-        .padding(.horizontal, KovaTheme.pagePad)
+        .padding(.horizontal, LakshmiTheme.pagePad)
     }
 
     private func formatCurrency(_ value: Double) -> String {

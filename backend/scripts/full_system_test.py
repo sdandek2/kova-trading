@@ -1,5 +1,5 @@
 """
-Kova Full System Test — validates every major feature end-to-end.
+Lakshmi Full System Test — validates every major feature end-to-end.
 No AI calls. No token cost.
 
 BEST RUN ON RAILWAY:
@@ -72,7 +72,7 @@ def should_run(name):
     return only == "all" or only in name.lower()
 
 print("=" * 60)
-print(f"  Kova Full System Test  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"  Lakshmi Full System Test  {time.strftime('%Y-%m-%d %H:%M:%S')}")
 print("=" * 60)
 
 # ══════════════════════════════════════════════════════════════════════════════

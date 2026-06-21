@@ -223,10 +223,10 @@ def run_eod_analysis() -> dict:
             flagged = sr.get("flagged_signals") or []
             sprint_text = (
                 f"\n## Sprint Review (today's market movers vs Kova)\n"
-                f"- Capture rate: {capture_rate:.1f}% of top movers Kova caught\n"
+                f"- Capture rate: {capture_rate:.1f}% of top movers Lakshmi caught\n"
                 f"- Missed entirely (never in universe): {missed} stocks\n"
                 f"- Hypothetical ceiling: +{hyp_pnl:.1f}% (equal-weight top-10 gainers)\n"
-                f"- Kova actual: {actual_pnl_sr:+.1f}%\n"
+                f"- Lakshmi actual: {actual_pnl_sr:+.1f}%\n"
                 + (f"- Flagged signals (below 40% win rate): {', '.join(flagged)}\n" if flagged else "")
             )
     except Exception:

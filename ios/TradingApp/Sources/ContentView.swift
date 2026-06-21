@@ -100,7 +100,7 @@ struct ContentView: View {
                         Label("Settings", systemImage: "gearshape.fill")
                     }
             }
-            .tint(KovaTheme.purple)
+            .tint(LakshmiTheme.purple)
         }
     }
 }

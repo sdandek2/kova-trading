@@ -1,5 +1,5 @@
 """
-Kova Rule Validation Tests — verifies business rules are enforced correctly.
+Lakshmi Rule Validation Tests — verifies business rules are enforced correctly.
 
 Unlike full_system_test.py (which checks "is everything alive?"), this script
 checks "are the actual rules applied correctly?" using controlled inputs and mocks.
@@ -60,7 +60,7 @@ def should_run(name):
     return only == "all" or only in name.lower()
 
 print("=" * 60)
-print("  Kova Rule Validation Tests")
+print("  Lakshmi Rule Validation Tests")
 print("=" * 60)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

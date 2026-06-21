@@ -29,7 +29,7 @@ struct SettingsView: View {
                                 if colorSchemePreference == option {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(KovaTheme.purple)
+                                        .foregroundStyle(LakshmiTheme.purple)
                                 }
                             }
                         }
@@ -41,7 +41,7 @@ struct SettingsView: View {
 
                 // ── About ─────────────────────────────────────────────────
                 Section {
-                    LabeledContent("App") { Text("Kova").foregroundStyle(.secondary) }
+                    LabeledContent("App") { Text("Lakshmi").foregroundStyle(.secondary) }
                     LabeledContent("Version") { Text("1.0.0").foregroundStyle(.secondary) }
                     LabeledContent("AI Model") { Text("Gemini 2.5 Pro").foregroundStyle(.secondary) }
                 } header: {
@@ -50,7 +50,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .tint(KovaTheme.purple)
+            .tint(LakshmiTheme.purple)
         }
     }
 
@@ -73,16 +73,16 @@ struct SettingsView: View {
     private func iconBackground(_ option: String) -> Color {
         switch option {
         case "light":  return .yellow.opacity(0.15)
-        case "dark":   return KovaTheme.purple.opacity(0.12)
-        default:       return KovaTheme.blue.opacity(0.12)
+        case "dark":   return LakshmiTheme.purple.opacity(0.12)
+        default:       return LakshmiTheme.blue.opacity(0.12)
         }
     }
 
     private func iconColor(_ option: String) -> Color {
         switch option {
         case "light":  return .yellow
-        case "dark":   return KovaTheme.purple
-        default:       return KovaTheme.blue
+        case "dark":   return LakshmiTheme.purple
+        default:       return LakshmiTheme.blue
         }
     }
 }

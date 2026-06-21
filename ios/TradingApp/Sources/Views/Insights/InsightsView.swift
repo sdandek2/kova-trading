@@ -111,14 +111,14 @@ struct PredictionSearchBar: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(KovaTheme.purple)
+                        .background(LakshmiTheme.purple)
                         .clipShape(Capsule())
                 }
             }
         }
         .padding(10)
-        .background(KovaTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+        .background(LakshmiTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
     }
 
     private func resolve() async {
@@ -230,7 +230,7 @@ struct SuggestionCard: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 6)
-                            .background(suggestion.isShort ? KovaTheme.negative : KovaTheme.positive)
+                            .background(suggestion.isShort ? LakshmiTheme.negative : LakshmiTheme.positive)
                             .clipShape(Capsule())
                     }
                 }
@@ -238,7 +238,7 @@ struct SuggestionCard: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .kovaCard(padded: false)
-        .shadow(color: KovaTheme.purple.opacity(0.07), radius: 8, x: 0, y: 3)
+        .shadow(color: LakshmiTheme.purple.opacity(0.07), radius: 8, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .sheet(isPresented: $showTrade) {

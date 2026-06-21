@@ -7,13 +7,13 @@ struct LoadingView: View {
         VStack(spacing: 16) {
             ZStack {
                 Circle()
-                    .stroke(KovaTheme.purple.opacity(0.15), lineWidth: 3)
+                    .stroke(LakshmiTheme.purple.opacity(0.15), lineWidth: 3)
                     .frame(width: 48, height: 48)
                 Circle()
                     .trim(from: 0, to: 0.7)
                     .stroke(
                         AngularGradient(
-                            colors: [KovaTheme.pink, KovaTheme.purple, KovaTheme.blue],
+                            colors: [LakshmiTheme.pink, LakshmiTheme.purple, LakshmiTheme.blue],
                             center: .center
                         ),
                         style: StrokeStyle(lineWidth: 3, lineCap: .round)

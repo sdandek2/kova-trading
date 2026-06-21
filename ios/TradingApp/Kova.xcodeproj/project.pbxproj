@@ -60,7 +60,7 @@
 		E1F2A3B4C5D6E1F2A3B4C5D6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A3B4C5D6E7F2A3B4C5D6E7 /* SettingsView.swift */; };
 		E3CB23C1308553515DADDD55 /* TradingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FBB8BB0B00E4159E8BBDB36 /* TradingApp.swift */; };
 		E5144074BE262084914C866C /* AIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9B383E71DA3A126C1640CC /* AIView.swift */; };
-		F1A2B3C4D5E6F1A2B3C4D5E6 /* KovaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F8E7D6C5B4A9F8E7D6C5B4A /* KovaTheme.swift */; };
+		F1A2B3C4D5E6F1A2B3C4D5E6 /* LakshmiTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F8E7D6C5B4A9F8E7D6C5B4A /* LakshmiTheme.swift */; };
 		F1E2D3C4B5A6F1E2D3C4B5A6 /* EODReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */; };
 		F2E3D4C5B6A7F2E3D4C5B6A7 /* EODReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B6C5D4E3F2A7B6C5D4E3F2 /* EODReportView.swift */; };
 		F3E4D5C6B7A8F3E4D5C6B7A8 /* FinanceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B7C6D5E4F3A8B7C6D5E4F3 /* FinanceModels.swift */; };
@@ -108,7 +108,7 @@
 		98185D223838F12E20232E0F /* Account.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Account.swift; path = Sources/Models/Account.swift; sourceTree = "<group>"; };
 		9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoadingView.swift; path = Sources/Views/Common/LoadingView.swift; sourceTree = "<group>"; };
 		9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccountCardView.swift; path = Sources/Views/Dashboard/AccountCardView.swift; sourceTree = "<group>"; };
-		9F8E7D6C5B4A9F8E7D6C5B4A /* KovaTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KovaTheme.swift; path = Sources/Views/Common/KovaTheme.swift; sourceTree = "<group>"; };
+		9F8E7D6C5B4A9F8E7D6C5B4A /* LakshmiTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LakshmiTheme.swift; path = Sources/Views/Common/LakshmiTheme.swift; sourceTree = "<group>"; };
 		A6B5C4D3E2F1A6B5C4D3E2F1 /* EODReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EODReport.swift; path = Sources/Models/EODReport.swift; sourceTree = "<group>"; };
 		BB01CC02DD03EE04FF05AA06 /* ModelSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ModelSettings.swift; path = Sources/Models/ModelSettings.swift; sourceTree = "<group>"; };
 		BB02CC03DD04EE05FF06AA07 /* ModelPickerCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ModelPickerCard.swift; path = Sources/Views/AI/ModelPickerCard.swift; sourceTree = "<group>"; };
@@ -227,7 +227,7 @@
 				D4E5F6A7B8C9D4E5F6A7B8C9AA /* PromptViewerView.swift */,
 				CB85530A0AD6484B28AC9BAF /* ErrorView.swift */,
 				9E7A53D6728C8BE8A1866EF0 /* LoadingView.swift */,
-				9F8E7D6C5B4A9F8E7D6C5B4A /* KovaTheme.swift */,
+				9F8E7D6C5B4A9F8E7D6C5B4A /* LakshmiTheme.swift */,
 				F2A3B4C5D6E7F2A3B4C5D6E7 /* SettingsView.swift */,
 				9F2C8702CB3C40AE5F134084 /* AccountCardView.swift */,
 				BB22CC33DD44EE55FF66AA11 /* TradeSheet.swift */,
@@ -275,7 +275,7 @@
 			name = Kova;
 			packageProductDependencies = (
 			);
-			productName = Kova;
+			productName = Lakshmi;
 			productReference = 2544E5B1E7659A7BA6F06444 /* Kova.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -354,7 +354,7 @@
 				30D361A60F026F0D1EBDE34C /* WatchlistEditorView.swift in Sources */,
 				7ABFB19CDEDECF435C9E3568 /* ErrorView.swift in Sources */,
 				88E924C2FA451B19763F0A3A /* LoadingView.swift in Sources */,
-				F1A2B3C4D5E6F1A2B3C4D5E6 /* KovaTheme.swift in Sources */,
+				F1A2B3C4D5E6F1A2B3C4D5E6 /* LakshmiTheme.swift in Sources */,
 				E1F2A3B4C5D6E1F2A3B4C5D6 /* SettingsView.swift in Sources */,
 				6F15AD912154589D7CD91D4C /* AccountCardView.swift in Sources */,
 				AA11BB22CC33DD44EE55FF66 /* TradeSheet.swift in Sources */,
@@ -418,8 +418,8 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.siddhesh.kova;
-				PRODUCT_NAME = Kova;
+				PRODUCT_BUNDLE_IDENTIFIER = com.siddhesh.lakshmi;
+				PRODUCT_NAME = Lakshmi;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -443,8 +443,8 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.siddhesh.kova;
-				PRODUCT_NAME = Kova;
+				PRODUCT_BUNDLE_IDENTIFIER = com.siddhesh.lakshmi;
+				PRODUCT_NAME = Lakshmi;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

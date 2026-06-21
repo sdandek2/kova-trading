@@ -30,7 +30,7 @@ struct WheelView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
-            .background(KovaTheme.pageBackground.ignoresSafeArea())
+            .background(LakshmiTheme.pageBackground.ignoresSafeArea())
             .navigationTitle("Wheel Bot")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -41,8 +41,8 @@ struct WheelView: View {
                             Text(mode.uppercased())
                                 .font(.caption2.weight(.bold))
                                 .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(mode == "live" ? KovaTheme.positive.opacity(0.2) : Color.orange.opacity(0.2))
-                                .foregroundStyle(mode == "live" ? KovaTheme.positive : .orange)
+                                .background(mode == "live" ? LakshmiTheme.positive.opacity(0.2) : Color.orange.opacity(0.2))
+                                .foregroundStyle(mode == "live" ? LakshmiTheme.positive : .orange)
                                 .clipShape(Capsule())
                         }
                         Button {
@@ -87,7 +87,7 @@ private struct WheelHeroCard: View {
         VStack(spacing: 0) {
             // Gradient header
             LinearGradient(
-                colors: [KovaTheme.purple, KovaTheme.blue],
+                colors: [LakshmiTheme.purple, LakshmiTheme.blue],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
             .frame(height: 120)
@@ -128,7 +128,7 @@ private struct WheelHeroCard: View {
                     )
                 }
                 .padding(.vertical, 10)
-                .background(KovaTheme.purple.opacity(0.08))
+                .background(LakshmiTheme.purple.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 4)
             }
@@ -176,7 +176,7 @@ private struct WheelStatCell: View {
         VStack(spacing: 4) {
             Image(systemName: icon)
                 .font(.system(size: 14))
-                .foregroundStyle(KovaTheme.purple)
+                .foregroundStyle(LakshmiTheme.purple)
             Text(value)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
             Text(label)
@@ -261,7 +261,7 @@ private struct WheelControlsCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(KovaTheme.blue)
+                .tint(LakshmiTheme.blue)
                 .disabled(vm.isScanningOpps || vm.isRunningCycle)
 
                 // Run full cycle
@@ -281,7 +281,7 @@ private struct WheelControlsCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(KovaTheme.purple)
+                .tint(LakshmiTheme.purple)
                 .disabled(vm.isRunningCycle || vm.isScanningOpps)
             }
 
@@ -378,7 +378,7 @@ private struct WheelOpportunityRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(String(format: "%.1f%%", opp.annualYieldPct) + " annual")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(KovaTheme.positive)
+                    .foregroundStyle(LakshmiTheme.positive)
                 Text(String(format: "$%.2f prem", opp.premium))
                     .font(.caption2)
                     .foregroundStyle(.secondary)

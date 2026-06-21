@@ -37,16 +37,16 @@ struct PureAIView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
-            .background(KovaTheme.pageBackground.ignoresSafeArea())
+            .background(LakshmiTheme.pageBackground.ignoresSafeArea())
             .navigationTitle("Pure-AI")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 6) {
-                        KovaChip(text: vm.isPaper ? "PAPER" : "LIVE",
-                                 color: vm.isPaper ? .orange : KovaTheme.positive)
-                        KovaChip(text: vm.modelDisplay,
-                                 color: KovaTheme.purple)
+                        LakshmiChip(text: vm.isPaper ? "PAPER" : "LIVE",
+                                 color: vm.isPaper ? .orange : LakshmiTheme.positive)
+                        LakshmiChip(text: vm.modelDisplay,
+                                 color: LakshmiTheme.purple)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -106,8 +106,8 @@ private struct AccountErrorBanner: View {
             Text(message).font(.caption).foregroundStyle(.white).lineLimit(2)
         }
         .padding(12)
-        .background(KovaTheme.negative)
-        .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+        .background(LakshmiTheme.negative)
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
     }
 }
 
@@ -119,7 +119,7 @@ private struct PureAIHeroCard: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                LinearGradient(colors: [KovaTheme.purple, KovaTheme.blue],
+                LinearGradient(colors: [LakshmiTheme.purple, LakshmiTheme.blue],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                 VStack(spacing: 6) {
                     Text("Portfolio Value")
@@ -130,12 +130,12 @@ private struct PureAIHeroCard: View {
                     if let pl = vm.status?.realizedPl, pl != 0 {
                         Text(vm.realizedPlDisplay + " realized")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(vm.realizedPlPositive ? KovaTheme.positive : KovaTheme.negative)
+                            .foregroundStyle(vm.realizedPlPositive ? LakshmiTheme.positive : LakshmiTheme.negative)
                     }
                 }
                 .padding(.vertical, 22)
             }
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
 
             // Stats row
             HStack(spacing: 0) {
@@ -152,8 +152,8 @@ private struct PureAIHeroCard: View {
                          value: vm.status?.reservedCash.map { String(format: "$%.0f", $0) } ?? "$0")
             }
             .padding(.vertical, 8)
-            .background(KovaTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+            .background(LakshmiTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
             .padding(.top, 4)
         }
     }
@@ -210,13 +210,13 @@ private struct PureAIHoldingsSection: View {
                 .padding(.vertical, 14)
                 .background {
                     if vm.isRunning {
-                        KovaTheme.purple.opacity(0.5)
+                        LakshmiTheme.purple.opacity(0.5)
                     } else {
-                        LinearGradient(colors: [KovaTheme.purple, KovaTheme.blue],
+                        LinearGradient(colors: [LakshmiTheme.purple, LakshmiTheme.blue],
                                        startPoint: .leading, endPoint: .trailing)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
             }
             .disabled(vm.isRunning)
         }
@@ -228,12 +228,12 @@ private struct PureAIHoldingRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(holding.isUp ? KovaTheme.positive.opacity(0.15) : KovaTheme.negative.opacity(0.15))
+                .fill(holding.isUp ? LakshmiTheme.positive.opacity(0.15) : LakshmiTheme.negative.opacity(0.15))
                 .frame(width: 42, height: 42)
                 .overlay(
                     Text(String(holding.symbol.prefix(2)))
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(holding.isUp ? KovaTheme.positive : KovaTheme.negative)
+                        .foregroundStyle(holding.isUp ? LakshmiTheme.positive : LakshmiTheme.negative)
                 )
             VStack(alignment: .leading, spacing: 2) {
                 Text(holding.symbol).font(.headline)
@@ -249,7 +249,7 @@ private struct PureAIHoldingRow: View {
                             holding.unrealizedPl,
                             holding.unrealizedPlPct))
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(holding.isUp ? KovaTheme.positive : KovaTheme.negative)
+                    .foregroundStyle(holding.isUp ? LakshmiTheme.positive : LakshmiTheme.negative)
             }
         }
         .padding(14)
@@ -299,12 +299,12 @@ private struct PureAIDecisionCard: View {
                 }
                 Spacer()
                 if let err = decision.error {
-                    KovaChip(text: "Error", color: KovaTheme.negative)
+                    LakshmiChip(text: "Error", color: LakshmiTheme.negative)
                         .help(err)
                 } else {
                     let count = (decision.executed?.filter { $0.status == "submitted" }.count) ?? 0
-                    KovaChip(text: count > 0 ? "\(count) trades" : "No trades",
-                             color: count > 0 ? KovaTheme.positive : .gray)
+                    LakshmiChip(text: count > 0 ? "\(count) trades" : "No trades",
+                             color: count > 0 ? LakshmiTheme.positive : .gray)
                 }
             }
 
@@ -327,16 +327,16 @@ private struct PureAIDecisionCard: View {
                 Divider()
                 ForEach(orders) { o in
                     HStack {
-                        KovaChip(text: o.action.uppercased(),
-                                 color: o.action == "sell" ? KovaTheme.negative : KovaTheme.positive)
+                        LakshmiChip(text: o.action.uppercased(),
+                                 color: o.action == "sell" ? LakshmiTheme.negative : LakshmiTheme.positive)
                         Text(o.symbol).font(.caption.weight(.bold))
                         if let dollars = o.dollars {
                             Text(String(format: "$%.0f", dollars)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        KovaChip(text: o.status,
-                                 color: o.status == "submitted" ? KovaTheme.positive :
-                                        o.status == "rejected" ? .orange : KovaTheme.negative)
+                        LakshmiChip(text: o.status,
+                                 color: o.status == "submitted" ? LakshmiTheme.positive :
+                                        o.status == "rejected" ? .orange : LakshmiTheme.negative)
                     }
                     if let note = o.thesis ?? o.reason ?? o.why {
                         Text(note).font(.caption2).foregroundStyle(.secondary).padding(.leading, 4)
@@ -353,7 +353,7 @@ private struct PureAIDecisionCard: View {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                .foregroundStyle(KovaTheme.purple)
+                .foregroundStyle(LakshmiTheme.purple)
             }
         }
         .padding(14)
@@ -400,8 +400,8 @@ private struct PureAISettingsSection: View {
                 StepperRow(label: "Max web searches",
                            value: $vm.editMaxSearches, range: 2...15)
             }
-            .background(KovaTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radius))
+            .background(LakshmiTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
 
             Button {
                 Task { await vm.saveConfig() }
@@ -417,8 +417,8 @@ private struct PureAISettingsSection: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(vm.isSavingConfig ? KovaTheme.purple.opacity(0.5) : KovaTheme.purple)
-                .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                .background(vm.isSavingConfig ? LakshmiTheme.purple.opacity(0.5) : LakshmiTheme.purple)
+                .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
             }
             .disabled(vm.isSavingConfig)
 
@@ -481,17 +481,17 @@ private struct PureAISettingsSection: View {
             }
             .padding(14)
             .background(Color.green.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("About this experiment")
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text("The selected AI model receives only its own portfolio + today's date. It searches the web, picks stocks, and executes — no signal pipeline, no curated data. After 30 days we compare its Sharpe, win rate, and drawdown against Kova. Use Opus 4.8 for best results; Sonnet 4.6 or Haiku 4.5 to reduce cost.")
+                Text("The selected AI model receives only its own portfolio + today's date. It searches the web, picks stocks, and executes — no signal pipeline, no curated data. After 30 days we compare its Sharpe, win rate, and drawdown against Lakshmi. Use Opus 4.8 for best results; Sonnet 4.6 or Haiku 4.5 to reduce cost.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(14)
-            .background(KovaTheme.purple.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+            .background(LakshmiTheme.purple.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
         }
     }
 }
@@ -511,7 +511,7 @@ struct PureAICycleResultSheet: View {
                             Text("Market View").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                             Text(mv).font(.subheadline)
                         }
-                        .padding(14).background(KovaTheme.card).clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                        .padding(14).background(LakshmiTheme.card).clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
                     }
 
                     if let searches = result?.searches, !searches.isEmpty {
@@ -524,7 +524,7 @@ struct PureAICycleResultSheet: View {
                                 }
                             }
                         }
-                        .padding(14).background(KovaTheme.card).clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                        .padding(14).background(LakshmiTheme.card).clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
                     }
 
                     if let orders = result?.executed, !orders.isEmpty {
@@ -532,27 +532,27 @@ struct PureAICycleResultSheet: View {
                             Text("Executed (\(orders.count))").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                             ForEach(orders) { o in
                                 HStack {
-                                    KovaChip(text: o.action.uppercased(),
-                                             color: o.action == "sell" ? KovaTheme.negative : KovaTheme.positive)
+                                    LakshmiChip(text: o.action.uppercased(),
+                                             color: o.action == "sell" ? LakshmiTheme.negative : LakshmiTheme.positive)
                                     Text(o.symbol).font(.subheadline.weight(.bold))
                                     if let d = o.dollars { Text(String(format: "$%.0f", d)).font(.caption).foregroundStyle(.secondary) }
                                     Spacer()
-                                    KovaChip(text: o.status,
-                                             color: o.status == "submitted" ? KovaTheme.positive :
-                                                    o.status == "rejected" ? .orange : KovaTheme.negative)
+                                    LakshmiChip(text: o.status,
+                                             color: o.status == "submitted" ? LakshmiTheme.positive :
+                                                    o.status == "rejected" ? .orange : LakshmiTheme.negative)
                                 }
                                 if let note = o.thesis ?? o.reason ?? o.why {
                                     Text(note).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
                         }
-                        .padding(14).background(KovaTheme.card).clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                        .padding(14).background(LakshmiTheme.card).clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
                     }
 
                     if let err = result?.error {
-                        Text("Error: \(err)").font(.caption).foregroundStyle(KovaTheme.negative)
-                            .padding(14).background(KovaTheme.negative.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: KovaTheme.radiusSm))
+                        Text("Error: \(err)").font(.caption).foregroundStyle(LakshmiTheme.negative)
+                            .padding(14).background(LakshmiTheme.negative.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
                     }
 
                     if result?.marketView == nil && (result?.executed?.isEmpty ?? true) && result?.error == nil {
@@ -564,7 +564,7 @@ struct PureAICycleResultSheet: View {
                 }
                 .padding(16)
             }
-            .background(KovaTheme.pageBackground.ignoresSafeArea())
+            .background(LakshmiTheme.pageBackground.ignoresSafeArea())
             .navigationTitle("Cycle Result")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

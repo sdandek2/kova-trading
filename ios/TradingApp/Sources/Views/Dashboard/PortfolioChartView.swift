@@ -12,7 +12,7 @@ struct PortfolioChartView: View {
         (points.last?.equity ?? 0) >= (points.first?.equity ?? 0)
     }
 
-    private var lineColor: Color { isPositive ? KovaTheme.positive : KovaTheme.negative }
+    private var lineColor: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
 
     private var areaGradient: LinearGradient {
         LinearGradient(
@@ -89,7 +89,7 @@ struct PortfolioChartView: View {
                             .foregroundStyle(selectedPeriod == period ? .white : .secondary)
                             .background {
                                 if selectedPeriod == period {
-                                    KovaTheme.blueGradient
+                                    LakshmiTheme.blueGradient
                                 } else {
                                     Color.clear
                                 }
@@ -103,7 +103,7 @@ struct PortfolioChartView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .kovaCard()
-        .padding(.horizontal, KovaTheme.pagePad)
+        .padding(.horizontal, LakshmiTheme.pagePad)
     }
 
     @ViewBuilder
@@ -118,10 +118,10 @@ struct PortfolioChartView: View {
                 Text(String(format: "%@%.2f%%", positive ? "+" : "", pct))
                     .font(.caption.weight(.semibold))
             }
-            .foregroundStyle(positive ? KovaTheme.positive : KovaTheme.negative)
+            .foregroundStyle(positive ? LakshmiTheme.positive : LakshmiTheme.negative)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background((positive ? KovaTheme.positive : KovaTheme.negative).opacity(0.12))
+            .background((positive ? LakshmiTheme.positive : LakshmiTheme.negative).opacity(0.12))
             .clipShape(Capsule())
         }
     }
