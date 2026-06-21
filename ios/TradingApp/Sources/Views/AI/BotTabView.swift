@@ -44,7 +44,7 @@ struct BotTabView: View {
                             icon: "gearshape.2.fill",
                             title: "Bot Configuration",
                             subtitle: "Strategy · risk · watchlist · model",
-                            color: LakshmiTheme.purple
+                            color: LakshmiTheme.gold
                         )
                     }
                     .buttonStyle(PressScaleButtonStyle())
@@ -155,7 +155,7 @@ private struct BotHeroCard: View {
                 .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true), value: orbMove)
 
             Circle()
-                .fill(LakshmiTheme.purple.opacity(0.14))
+                .fill(LakshmiTheme.amber.opacity(0.14))
                 .frame(width: 160, height: 160)
                 .blur(radius: 50)
                 .offset(x: orbMove ? -60 : 40, y: orbMove ? 40 : -30)
@@ -251,13 +251,13 @@ private struct DecisionFeedCard: View {
             // Header
             HStack(spacing: 10) {
                 ZStack {
-                    Circle().fill(LakshmiTheme.purple.opacity(0.12)).frame(width: 36, height: 36)
-                    Image(systemName: "brain.head.profile").foregroundStyle(LakshmiTheme.purple).font(.system(size: 16))
+                    Circle().fill(LakshmiTheme.gold.opacity(0.12)).frame(width: 36, height: 36)
+                    Image(systemName: "brain.head.profile").foregroundStyle(LakshmiTheme.gold).font(.system(size: 16))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text("AI Decisions").font(.headline)
-                        if !decisions.isEmpty { LiveDot(color: LakshmiTheme.purple) }
+                        if !decisions.isEmpty { LiveDot(color: LakshmiTheme.gold) }
                     }
                     // Next cycle
                     if let latest = decisions.first,
@@ -302,7 +302,7 @@ private struct DecisionFeedCard: View {
                             Text(expanded ? "Show less" : "Show \(decisions.count - 1) more")
                             Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
                         }
-                        .font(.caption).foregroundStyle(LakshmiTheme.blue)
+                        .font(.caption).foregroundStyle(LakshmiTheme.gold)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
                 }
@@ -365,7 +365,7 @@ private struct BotSettingsPage: View {
                 } label: {
                     GlassNavRow(icon: "text.badge.plus", title: "AI Prompt",
                                 subtitle: "View last prompt · set override instructions",
-                                color: LakshmiTheme.purple)
+                                color: LakshmiTheme.amber)
                 }
                 .buttonStyle(PressScaleButtonStyle())
             }

@@ -375,7 +375,7 @@ private struct PositionsSection: View {
                 VStack(spacing: 10) {
                     Image(systemName: "chart.pie")
                         .font(.system(size: 36))
-                        .foregroundStyle(LakshmiTheme.purple.opacity(0.35))
+                        .foregroundStyle(LakshmiTheme.gold.opacity(0.35))
                     Text("No open positions")
                         .foregroundStyle(.secondary)
                         .font(.subheadline)

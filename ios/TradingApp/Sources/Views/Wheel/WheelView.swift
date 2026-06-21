@@ -76,7 +76,7 @@ private struct WheelHeroCard: View {
         VStack(spacing: 0) {
             // Gradient header
             LinearGradient(
-                colors: [LakshmiTheme.purple, LakshmiTheme.blue],
+                colors: [LakshmiTheme.gold, LakshmiTheme.amber],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
             .frame(height: 120)
@@ -117,7 +117,7 @@ private struct WheelHeroCard: View {
                     )
                 }
                 .padding(.vertical, 10)
-                .background(LakshmiTheme.purple.opacity(0.08))
+                .background(LakshmiTheme.gold.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 4)
             }
@@ -165,7 +165,7 @@ private struct WheelStatCell: View {
         VStack(spacing: 4) {
             Image(systemName: icon)
                 .font(.system(size: 14))
-                .foregroundStyle(LakshmiTheme.purple)
+                .foregroundStyle(LakshmiTheme.gold)
             Text(value)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
             Text(label)
@@ -250,7 +250,7 @@ private struct WheelControlsCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(LakshmiTheme.blue)
+                .tint(LakshmiTheme.gold)
                 .disabled(vm.isScanningOpps || vm.isRunningCycle)
 
                 // Run full cycle
@@ -270,7 +270,7 @@ private struct WheelControlsCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(LakshmiTheme.purple)
+                .tint(LakshmiTheme.amber)
                 .disabled(vm.isRunningCycle || vm.isScanningOpps)
             }
 

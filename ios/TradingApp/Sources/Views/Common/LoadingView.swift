@@ -11,7 +11,7 @@ struct LoadingView: View {
             ZStack {
                 // Outer glow ring
                 Circle()
-                    .stroke(LakshmiTheme.purple.opacity(0.08), lineWidth: 28)
+                    .stroke(LakshmiTheme.gold.opacity(0.12), lineWidth: 28)
                     .frame(width: 100, height: 100)
 
                 // Spinning gradient arc
@@ -19,7 +19,7 @@ struct LoadingView: View {
                     .trim(from: 0, to: 0.72)
                     .stroke(
                         AngularGradient(
-                            colors: [LakshmiTheme.pink, LakshmiTheme.purple, LakshmiTheme.blue, LakshmiTheme.pink],
+                            colors: [LakshmiTheme.gold, LakshmiTheme.amber, LakshmiTheme.saffron, LakshmiTheme.gold],
                             center: .center
                         ),
                         style: StrokeStyle(lineWidth: 3, lineCap: .round)

@@ -46,7 +46,7 @@ struct PureAIView: View {
                         LakshmiChip(text: vm.isPaper ? "PAPER" : "LIVE",
                                  color: vm.isPaper ? .orange : LakshmiTheme.positive)
                         LakshmiChip(text: vm.modelDisplay,
-                                 color: LakshmiTheme.purple)
+                                 color: LakshmiTheme.gold)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -119,7 +119,7 @@ private struct PureAIHeroCard: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                LinearGradient(colors: [LakshmiTheme.purple, LakshmiTheme.blue],
+                LinearGradient(colors: [LakshmiTheme.gold, LakshmiTheme.amber],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                 VStack(spacing: 6) {
                     Text("Portfolio Value")
@@ -210,9 +210,9 @@ private struct PureAIHoldingsSection: View {
                 .padding(.vertical, 14)
                 .background {
                     if vm.isRunning {
-                        LakshmiTheme.purple.opacity(0.5)
+                        LakshmiTheme.amber.opacity(0.6)
                     } else {
-                        LinearGradient(colors: [LakshmiTheme.purple, LakshmiTheme.blue],
+                        LinearGradient(colors: [LakshmiTheme.gold, LakshmiTheme.amber],
                                        startPoint: .leading, endPoint: .trailing)
                     }
                 }
@@ -353,7 +353,7 @@ private struct PureAIDecisionCard: View {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                .foregroundStyle(LakshmiTheme.purple)
+                .foregroundStyle(LakshmiTheme.gold)
             }
         }
         .padding(14)
@@ -417,7 +417,13 @@ private struct PureAISettingsSection: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(vm.isSavingConfig ? LakshmiTheme.purple.opacity(0.5) : LakshmiTheme.purple)
+                .background {
+                    if vm.isSavingConfig {
+                        LakshmiTheme.amber.opacity(0.5)
+                    } else {
+                        LakshmiTheme.amber
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
             }
             .disabled(vm.isSavingConfig)
@@ -490,7 +496,7 @@ private struct PureAISettingsSection: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(14)
-            .background(LakshmiTheme.purple.opacity(0.07))
+            .background(LakshmiTheme.gold.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
         }
     }

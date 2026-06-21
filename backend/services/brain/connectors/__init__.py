@@ -27,16 +27,14 @@ def get_all_signals(symbol: str) -> dict:
     """
     from .unusual_whales import get_options_flow
     from .fmp import get_estimate_revision
-    from .quiver import get_darkpool_signal
 
     flow    = get_options_flow(symbol)
     rev     = get_estimate_revision(symbol)
-    dark    = get_darkpool_signal(symbol)
 
     total_boost = 0
     active = []
 
-    for name, result in [("unusual_whales", flow), ("fmp", rev), ("quiver", dark)]:
+    for name, result in [("unusual_whales", flow), ("fmp", rev)]:
         boost = result.get("conviction_boost", 0)
         total_boost += boost
         if result.get("signal") != "unavailable":
@@ -51,7 +49,7 @@ def get_all_signals(symbol: str) -> dict:
         "total_boost":        total_boost,
         "options_flow":       flow,
         "earnings_revision":  rev,
-        "dark_pool":          dark,
+        "dark_pool":          {"signal": "unavailable", "conviction_boost": 0, "details": "disabled"},
         "active_sources":     active,
     }
 
@@ -66,10 +64,9 @@ def connector_status() -> dict:
         return {
             "unusual_whales": bool(settings.uw_api_key),
             "fmp":            bool(settings.fmp_api_key),
-            "quiver":         bool(settings.quiver_api_key),
         }
     except Exception:
-        return {"unusual_whales": False, "fmp": False, "quiver": False}
+        return {"unusual_whales": False, "fmp": False}
 
 
 def log_connector_status() -> None:

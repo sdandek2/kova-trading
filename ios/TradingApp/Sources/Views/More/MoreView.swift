@@ -21,7 +21,7 @@ struct MoreView: View {
 
                     // ── Trading history ────────────────────────────────────
                     MoreSection(title: "History & Reports") {
-                        MoreNavLink(icon: "chart.bar.xaxis", title: "Trade History", subtitle: "Closed positions + decisions", color: LakshmiTheme.purple) {
+                        MoreNavLink(icon: "chart.bar.xaxis", title: "Trade History", subtitle: "Closed positions + decisions", color: LakshmiTheme.gold) {
                             TradeHistoryView()
                         }
                         MoreNavLink(icon: "chart.bar.doc.horizontal", title: "Daily Report", subtitle: "End-of-day AI summary", color: .indigo) {
@@ -160,11 +160,11 @@ private struct MoreBotLink: View {
             HStack(spacing: 13) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(LakshmiTheme.purple.opacity(0.13))
+                        .fill(LakshmiTheme.gold.opacity(0.13))
                         .frame(width: 36, height: 36)
                     Image(systemName: "brain")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(LakshmiTheme.purple)
+                        .foregroundStyle(LakshmiTheme.gold)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Lakshmi Bot")

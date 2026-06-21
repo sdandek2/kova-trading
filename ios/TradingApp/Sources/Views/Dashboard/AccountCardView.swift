@@ -27,8 +27,8 @@ struct AccountCardView: View {
                 ZStack(alignment: .top) {
                     LakshmiTheme.card
                     LinearGradient(
-                        colors: [LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.18 : 0.09),
-                                 LakshmiTheme.blue.opacity(colorScheme == .dark ? 0.10 : 0.05),
+                        colors: [LakshmiTheme.gold.opacity(colorScheme == .dark ? 0.18 : 0.09),
+                                 LakshmiTheme.amber.opacity(colorScheme == .dark ? 0.10 : 0.05),
                                  .clear],
                         startPoint: .top,
                         endPoint: .bottom
@@ -38,7 +38,7 @@ struct AccountCardView: View {
 
             // ── Divider line with gradient ────────────────────────────────
             Rectangle()
-                .fill(LakshmiTheme.purple.opacity(0.15))
+                .fill(LakshmiTheme.gold.opacity(0.15))
                 .frame(height: 1)
 
             // ── Cash + Buying Power ───────────────────────────────────────
@@ -58,9 +58,9 @@ struct AccountCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
         .overlay(
             RoundedRectangle(cornerRadius: LakshmiTheme.radius)
-                .strokeBorder(LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.25 : 0.10), lineWidth: 1)
+                .strokeBorder(LakshmiTheme.gold.opacity(colorScheme == .dark ? 0.25 : 0.10), lineWidth: 1)
         )
-        .shadow(color: LakshmiTheme.purple.opacity(colorScheme == .dark ? 0.0 : 0.08),
+        .shadow(color: LakshmiTheme.gold.opacity(colorScheme == .dark ? 0.0 : 0.08),
                 radius: 12, x: 0, y: 4)
         .padding(.horizontal, LakshmiTheme.pagePad)
     }

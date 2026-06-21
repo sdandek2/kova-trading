@@ -43,7 +43,7 @@ struct FloatingTabBar: View {
                             Capsule()
                                 .fill(LakshmiTheme.brandGradient)
                                 .matchedGeometryEffect(id: "tabSelPill", in: namespace)
-                                .shadow(color: LakshmiTheme.purple.opacity(0.4), radius: 8, x: 0, y: 3)
+                                .shadow(color: LakshmiTheme.gold.opacity(0.4), radius: 8, x: 0, y: 3)
                         }
                     }
                 }

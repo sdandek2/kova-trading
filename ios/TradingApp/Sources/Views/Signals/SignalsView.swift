@@ -154,7 +154,7 @@ private struct IdeasPage: View {
                 } else if vm.suggestions.isEmpty && !vm.isLoadingSuggestions {
                     VStack(spacing: 10) {
                         Image(systemName: "lightbulb").font(.system(size: 36))
-                            .foregroundStyle(LakshmiTheme.purple.opacity(0.4))
+                            .foregroundStyle(LakshmiTheme.gold.opacity(0.4))
                         Text("Tap refresh to load AI suggestions")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
@@ -234,7 +234,7 @@ private struct TickerSearchRow: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(LakshmiTheme.purple)
+                        .background(LakshmiTheme.amber)
                         .clipShape(Capsule())
                 }
             }

@@ -209,7 +209,6 @@ def _disable_connector_weight(connector: str) -> None:
         "finnhub": ["analyst_revision"],
         "sec_insider": ["insider_buy_large", "insider_buy_small"],
         "fmp_earnings": ["earnings_surprise_strong", "earnings_surprise_mild"],
-        "quiver": [],  # institutional data — no direct signal weight
         "unusual_whales": ["options_flow_fallback"],
         # Core infrastructure — no signal weight mapping; if these fail, bot can't trade at all
         "alpaca_account": [],

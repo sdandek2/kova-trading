@@ -21,8 +21,8 @@ struct WheelUniverseView: View {
                             Text("\(count) stocks")
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 7).padding(.vertical, 2)
-                                .background(LakshmiTheme.purple.opacity(0.12))
-                                .foregroundStyle(LakshmiTheme.purple)
+                                .background(LakshmiTheme.gold.opacity(0.12))
+                                .foregroundStyle(LakshmiTheme.gold)
                                 .clipShape(Capsule())
                         }
                     }
@@ -42,7 +42,7 @@ struct WheelUniverseView: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .tint(LakshmiTheme.purple)
+                .tint(LakshmiTheme.gold)
                 .disabled(vm.isRefreshingUniverse)
             }
 
@@ -98,10 +98,10 @@ struct WheelUniverseView: View {
                             Image(systemName: showAll ? "chevron.up" : "chevron.down")
                                 .font(.caption2)
                         }
-                        .foregroundStyle(LakshmiTheme.purple)
+                        .foregroundStyle(LakshmiTheme.gold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .background(LakshmiTheme.purple.opacity(0.06))
+                        .background(LakshmiTheme.gold.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
