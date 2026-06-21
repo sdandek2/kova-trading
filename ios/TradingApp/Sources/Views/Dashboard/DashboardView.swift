@@ -248,9 +248,9 @@ private struct AnimatedOrbBackground: View {
                 .offset(x: move ? 30 : -40, y: move ? -70 : 30)
                 .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { move = true }
         .allowsHitTesting(false)
-        .clipped()
     }
 }
 

@@ -71,88 +71,138 @@ struct WheelView: View {
 
 private struct WheelHeroCard: View {
     @ObservedObject var vm: WheelViewModel
+    @State private var appeared = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Gradient header
-            LinearGradient(
-                colors: [LakshmiTheme.gold, LakshmiTheme.amber],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            .frame(height: 120)
-            .overlay {
-                VStack(spacing: 6) {
-                    Text("Total Premium Collected")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text(vm.totalPremiumDisplay)
-                        .font(.system(size: 36, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text("Realized P&L: \(vm.realizedPlDisplay)")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 20))
+            // ── Dark hero — same language as Lakshmi + PureAI ──────────────
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.14, green: 0.08, blue: 0.01),
+                        Color(red: 0.08, green: 0.04, blue: 0.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                WheelOrbBackground()
 
-            // Account balance row
+                VStack(spacing: 8) {
+                    Text("WHEEL BOT")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .tracking(3)
+                        .foregroundStyle(.white.opacity(0.38))
+
+                    Text(vm.totalPremiumDisplay)
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .tracking(-1.5)
+                        .foregroundStyle(.white)
+                        .contentTransition(.numericText())
+
+                    HStack(spacing: 6) {
+                        Text("Realized P&L:")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.50))
+                        Text(vm.realizedPlDisplay)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(LakshmiTheme.positive)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(.white.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
+            }
+
+            // ── Account row ─────────────────────────────────────────────────
             if let acct = vm.status?.account {
+                Rectangle()
+                    .fill(LakshmiTheme.brandGradient.opacity(0.30))
+                    .frame(height: 1)
+
                 HStack(spacing: 0) {
-                    WheelStatCell(
-                        label: "Portfolio",
-                        value: String(format: "$%.0f", acct.portfolioValue),
-                        icon: "dollarsign.circle.fill"
-                    )
-                    Divider().frame(height: 36)
-                    WheelStatCell(
-                        label: "Cash",
-                        value: String(format: "$%.0f", acct.cash),
-                        icon: "banknote.fill"
-                    )
-                    Divider().frame(height: 36)
-                    WheelStatCell(
-                        label: "Buying Power",
-                        value: String(format: "$%.0f", acct.buyingPower),
-                        icon: "bolt.fill"
-                    )
+                    WheelStatCell(label: "Portfolio",    value: String(format: "$%.0f", acct.portfolioValue), icon: "dollarsign.circle.fill")
+                    Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                    WheelStatCell(label: "Cash",         value: String(format: "$%.0f", acct.cash),          icon: "banknote.fill")
+                    Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                    WheelStatCell(label: "Buying Power", value: String(format: "$%.0f", acct.buyingPower),   icon: "bolt.fill")
                 }
                 .padding(.vertical, 10)
-                .background(LakshmiTheme.gold.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal, 4)
+                .background(.white.opacity(0.04))
             }
 
-            // Stats row
+            // ── Stats row ────────────────────────────────────────────────────
+            Rectangle()
+                .fill(LakshmiTheme.brandGradient.opacity(0.25))
+                .frame(height: 1)
+
             HStack(spacing: 0) {
-                WheelStatCell(
-                    label: "Positions",
-                    value: vm.slotsDisplay,
-                    icon: "chart.bar.fill"
-                )
-                Divider().frame(height: 36)
-                WheelStatCell(
-                    label: "Completed",
-                    value: "\(vm.status?.summary.completedCycles ?? 0)",
-                    icon: "checkmark.circle.fill"
-                )
-                Divider().frame(height: 36)
-                WheelStatCell(
-                    label: "Win Rate",
-                    value: vm.status?.summary.winRate.map { String(format: "%.0f%%", $0) } ?? "—",
-                    icon: "trophy.fill"
-                )
-                Divider().frame(height: 36)
-                WheelStatCell(
-                    label: "Reserve",
-                    value: vm.status.flatMap { $0.profitReserve }.map { String(format: "$%.0f", $0) } ?? "$0",
-                    icon: "banknote.fill"
-                )
+                WheelStatCell(label: "Positions",  value: vm.slotsDisplay,                                                                             icon: "chart.bar.fill")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                WheelStatCell(label: "Completed",  value: "\(vm.status?.summary.completedCycles ?? 0)",                                                icon: "checkmark.circle.fill")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                WheelStatCell(label: "Win Rate",   value: vm.status?.summary.winRate.map { String(format: "%.0f%%", $0) } ?? "—",                    icon: "trophy.fill")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                WheelStatCell(label: "Reserve",    value: vm.status.flatMap { $0.profitReserve }.map { String(format: "$%.0f", $0) } ?? "$0",         icon: "banknote.fill")
             }
             .padding(.vertical, 12)
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.top, -8)
+            .background(.white.opacity(0.03))
         }
+        .background {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.14, green: 0.08, blue: 0.01),
+                        Color(red: 0.08, green: 0.04, blue: 0.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                RoundedRectangle(cornerRadius: LakshmiTheme.radius)
+                    .stroke(LakshmiTheme.brandGradient.opacity(0.35), lineWidth: 1)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
+        .shadow(color: LakshmiTheme.gold.opacity(0.32), radius: 22, x: 0, y: 10)
+        .scaleEffect(appeared ? 1 : 0.95)
+        .opacity(appeared ? 1 : 0)
+        .animation(.spring(response: 0.5, dampingFraction: 0.82), value: appeared)
+        .onAppear { appeared = true }
+    }
+}
+
+private struct WheelOrbBackground: View {
+    @State private var move = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(LakshmiTheme.gold.opacity(0.22))
+                .frame(width: 320, height: 320)
+                .blur(radius: 100)
+                .offset(x: move ? 90 : -60, y: move ? -50 : 40)
+                .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
+
+            Circle()
+                .fill(LakshmiTheme.amber.opacity(0.16))
+                .frame(width: 260, height: 260)
+                .blur(radius: 90)
+                .offset(x: move ? -100 : 70, y: move ? 60 : -55)
+                .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
+
+            Circle()
+                .fill(LakshmiTheme.saffron.opacity(0.12))
+                .frame(width: 200, height: 200)
+                .blur(radius: 80)
+                .offset(x: move ? 30 : -40, y: move ? -70 : 30)
+                .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { move = true }
+        .allowsHitTesting(false)
     }
 }
 
@@ -164,13 +214,14 @@ private struct WheelStatCell: View {
     var body: some View {
         VStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.system(size: 14))
-                .foregroundStyle(LakshmiTheme.gold)
+                .font(.system(size: 13))
+                .foregroundStyle(LakshmiTheme.gold.opacity(0.80))
             Text(value)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
             Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
         }
         .frame(maxWidth: .infinity)
     }

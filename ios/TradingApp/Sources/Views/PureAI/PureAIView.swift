@@ -115,57 +115,132 @@ private struct AccountErrorBanner: View {
 
 private struct PureAIHeroCard: View {
     @ObservedObject var vm: PureAIViewModel
+    @State private var appeared = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // ── Dark amber hero — same language as Lakshmi ──────────────────
             ZStack {
-                LinearGradient(colors: [LakshmiTheme.gold, LakshmiTheme.amber],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                VStack(spacing: 6) {
-                    Text("Portfolio Value")
-                        .font(.caption).foregroundStyle(.white.opacity(0.75))
+                // Base: deep cognac, matches Lakshmi's dark-brown but warmer
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.17, green: 0.09, blue: 0.01),
+                        Color(red: 0.09, green: 0.04, blue: 0.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                PureAIOrbBackground()
+
+                VStack(spacing: 8) {
+                    Text("PURE-AI")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .tracking(3)
+                        .foregroundStyle(.white.opacity(0.38))
+
                     Text(vm.equityDisplay)
-                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .tracking(-1.5)
                         .foregroundStyle(.white)
+                        .contentTransition(.numericText())
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: vm.equityDisplay)
+
                     if let pl = vm.status?.realizedPl, pl != 0 {
-                        Text(vm.realizedPlDisplay + " realized")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(vm.realizedPlPositive ? LakshmiTheme.positive : LakshmiTheme.negative)
+                        PLBadge(value: pl, percentValue: 0, showArrow: true)
                     }
                 }
-                .padding(.vertical, 22)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
             }
-            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
 
-            // Stats row
+            // ── Stats row — same dark surface, no jarring colour jump ───────
             HStack(spacing: 0) {
-                StatCell(label: "Positions",
-                         value: "\(vm.holdingsCount)")
-                Divider().frame(height: 36)
-                StatCell(label: "Closed",
-                         value: "\(vm.status?.closedTrades ?? 0)")
-                Divider().frame(height: 36)
-                StatCell(label: "Win Rate",
-                         value: vm.status?.winRate.map { String(format: "%.0f%%", $0) } ?? "--")
-                Divider().frame(height: 36)
-                StatCell(label: "Reserve",
-                         value: vm.status?.reservedCash.map { String(format: "$%.0f", $0) } ?? "$0")
+                PureAIStatCell(label: "Positions", value: "\(vm.holdingsCount)")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                PureAIStatCell(label: "Closed",    value: "\(vm.status?.closedTrades ?? 0)")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                PureAIStatCell(label: "Win Rate",  value: vm.status?.winRate.map { String(format: "%.0f%%", $0) } ?? "--")
+                Rectangle().fill(.white.opacity(0.10)).frame(width: 1, height: 28)
+                PureAIStatCell(label: "Reserve",   value: vm.status?.reservedCash.map { String(format: "$%.0f", $0) } ?? "$0")
             }
-            .padding(.vertical, 8)
-            .background(LakshmiTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
-            .padding(.top, 4)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.05))
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(LakshmiTheme.brandGradient.opacity(0.35))
+                    .frame(height: 1)
+            }
         }
+        .background {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.17, green: 0.09, blue: 0.01),
+                        Color(red: 0.09, green: 0.04, blue: 0.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                RoundedRectangle(cornerRadius: LakshmiTheme.radius)
+                    .stroke(LakshmiTheme.brandGradient.opacity(0.38), lineWidth: 1)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
+        .shadow(color: LakshmiTheme.amber.opacity(0.32), radius: 24, x: 0, y: 10)
+        .scaleEffect(appeared ? 1 : 0.95)
+        .opacity(appeared ? 1 : 0)
+        .animation(.spring(response: 0.5, dampingFraction: 0.82), value: appeared)
+        .onAppear { appeared = true }
     }
 }
 
-private struct StatCell: View {
+private struct PureAIOrbBackground: View {
+    @State private var move = false
+
+    var body: some View {
+        ZStack {
+            // Warm amber orb — top right
+            Circle()
+                .fill(LakshmiTheme.gold.opacity(0.30))
+                .frame(width: 320, height: 320)
+                .blur(radius: 100)
+                .offset(x: move ? 90 : -50, y: move ? -45 : 35)
+                .animation(.easeInOut(duration: 7).repeatForever(autoreverses: true), value: move)
+
+            // Deep amber orb — bottom left
+            Circle()
+                .fill(LakshmiTheme.amber.opacity(0.20))
+                .frame(width: 260, height: 260)
+                .blur(radius: 90)
+                .offset(x: move ? -95 : 65, y: move ? 55 : -50)
+                .animation(.easeInOut(duration: 9).repeatForever(autoreverses: true).delay(1.5), value: move)
+
+            // Saffron accent — centre drift
+            Circle()
+                .fill(LakshmiTheme.saffron.opacity(0.14))
+                .frame(width: 200, height: 200)
+                .blur(radius: 75)
+                .offset(x: move ? 25 : -35, y: move ? -65 : 28)
+                .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true).delay(0.8), value: move)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { move = true }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct PureAIStatCell: View {
     let label: String
     let value: String
     var body: some View {
-        VStack(spacing: 2) {
-            Text(value).font(.headline.weight(.bold))
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
         }
         .frame(maxWidth: .infinity)
     }
