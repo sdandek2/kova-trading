@@ -393,6 +393,11 @@ Return valid JSON only — no markdown:
                 continue
             final_qty = max(1, round(float(pos.qty)))
             price = pos.current_price or 0
+            # 0.75 haircut: sell proceeds aren't settled when the next buy is sized.
+            # At <$100k this costs ~1 share per rotation — negligible.
+            # TODO(scale@$100k): replace with two-pass execution — execute sell first,
+            # confirm fill, re-query Alpaca cash, then call decide() for the buy.
+            # At $1M, 1 rotation/day leaves ~$37,500 idle per cycle (~$18k/yr in missed gains).
             remaining_cash = max(0.0, remaining_cash + price * final_qty * 0.75)
         else:
             continue
