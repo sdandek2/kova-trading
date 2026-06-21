@@ -315,6 +315,8 @@ async def run_trading_cycle():
             return
         _extended_hours = _market_status in ("premarket", "afterhours")
 
+        loop = asyncio.get_running_loop()
+
         # ── Fill-followup: check pending limit orders, update watermarks at actual fill price ──
         if _pending_fill_orders:
             for _oid in list(_pending_fill_orders.keys()):
@@ -411,7 +413,6 @@ async def run_trading_cycle():
 
         # Circuit breaker: block new buys if down more than daily loss limit.
         # Sells and scale-outs are still allowed — we want to exit losing positions even on bad days.
-        loop = asyncio.get_running_loop()
         account = await loop.run_in_executor(None, alpaca_service.get_account)
         # Bug fix: cast to float — Alpaca SDK can return Decimal or string in some versions,
         # which causes TypeError on f"{:.2f}" formatting and comparison with negative threshold.
@@ -1281,6 +1282,14 @@ async def run_trading_cycle():
                                  symbol=position.symbol, cycle_id=_current_cycle_id)
                 if position.symbol in _previous_positions:
                     _previous_positions[position.symbol]["exit_reason"] = "eod_flat"
+                # Cancel any open bracket/GTC orders before market sell to avoid oversell or accidental short
+                try:
+                    _open_eod = alpaca_service.get_orders(status="open", limit=50) or []
+                    for _eo in _open_eod:
+                        if getattr(_eo, "symbol", None) == position.symbol:
+                            alpaca_service.cancel_order(_eo.id)
+                except Exception as _ce:
+                    logger.warning(f"EOD flat cancel orders failed for {position.symbol}: {_ce}")
                 _flat_side = "sell" if position.side == "long" else "buy"
                 _flat_order = alpaca_service.submit_market_order(
                     symbol=position.symbol, qty=int(float(position.qty)), side=_flat_side
@@ -1562,7 +1571,7 @@ async def run_trading_cycle():
                     _tradeable_cash -= reentry_cost
                     # Bug fix: reset to 1 not 0 — requires 35% gain before next scale-out.
                     # Resetting to 0 creates an infinite scale-out/re-entry loop every cycle.
-                    _scale_out_counts[sym] = 0
+                    _scale_out_counts[sym] = 1
                     _pre_scaleout_qty.pop(sym, None)
                     await manager.broadcast({"type": "order_filled", "data": re_order.model_dump(mode="json")})
 
@@ -2088,7 +2097,7 @@ async def run_trading_cycle():
                     log_bot_activity("entry_rejected", _short_cap_msg,
                                      symbol=decision.symbol, cycle_id=_current_cycle_id)
                     continue
-                _sym_price = sym_data.get("current_price") or 0
+                _sym_price = snapshot_light.get(decision.symbol, {}).get("current_price") or 0
                 if _sym_price > 0:
                     _max_short_qty = int(_pv * 0.05 / _sym_price)
                     if decision.quantity > _max_short_qty and _max_short_qty >= 1:
@@ -2181,7 +2190,7 @@ async def run_trading_cycle():
                     # Uncertain earnings — aggressive mode gets a tiny 2% position
                     # with forced EOD exit to capture intraday momentum while avoiding
                     # overnight gap risk. Balanced mode still blocks outright.
-                    if is_aggressive:
+                    if strategy_key == "aggressive":
                         _ep_price_u = _sym_data.get("current_price")
                         if not _ep_price_u or _ep_price_u <= 0:
                             logger.warning(f"Earnings uncertain {decision.symbol}: no price, blocking")

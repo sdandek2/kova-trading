@@ -1111,6 +1111,69 @@ if _run("limits"):
         except Exception as _e:
             _fail(f"Max positions test crashed: {_e}")
 
+        # G-4: Sector cap — 2 tech stocks already held, 3rd tech should be blocked
+        _section("G-4. Sector cap (2 tech held, 3rd tech blocked)")
+        _tech_positions = [
+            _NS_g(symbol=s, side="long", qty=5, avg_entry_price=100.0,
+                  current_price=102.0, unrealized_pl_percent=+2.0,
+                  asset_class="us_equity")
+            for s in ["AAPL", "MSFT"]
+        ]
+        _tech_cand = [
+            _SC_g(symbol="NVDA", score=85, signal_type="momentum", suggested_action="buy",
+                  price=875.0, rsi=60.0, macd_hist=0.20, rs_percentile=94, rel_volume=2.1,
+                  regime_aligned=True, score_breakdown={"rs": 30, "macd": 20}),
+        ]
+        try:
+            _dec_sector = _decide_g(
+                scored_candidates=_tech_cand, positions=_tech_positions,
+                account_cash=cash, portfolio_value=portfolio,
+                regime_result=_lim_regime, rs_map=rs_map or {},
+                kelly_history=kelly_history, strategy=_lim_strategy,
+                news_headlines=news_headlines,
+                risk_settings={"max_positions": 6, "sector_cap": 2},
+            )
+            _sector_buys = [d for d in _dec_sector
+                            if getattr(d, "action", "") == "buy"
+                            and getattr(d, "symbol", "") == "NVDA"]
+            if not _sector_buys:
+                _ok("NVDA blocked — 2 tech positions already at sector_cap=2 ✓")
+            else:
+                _warn("NVDA allowed despite 2 tech positions — sector cap may not be enforced in brain")
+        except Exception as _e:
+            _fail(f"G-4 sector cap test crashed: {_e}")
+
+        # G-5: Earnings guard — stock with earnings today should be blocked or tiny
+        _section("G-5. Earnings guard (earnings today → blocked or tiny size)")
+        _earn_cand = [
+            _SC_g(symbol="NVDA", score=85, signal_type="momentum", suggested_action="buy",
+                  price=875.0, rsi=60.0, macd_hist=0.20, rs_percentile=94, rel_volume=2.1,
+                  regime_aligned=True, score_breakdown={"rs": 30, "macd": 20}),
+        ]
+        try:
+            _dec_earn = _decide_g(
+                scored_candidates=_earn_cand, positions=[],
+                account_cash=cash, portfolio_value=portfolio,
+                regime_result=_lim_regime, rs_map=rs_map or {},
+                kelly_history=kelly_history, strategy=_lim_strategy,
+                news_headlines=news_headlines,
+                earnings_map={"NVDA": "today/tomorrow"},
+            )
+            _earn_buys = [d for d in _dec_earn
+                          if getattr(d, "action", "") == "buy"
+                          and getattr(d, "symbol", "") == "NVDA"]
+            if not _earn_buys:
+                _ok("NVDA skipped on earnings day ✓")
+            else:
+                _qty = _earn_buys[0].quantity or 0
+                _max_safe = int(portfolio * 0.02 / 875.0)  # 2% max earnings position
+                if _qty <= _max_safe:
+                    _ok(f"NVDA earnings day: tiny position {_qty}sh (≤{_max_safe}sh 2% cap) ✓")
+                else:
+                    _warn(f"NVDA earnings day: {_qty}sh — larger than expected 2% cap ({_max_safe}sh)")
+        except Exception as _e:
+            _fail(f"G-5 earnings guard test crashed: {_e}")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 10 — Pipeline health summary
 # ══════════════════════════════════════════════════════════════════════════════

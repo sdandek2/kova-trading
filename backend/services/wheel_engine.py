@@ -1280,7 +1280,7 @@ def check_expirations():
                     continue
                 if not isinstance(expiry, date):
                     expiry = date.fromisoformat(str(expiry))
-                if expiry < today:
+                if expiry <= today:
                     # Use the qty-aware total recorded at fill; per-contract
                     # put_premium * 100 is only a single-contract fallback.
                     prem = float(pos.get("total_premium_collected") or 0) \
@@ -1299,7 +1299,7 @@ def check_expirations():
             elif pos["phase"] == "call_open" and pos.get("call_expiry"):
                 expiry = pos["call_expiry"] if isinstance(pos["call_expiry"], date) \
                          else date.fromisoformat(str(pos["call_expiry"]))
-                if expiry < today:
+                if expiry <= today:
                     total_prem = float(pos.get("total_premium_collected") or 0)
                     cost = float(pos.get("cost_basis") or 0)
                     call_strike = float(pos.get("call_strike") or 0)
@@ -2125,7 +2125,6 @@ def _reconcile_pending_orders():
                     c2 = _get_conn()
                     with c2.cursor() as cur:
                         cur.execute("DELETE FROM wheel_positions WHERE id = %s", (pos["id"],))
-                    c2.commit()
                     logger.info(
                         f"Wheel reconcile: {pos['symbol']} order {status} — "
                         f"removed phantom position {pos['id']}"
