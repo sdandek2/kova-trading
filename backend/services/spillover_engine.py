@@ -205,7 +205,7 @@ def _get_snapshots(symbols: list[str]) -> dict:
         return {}
     try:
         from alpaca.data.requests import StockSnapshotRequest
-        from alpaca.data.enums import Feed
+        from alpaca.data.enums import DataFeed as Feed
         client = _get_data_client()
         req = StockSnapshotRequest(symbol_or_symbols=symbols, feed=Feed.IEX)
         snaps = client.get_stock_snapshot(req)

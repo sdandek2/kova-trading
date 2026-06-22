@@ -256,7 +256,7 @@ def _get_all_snapshots_batch() -> dict:
     """Fetch batch snapshot for a broad universe to find volume spikes."""
     try:
         from alpaca.data.requests import StockSnapshotRequest
-        from alpaca.data.enums import Feed
+        from alpaca.data.enums import DataFeed as Feed
         # Use a broad but manageable universe — high-vol stocks most likely to squeeze
         universe = [
             "MARA", "RIOT", "COIN", "HOOD", "SOFI", "RIVN", "LCID", "NIO",
@@ -477,7 +477,7 @@ def _get_snapshots(symbols: list[str]) -> dict:
         return {}
     try:
         from alpaca.data.requests import StockSnapshotRequest
-        from alpaca.data.enums import Feed
+        from alpaca.data.enums import DataFeed as Feed
         client = _get_data_client()
         req = StockSnapshotRequest(symbol_or_symbols=symbols, feed=Feed.IEX)
         snaps = client.get_stock_snapshot(req)
