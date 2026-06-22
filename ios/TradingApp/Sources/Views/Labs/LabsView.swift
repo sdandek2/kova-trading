@@ -59,9 +59,7 @@ struct LabsView: View {
             ForEach(LabsViewModel.Engine.allCases, id: \.self) { engine in
                 let sel = engine == vm.selectedEngine
                 Button {
-                    withAnimation(LakshmiTheme.springSnappy) {
-                        Task { await vm.switchEngine(engine) }
-                    }
+                    Task { await vm.switchEngine(engine) }
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: engine.icon)
