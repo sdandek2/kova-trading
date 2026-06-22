@@ -159,17 +159,15 @@ final class LabsViewModel: ObservableObject {
 
     func loadAll() async {
         isLoading = true
-        errorMessage = nil
         defer { isLoading = false }
-        async let statusTask: AllEngineStatus = api.fetch("/experiments/status")
-        async let posTask: [ExperimentPosition] = api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
-        async let sumTask: EngineSummary = api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
-        do {
-            (allStatus, positions, summary) = try await (statusTask, posTask, sumTask)
-            lastRefreshed = Date()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        async let statusTask: AllEngineStatus? = try? api.fetch("/experiments/status")
+        async let posTask: [ExperimentPosition]? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
+        async let sumTask: EngineSummary? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
+        let (s, p, sm) = await (statusTask, posTask, sumTask)
+        if let s { allStatus = s }
+        if let p { positions = p }
+        if let sm { summary = sm }
+        lastRefreshed = Date()
     }
 
     func loadPositions() async {
