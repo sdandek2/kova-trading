@@ -311,7 +311,6 @@ private struct GlassStatCard: View {
     let label: String
     let value: String
     let color: Color
-    @State private var appeared = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -339,10 +338,6 @@ private struct GlassStatCard: View {
             RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm)
                 .stroke(color.opacity(0.15), lineWidth: 1)
         )
-        .scaleEffect(appeared ? 1 : 0.88)
-        .opacity(appeared ? 1 : 0)
-        .animation(LakshmiTheme.springBouncy, value: appeared)
-        .onAppear { appeared = true }
     }
 }
 
@@ -384,9 +379,8 @@ private struct PositionsSection: View {
                 .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radius))
             } else {
                 VStack(spacing: 8) {
-                    ForEach(Array(positions.enumerated()), id: \.element.id) { index, pos in
+                    ForEach(positions, id: \.id) { pos in
                         PositionRowView(position: pos)
-                            .cardAppear(delay: Double(index) * 0.05)
                     }
                 }
             }
