@@ -200,50 +200,6 @@ def get_connectors_health():
     return {"overall": overall, "connectors": results}
 
 
-@router.post("/reset-cycle")
-def reset_cycle():
-    """
-    Clear all Lakshmi trade/position records from the previous account cycle.
-    Call this after resetting the Alpaca paper account so metrics start fresh.
-    Does NOT touch wheel, experiment, or connector_health tables.
-    """
-    from services.db import _get_conn
-    from datetime import datetime, timezone
-    conn = _get_conn()
-    if not conn:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-    tables = [
-        "trade_log",
-        "position_log",
-        "daily_summary",
-        "circuit_breaker_log",
-        "bot_activity_log",
-        "blocked_trades",
-        "trade_slippage_log",
-        "daily_universe_log",
-        "near_miss_log",
-        "signal_performance_log",
-        "sprint_review_daily",
-    ]
-    counts = {}
-    try:
-        with conn.cursor() as cur:
-            for table in tables:
-                try:
-                    cur.execute(f"DELETE FROM {table}")
-                    counts[table] = cur.rowcount
-                except Exception:
-                    counts[table] = "skipped"
-        conn.commit()
-        return {
-            "status": "ok",
-            "reset_at": datetime.now(timezone.utc).isoformat(),
-            "rows_deleted": counts,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/connectors/reset-quiver")
 def reset_quiver_health():
     """
