@@ -443,7 +443,7 @@ def get_portfolio_history(period: str = "1W") -> list[dict]:
         import requests as _requests
         # Use Alpaca REST API directly — alpaca-py TradingClient
         # doesn't expose get_portfolio_history in all versions
-        base = settings.alpaca_base_url
+        base = settings.alpaca_base_url.rstrip("/").removesuffix("/v2")
         headers = {
             "APCA-API-KEY-ID": settings.alpaca_api_key,
             "APCA-API-SECRET-KEY": settings.alpaca_secret_key,
