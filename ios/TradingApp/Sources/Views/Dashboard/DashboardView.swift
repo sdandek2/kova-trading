@@ -86,7 +86,6 @@ struct DashboardView: View {
 
                     // ── Positions ──────────────────────────────────────────
                     PositionsSection(positions: vm.positions)
-                        .cardAppear(delay: 0.14)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)

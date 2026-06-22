@@ -24,19 +24,14 @@ class DashboardViewModel: ObservableObject {
 
     func load() async {
         isLoading = true
-        errorMessage = nil
-        do {
-            async let accountTask = APIService.shared.getAccount()
-            async let positionsTask = APIService.shared.getPositions()
-            async let historyTask = APIService.shared.getPortfolioHistory(period: "1W")
-            let (acc, pos, history) = try await (accountTask, positionsTask, historyTask)
-            account = acc
-            positions = pos
-            portfolioHistory = history
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
+        defer { isLoading = false }
+        async let accountTask: AccountInfo? = try? APIService.shared.getAccount()
+        async let positionsTask: [Position]? = try? APIService.shared.getPositions()
+        async let historyTask: [PortfolioPoint]? = try? APIService.shared.getPortfolioHistory(period: "1W")
+        let (acc, pos, history) = await (accountTask, positionsTask, historyTask)
+        if let acc { account = acc }
+        if let pos { positions = pos }
+        if let history { portfolioHistory = history }
     }
 
     func loadPortfolioHistory(period: String) async {
