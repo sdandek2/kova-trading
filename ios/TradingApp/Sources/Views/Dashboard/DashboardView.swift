@@ -81,7 +81,6 @@ struct DashboardView: View {
                             GlassStatCard(icon: "clock.arrow.2.circlepath", label: "Day P&L",
                                           value: formatPL(account.dayPl), color: account.dayPl >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative)
                         }
-                        .cardAppear(delay: 0.08)
                     }
 
                     // ── Positions ──────────────────────────────────────────
