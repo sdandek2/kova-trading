@@ -322,8 +322,8 @@ private struct PositionRow: View {
                     .foregroundStyle(.secondary)
             }
         case .revision:
-            if let d = pos.entryDate.flatMap({ $0.prefix(10) as? Substring }) {
-                Text("Since \(String(d))")
+            if let date = pos.entryDate {
+                Text("Since \(date.prefix(10))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
