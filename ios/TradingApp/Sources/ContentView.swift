@@ -17,16 +17,20 @@ struct ContentView: View {
                     .tag(1)
                     .toolbar(.hidden, for: .tabBar)
 
-                PureAIView()
+                LabsView()
                     .tag(2)
                     .toolbar(.hidden, for: .tabBar)
 
-                WheelView()
+                PureAIView()
                     .tag(3)
                     .toolbar(.hidden, for: .tabBar)
 
-                MoreView()
+                WheelView()
                     .tag(4)
+                    .toolbar(.hidden, for: .tabBar)
+
+                MoreView()
+                    .tag(5)
                     .toolbar(.hidden, for: .tabBar)
             }
             // Reserve space so content doesn't hide behind custom tab bar

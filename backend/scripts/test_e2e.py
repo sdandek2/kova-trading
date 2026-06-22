@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ── Argument parsing ──────────────────────────────────────────────────────────
 _VALID = {"unit", "pipeline", "rotation", "bear", "gemini",
           "ai_edge", "chop", "wheel", "limits",
-          "health", "calibrate", "project", "all"}
+          "health", "calibrate", "project", "experiments", "all"}
 _PIPELINE_DEPS = {"rotation", "bear", "gemini", "chop", "health"}  # need pipeline first
 
 _parser = argparse.ArgumentParser(
@@ -1437,6 +1437,194 @@ if _run("project"):
     print(f"  Breakeven = {BE_WR:.1%} win rate.")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST H — EXPERIMENT ENGINES (squeeze / spillover / revision)
+# ══════════════════════════════════════════════════════════════════════════════
+if _run("experiments"):
+    _header("TEST H: EXPERIMENT ENGINES — isolation, scoring, sector peers, NASDAQ API")
+
+    # H-1: Engine imports + isolation check
+    _section("H-1. Engine imports + isolation (no shared engine imports)")
+    _exp_engines_ok = True
+    for _eng_name, _eng_path in [
+        ("squeeze",   "services.squeeze_engine"),
+        ("spillover", "services.spillover_engine"),
+        ("revision",  "services.revision_engine"),
+    ]:
+        try:
+            import importlib
+            _mod = importlib.import_module(_eng_path)
+            _ok(f"{_eng_name}_engine imports OK")
+            # Verify engine never imports from shared engines
+            import inspect, ast
+            _src = inspect.getsource(_mod)
+            _tree = ast.parse(_src)
+            _bad_imports = []
+            for _node in ast.walk(_tree):
+                if isinstance(_node, (ast.Import, ast.ImportFrom)):
+                    _names = [a.name for a in getattr(_node, 'names', [])]
+                    _module = getattr(_node, 'module', '') or ''
+                    for _n in _names + [_module]:
+                        if any(x in _n for x in ['trading_engine', 'wheel_engine', 'pureai_engine']):
+                            _bad_imports.append(_n)
+            if _bad_imports:
+                _fail(f"{_eng_name}_engine imports from isolated engines: {_bad_imports}")
+                _exp_engines_ok = False
+            else:
+                _ok(f"{_eng_name}_engine: no cross-engine imports ✓")
+        except ImportError as _ie:
+            _fail(f"{_eng_name}_engine import failed: {_ie}")
+            _exp_engines_ok = False
+
+    # H-2: Squeeze scoring math
+    _section("H-2. Squeeze scoring math")
+    try:
+        from services.squeeze_engine import _score_candidate as _squeeze_score
+        # High DTC + volume spike + price move → should clear 70 threshold
+        _s1 = _squeeze_score(8.0, 3.5, 6.0)
+        _assert(_s1 >= 70, f"DTC=8 vol=3.5x +6% → score {_s1} ≥ 70 (buy threshold)")
+        # No short data → score capped at 60 regardless
+        _s2 = _squeeze_score(dtc=None, vol_ratio=4.0, price_change_pct=8.0)
+        _assert(_s2 <= 60, f"No short data → score {_s2} capped at 60")
+        # Weak signal → below threshold
+        _s3 = _squeeze_score(dtc=1.5, vol_ratio=1.8, price_change_pct=2.0)
+        _assert(_s3 < 70, f"DTC=1.5 vol=1.8x +2% → score {_s3} < 70 (no buy)")
+        # DTC > 7 adds 35 pts, not 25 pts
+        _s4a = _squeeze_score(dtc=7.5, vol_ratio=0.0, price_change_pct=0.0)
+        _s4b = _squeeze_score(dtc=5.5, vol_ratio=0.0, price_change_pct=0.0)
+        _assert(_s4a > _s4b, f"DTC 7.5 ({_s4a}pts) > DTC 5.5 ({_s4b}pts) as expected")
+    except Exception as _e:
+        _warn(f"Squeeze scoring test: {_e}")
+
+    # H-3: Revision scoring math
+    _section("H-3. Revision scoring math")
+    try:
+        from services.revision_engine import _score_candidate as _rev_score
+        # Massive beat, stock barely moved from earnings price, uptrend intact → should hit 65
+        # price_at_earnings=196 → stock only up 2% (market hasn't reacted → +25 pts)
+        # ma20=190 → price above MA20 → +15 pts
+        # beat_pct=35% → +40 pts; earnings 6 days ago → +10 pts; total = 90
+        _r1 = _rev_score("AAPL", 35.0, "2026-06-15", 200.0, 196.0, 500_000, 190.0)
+        _assert(_r1 >= 65, f"beat=35% price barely moved → score {_r1} ≥ 65 (buy threshold)")
+        # Small beat → below threshold
+        _r2 = _rev_score("AAPL", 16.0, "2026-06-01", 200.0, None, 250_000, None)
+        _assert(_r2 < 65, f"beat=16% old earnings → score {_r2} < 65")
+        # Beat tier order: >30% gives 40 pts, >20% gives 30 pts, >15% gives 20 pts
+        _r_big  = _rev_score("X", 35.0, "2026-06-20", 100.0, None, 1_000_000, None)
+        _r_med  = _rev_score("X", 22.0, "2026-06-20", 100.0, None, 1_000_000, None)
+        _r_sml  = _rev_score("X", 17.0, "2026-06-20", 100.0, None, 1_000_000, None)
+        _assert(_r_big > _r_med > _r_sml,
+                f"Beat tiers correctly ordered: {_r_big} > {_r_med} > {_r_sml}")
+    except Exception as _e:
+        _warn(f"Revision scoring test: {_e}")
+
+    # H-4: Sector peers JSON
+    _section("H-4. sector_peers.json integrity")
+    try:
+        import json, os as _os
+        _peers_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                                    "data", "sector_peers.json")
+        with open(_peers_path) as _f:
+            _peers = json.load(_f)
+        # Strip comment key
+        _peers = {k: v for k, v in _peers.items() if not k.startswith("_")}
+        _assert(len(_peers) >= 50, f"sector_peers.json has {len(_peers)} entries (≥ 50 required)")
+        # Check symmetry: if NVDA→AMD, AMD should have NVDA in its peers
+        _sym_breaks = []
+        for _sym, _peer_list in _peers.items():
+            for _p in _peer_list:
+                if _p in _peers and _sym not in _peers[_p]:
+                    _sym_breaks.append(f"{_sym}→{_p} but not {_p}→{_sym}")
+        if _sym_breaks:
+            _warn(f"{len(_sym_breaks)} asymmetric peer pairs (non-blocking): {_sym_breaks[:3]}")
+        else:
+            _ok("All peer mappings are symmetric ✓")
+        # Check key tech stocks have peers
+        for _must_have in ["NVDA", "META", "JPM", "TSLA"]:
+            _assert(_must_have in _peers and len(_peers[_must_have]) >= 3,
+                    f"{_must_have} has {len(_peers.get(_must_have, []))} peers (≥ 3 required)")
+    except Exception as _e:
+        _fail(f"sector_peers.json test: {_e}")
+
+    # H-5: Spillover peer scoring (no Alpaca call needed)
+    _section("H-5. Spillover peer scoring (mock snap)")
+    try:
+        from services.spillover_engine import _score_peer, _load_sector_peers
+        _load_sector_peers()
+        from types import SimpleNamespace as _SN
+        _mock_snap = _SN(
+            daily_bar=_SN(close=100.0, open=98.0, volume=2_000_000),
+            latest_trade=_SN(price=100.0),
+            latest_quote=None,
+        )
+        # NVDA triggers AMD — they are mutual peers → should score ≥ 60
+        _sp1 = _score_peer("NVDA", "AMD", _mock_snap, trigger_beat_pct=15.0)
+        _assert(_sp1 >= 60, f"NVDA→AMD (mutual peers) score {_sp1} ≥ 60")
+        # JPM triggers AMD — unrelated → lower score
+        _sp2 = _score_peer("JPM", "AMD", _mock_snap, trigger_beat_pct=15.0)
+        _assert(_sp1 >= _sp2, f"Mutual peer (score {_sp1}) ≥ unrelated (score {_sp2})")
+    except Exception as _e:
+        _warn(f"Spillover peer scoring: {_e}")
+
+    # H-6: DB table exists (live DB only)
+    _section("H-6. experiment_positions table (live DB smoke test)")
+    try:
+        from services.db import _get_conn as _db_conn
+        _ec = _db_conn()
+        if _ec:
+            with _ec.cursor() as _cur:
+                _cur.execute("""
+                    SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_name='experiment_positions'
+                """)
+                _col_count = _cur.fetchone()[0]
+            _assert(_col_count >= 20,
+                    f"experiment_positions has {_col_count} columns (≥ 20 required)")
+            with _ec.cursor() as _cur:
+                _cur.execute("""
+                    SELECT engine, COUNT(*) FROM experiment_positions
+                    GROUP BY engine
+                """)
+                _rows = _cur.fetchall()
+            _ok(f"experiment_positions rows: { {r[0]: r[1] for r in _rows} or 'empty (expected)' }")
+        else:
+            _warn("No DB connection — skipping table check (run on Railway)")
+    except Exception as _e:
+        _warn(f"DB check: {_e}")
+
+    # H-7: NASDAQ short interest API (live network test)
+    _section("H-7. NASDAQ short interest API (live — RIVN)")
+    try:
+        from services.squeeze_engine import _get_days_to_cover_nasdaq
+        _dtc = _get_days_to_cover_nasdaq("RIVN")
+        if _dtc is not None:
+            _assert(_dtc > 0, f"RIVN daysToCover={_dtc:.2f} (live data from NASDAQ API)")
+        else:
+            _warn("NASDAQ API returned None for RIVN — may be market hours issue or IP block")
+    except Exception as _e:
+        _warn(f"NASDAQ API test: {_e}")
+
+    # H-8: Config isolation — experiment keys don't overlap with Lakshmi/Wheel
+    _section("H-8. Config: experiment env vars are distinct from Lakshmi/Wheel")
+    try:
+        from config import settings
+        _pairs = [
+            ("alpaca_api_key", "alpaca_squeeze_key"),
+            ("alpaca_api_key", "alpaca_spillover_key"),
+            ("alpaca_api_key", "alpaca_revision_key"),
+            ("alpaca_wheel_key", "alpaca_squeeze_key"),
+        ]
+        for _a, _b in _pairs:
+            _va = getattr(settings, _a, "")
+            _vb = getattr(settings, _b, "")
+            if _va and _vb:
+                _assert(_va != _vb, f"{_a} ≠ {_b} (separate Alpaca accounts)")
+            else:
+                _ok(f"{_b} not configured yet (expected — add Railway env vars to activate)")
+    except Exception as _e:
+        _warn(f"Config isolation check: {_e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FINAL SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 _header("SUMMARY")
@@ -1460,10 +1648,12 @@ if _run("wheel"):
     print(f"  ✓  Wheel bot        : see Test F above")
 if _run("limits"):
     print(f"  ✓  Position limits  : see Test G above")
+if _run("experiments"):
+    print(f"  ✓  Experiment engines: see Test H above")
 
 print()
 _all_sections = ["unit","pipeline","rotation","bear","gemini",
-                 "ai_edge","chop","wheel","limits","calibrate","project"]
+                 "ai_edge","chop","wheel","limits","experiments","calibrate","project"]
 _skipped = [s for s in _all_sections if not _run(s)]
 if _skipped:
     print(f"  Skipped: {', '.join(_skipped)}")

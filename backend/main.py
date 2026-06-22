@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai, experiments
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -40,6 +40,22 @@ async def lifespan(app: FastAPI):
     # Pure-AI experiment scheduler — third isolated book (no-op if keys unset)
     from services.pureai_engine import start_pureai_scheduler
     start_pureai_scheduler()
+    # Experiment engines — squeeze, spillover, revision (no-op if keys unset)
+    try:
+        from services.squeeze_engine import start_squeeze_scheduler
+        start_squeeze_scheduler()
+    except Exception as e:
+        logger.warning(f"Squeeze scheduler not started: {e}")
+    try:
+        from services.spillover_engine import start_spillover_scheduler
+        start_spillover_scheduler()
+    except Exception as e:
+        logger.warning(f"Spillover scheduler not started: {e}")
+    try:
+        from services.revision_engine import start_revision_scheduler
+        start_revision_scheduler()
+    except Exception as e:
+        logger.warning(f"Revision scheduler not started: {e}")
     yield
     trading_engine.stop()
     from services.alerts import alert_system_stop
@@ -97,6 +113,7 @@ app.include_router(prompt.router)
 app.include_router(model_settings.router)
 app.include_router(wheel.router)
 app.include_router(pureai.router)
+app.include_router(experiments.router)
 
 
 @app.get("/health")

@@ -322,6 +322,48 @@ def _ensure_table(conn):
             ON wheel_iv_history (symbol, recorded_at DESC)
         """)
 
+        # ── Experiment engines: experiment_positions ────────────────────────
+        # Shared across squeeze / spillover / revision engines.
+        # Completely isolated from Lakshmi, Wheel, and PureAI tables.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS experiment_positions (
+                id              SERIAL PRIMARY KEY,
+                engine          VARCHAR(20) NOT NULL,
+                symbol          VARCHAR(10) NOT NULL,
+                entry_price     FLOAT,
+                entry_date      TIMESTAMPTZ DEFAULT NOW(),
+                shares          INT,
+                stop_price      FLOAT,
+                target_price    FLOAT,
+                peak_price      FLOAT,
+                status          VARCHAR(20) DEFAULT 'open',
+                exit_price      FLOAT,
+                exit_date       TIMESTAMPTZ,
+                realized_pl     FLOAT,
+
+                days_to_cover   FLOAT,
+                volume_ratio    FLOAT,
+
+                trigger_symbol  VARCHAR(10),
+                trigger_beat_pct FLOAT,
+                sector          VARCHAR(50),
+
+                beat_pct_prev   FLOAT,
+                beat_pct_curr   FLOAT,
+                acceleration    FLOAT,
+
+                notes           TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_experiment_engine
+            ON experiment_positions(engine)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_experiment_status
+            ON experiment_positions(status)
+        """)
+
 
 # ── Public API ─────────────────────────────────────────────────────────────
 

@@ -1,0 +1,848 @@
+{
+  "_comment": "Static sector peer mapping. Update quarterly. Spillover engine uses this to find peers when a trigger company beats earnings.",
+  "NVDA": [
+    "AMD",
+    "MRVL",
+    "AVGO",
+    "QCOM",
+    "INTC",
+    "SMCI",
+    "ASML",
+    "TSM",
+    "AMAT"
+  ],
+  "AMD": [
+    "NVDA",
+    "MRVL",
+    "AVGO",
+    "QCOM",
+    "INTC",
+    "SMCI"
+  ],
+  "AVGO": [
+    "NVDA",
+    "AMD",
+    "MRVL",
+    "QCOM",
+    "INTC",
+    "AMAT",
+    "LRCX"
+  ],
+  "MRVL": [
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "QCOM",
+    "INTC"
+  ],
+  "QCOM": [
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "MRVL",
+    "INTC",
+    "SWKS",
+    "QRVO",
+    "AAPL"
+  ],
+  "INTC": [
+    "NVDA",
+    "AMD",
+    "AVGO",
+    "MRVL",
+    "QCOM",
+    "TSM",
+    "SMCI"
+  ],
+  "TSM": [
+    "NVDA",
+    "INTC",
+    "ASML",
+    "AMAT",
+    "LRCX",
+    "KLAC",
+    "SMCI"
+  ],
+  "ASML": [
+    "AMAT",
+    "LRCX",
+    "KLAC",
+    "TSM",
+    "NVDA"
+  ],
+  "AMAT": [
+    "ASML",
+    "LRCX",
+    "KLAC",
+    "TSM",
+    "NVDA",
+    "AVGO"
+  ],
+  "LRCX": [
+    "ASML",
+    "AMAT",
+    "KLAC",
+    "TSM",
+    "AVGO"
+  ],
+  "KLAC": [
+    "ASML",
+    "AMAT",
+    "LRCX",
+    "TSM"
+  ],
+  "SMCI": [
+    "NVDA",
+    "AMD",
+    "INTC",
+    "HPE",
+    "DELL",
+    "TSM"
+  ],
+  "META": [
+    "SNAP",
+    "PINS",
+    "GOOGL",
+    "RDDT",
+    "TTD",
+    "MGNI",
+    "PUBM",
+    "AAPL"
+  ],
+  "SNAP": [
+    "META",
+    "PINS",
+    "GOOGL",
+    "RDDT",
+    "TTD",
+    "MGNI"
+  ],
+  "PINS": [
+    "META",
+    "SNAP",
+    "GOOGL",
+    "RDDT",
+    "TTD",
+    "ETSY"
+  ],
+  "RDDT": [
+    "META",
+    "SNAP",
+    "PINS",
+    "GOOGL"
+  ],
+  "GOOGL": [
+    "META",
+    "SNAP",
+    "PINS",
+    "TTD",
+    "RDDT",
+    "MSFT",
+    "AAPL",
+    "SNOW",
+    "MDB",
+    "SPOT",
+    "ROKU"
+  ],
+  "TTD": [
+    "META",
+    "GOOGL",
+    "MGNI",
+    "PUBM",
+    "APPS",
+    "SNAP",
+    "PINS",
+    "ROKU"
+  ],
+  "MGNI": [
+    "TTD",
+    "PUBM",
+    "APPS",
+    "META",
+    "SNAP"
+  ],
+  "PUBM": [
+    "TTD",
+    "MGNI",
+    "APPS",
+    "META"
+  ],
+  "AMZN": [
+    "SHOP",
+    "EBAY",
+    "WMT",
+    "TGT",
+    "BABA",
+    "JD",
+    "ETSY",
+    "MSFT",
+    "SNOW",
+    "DDOG",
+    "MDB",
+    "SPOT",
+    "ROKU",
+    "COST"
+  ],
+  "SHOP": [
+    "AMZN",
+    "EBAY",
+    "WMT",
+    "TGT",
+    "ETSY",
+    "BIGC"
+  ],
+  "EBAY": [
+    "AMZN",
+    "SHOP",
+    "ETSY",
+    "BABA"
+  ],
+  "ETSY": [
+    "AMZN",
+    "SHOP",
+    "EBAY",
+    "PINS"
+  ],
+  "AAPL": [
+    "MSFT",
+    "GOOGL",
+    "META",
+    "SAMSUNG",
+    "QCOM",
+    "SWKS",
+    "SPOT"
+  ],
+  "MSFT": [
+    "GOOGL",
+    "AMZN",
+    "AAPL",
+    "CRM",
+    "ORCL",
+    "SAP",
+    "NOW",
+    "SNOW",
+    "DDOG",
+    "MDB"
+  ],
+  "CRM": [
+    "MSFT",
+    "ORCL",
+    "SAP",
+    "NOW",
+    "HUBS",
+    "WDAY"
+  ],
+  "ORCL": [
+    "MSFT",
+    "CRM",
+    "SAP",
+    "NOW",
+    "IBM",
+    "WDAY"
+  ],
+  "NOW": [
+    "CRM",
+    "ORCL",
+    "MSFT",
+    "SAP",
+    "WDAY",
+    "HUBS"
+  ],
+  "WDAY": [
+    "CRM",
+    "NOW",
+    "SAP",
+    "ORCL",
+    "HUBS"
+  ],
+  "HUBS": [
+    "CRM",
+    "NOW",
+    "WDAY",
+    "BILL",
+    "MNDY"
+  ],
+  "SNOW": [
+    "DDOG",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "MDB",
+    "ESTC"
+  ],
+  "DDOG": [
+    "SNOW",
+    "DYNT",
+    "MSFT",
+    "AMZN",
+    "SPLK",
+    "ESTC",
+    "MDB"
+  ],
+  "MDB": [
+    "SNOW",
+    "DDOG",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "ESTC"
+  ],
+  "TSLA": [
+    "RIVN",
+    "LCID",
+    "NIO",
+    "XPEV",
+    "LI",
+    "GM",
+    "F"
+  ],
+  "RIVN": [
+    "TSLA",
+    "LCID",
+    "NIO",
+    "XPEV",
+    "F",
+    "GM",
+    "LI"
+  ],
+  "LCID": [
+    "TSLA",
+    "RIVN",
+    "NIO",
+    "XPEV",
+    "LI"
+  ],
+  "NIO": [
+    "TSLA",
+    "RIVN",
+    "LCID",
+    "XPEV",
+    "LI"
+  ],
+  "XPEV": [
+    "TSLA",
+    "RIVN",
+    "LCID",
+    "NIO",
+    "LI"
+  ],
+  "LI": [
+    "TSLA",
+    "RIVN",
+    "LCID",
+    "NIO",
+    "XPEV"
+  ],
+  "JPM": [
+    "BAC",
+    "WFC",
+    "GS",
+    "MS",
+    "C",
+    "USB",
+    "TFC"
+  ],
+  "BAC": [
+    "JPM",
+    "WFC",
+    "GS",
+    "MS",
+    "C",
+    "USB"
+  ],
+  "WFC": [
+    "JPM",
+    "BAC",
+    "GS",
+    "MS",
+    "C",
+    "USB"
+  ],
+  "GS": [
+    "JPM",
+    "BAC",
+    "WFC",
+    "MS",
+    "C",
+    "SCHW",
+    "RJF"
+  ],
+  "MS": [
+    "JPM",
+    "BAC",
+    "WFC",
+    "GS",
+    "C",
+    "SCHW",
+    "RJF"
+  ],
+  "C": [
+    "JPM",
+    "BAC",
+    "WFC",
+    "GS",
+    "MS",
+    "USB"
+  ],
+  "SCHW": [
+    "GS",
+    "MS",
+    "RJF",
+    "ETFC",
+    "IBKR",
+    "HOOD"
+  ],
+  "V": [
+    "MA",
+    "AXP",
+    "PYPL",
+    "SQ",
+    "AFRM"
+  ],
+  "MA": [
+    "V",
+    "AXP",
+    "PYPL",
+    "SQ",
+    "AFRM"
+  ],
+  "PYPL": [
+    "V",
+    "MA",
+    "SQ",
+    "AFRM",
+    "SOFI",
+    "COIN",
+    "HOOD"
+  ],
+  "SQ": [
+    "PYPL",
+    "V",
+    "MA",
+    "AFRM",
+    "SOFI"
+  ],
+  "AFRM": [
+    "PYPL",
+    "SQ",
+    "SOFI",
+    "UPST",
+    "LPRO",
+    "V",
+    "MA"
+  ],
+  "SOFI": [
+    "AFRM",
+    "UPST",
+    "PYPL",
+    "SQ",
+    "LC",
+    "COIN",
+    "HOOD"
+  ],
+  "UPST": [
+    "AFRM",
+    "SOFI",
+    "LC",
+    "LPRO",
+    "ENVA"
+  ],
+  "XOM": [
+    "CVX",
+    "COP",
+    "OXY",
+    "SLB",
+    "HAL",
+    "MPC"
+  ],
+  "CVX": [
+    "XOM",
+    "COP",
+    "OXY",
+    "SLB",
+    "HAL",
+    "MPC"
+  ],
+  "COP": [
+    "XOM",
+    "CVX",
+    "OXY",
+    "PXD",
+    "DVN",
+    "FANG"
+  ],
+  "OXY": [
+    "XOM",
+    "CVX",
+    "COP",
+    "PXD",
+    "DVN"
+  ],
+  "SLB": [
+    "HAL",
+    "BKR",
+    "NOV",
+    "XOM",
+    "CVX"
+  ],
+  "HAL": [
+    "SLB",
+    "BKR",
+    "NOV",
+    "XOM",
+    "CVX"
+  ],
+  "LLY": [
+    "PFE",
+    "JNJ",
+    "ABBV",
+    "MRK",
+    "BMY",
+    "NVO",
+    "REGN",
+    "AMGN"
+  ],
+  "PFE": [
+    "LLY",
+    "JNJ",
+    "ABBV",
+    "MRK",
+    "BMY",
+    "REGN",
+    "MRNA",
+    "BNTX"
+  ],
+  "JNJ": [
+    "PFE",
+    "LLY",
+    "ABBV",
+    "MRK",
+    "BMY",
+    "ABT",
+    "MRNA"
+  ],
+  "ABBV": [
+    "PFE",
+    "JNJ",
+    "LLY",
+    "MRK",
+    "BMY",
+    "REGN",
+    "GILD"
+  ],
+  "MRK": [
+    "PFE",
+    "JNJ",
+    "LLY",
+    "ABBV",
+    "BMY"
+  ],
+  "BMY": [
+    "PFE",
+    "JNJ",
+    "LLY",
+    "ABBV",
+    "MRK"
+  ],
+  "REGN": [
+    "LLY",
+    "ABBV",
+    "VRTX",
+    "BIIB",
+    "AMGN",
+    "GILD",
+    "PFE"
+  ],
+  "VRTX": [
+    "REGN",
+    "BIIB",
+    "AMGN",
+    "GILD",
+    "SGEN"
+  ],
+  "BIIB": [
+    "REGN",
+    "VRTX",
+    "AMGN",
+    "GILD"
+  ],
+  "AMGN": [
+    "REGN",
+    "VRTX",
+    "BIIB",
+    "GILD",
+    "LLY"
+  ],
+  "GILD": [
+    "AMGN",
+    "REGN",
+    "VRTX",
+    "BIIB",
+    "ABBV"
+  ],
+  "MRNA": [
+    "BNTX",
+    "NVAX",
+    "PFE",
+    "JNJ"
+  ],
+  "BNTX": [
+    "MRNA",
+    "NVAX",
+    "PFE"
+  ],
+  "CAT": [
+    "DE",
+    "PCAR",
+    "CMI",
+    "AGCO",
+    "ROK"
+  ],
+  "DE": [
+    "CAT",
+    "PCAR",
+    "CMI",
+    "AGCO",
+    "CNH"
+  ],
+  "BA": [
+    "RTX",
+    "LMT",
+    "NOC",
+    "GD",
+    "L3H"
+  ],
+  "RTX": [
+    "BA",
+    "LMT",
+    "NOC",
+    "GD",
+    "HII"
+  ],
+  "LMT": [
+    "BA",
+    "RTX",
+    "NOC",
+    "GD",
+    "HII"
+  ],
+  "NOC": [
+    "BA",
+    "RTX",
+    "LMT",
+    "GD",
+    "HII"
+  ],
+  "GD": [
+    "BA",
+    "RTX",
+    "LMT",
+    "NOC",
+    "HII"
+  ],
+  "NFLX": [
+    "DIS",
+    "WBD",
+    "PARA",
+    "SPOT",
+    "ROKU"
+  ],
+  "DIS": [
+    "NFLX",
+    "WBD",
+    "PARA",
+    "CMCSA",
+    "SPOT"
+  ],
+  "WBD": [
+    "NFLX",
+    "DIS",
+    "PARA",
+    "CMCSA"
+  ],
+  "PARA": [
+    "NFLX",
+    "DIS",
+    "WBD",
+    "CMCSA"
+  ],
+  "SPOT": [
+    "NFLX",
+    "AAPL",
+    "AMZN",
+    "GOOGL",
+    "TIDAL",
+    "DIS"
+  ],
+  "ROKU": [
+    "NFLX",
+    "AMZN",
+    "GOOGL",
+    "TTD"
+  ],
+  "MARA": [
+    "RIOT",
+    "CLSK",
+    "BTBT",
+    "HUT",
+    "COIN"
+  ],
+  "RIOT": [
+    "MARA",
+    "CLSK",
+    "BTBT",
+    "HUT",
+    "COIN"
+  ],
+  "COIN": [
+    "MARA",
+    "RIOT",
+    "HOOD",
+    "SOFI",
+    "PYPL"
+  ],
+  "HOOD": [
+    "COIN",
+    "SOFI",
+    "SCHW",
+    "IBKR",
+    "PYPL"
+  ],
+  "ABNB": [
+    "BKNG",
+    "EXPE",
+    "TRIP",
+    "H",
+    "MAR",
+    "HLT"
+  ],
+  "BKNG": [
+    "ABNB",
+    "EXPE",
+    "TRIP",
+    "H",
+    "MAR",
+    "HLT"
+  ],
+  "EXPE": [
+    "ABNB",
+    "BKNG",
+    "TRIP",
+    "H",
+    "MAR"
+  ],
+  "MAR": [
+    "HLT",
+    "H",
+    "IHG",
+    "BKNG",
+    "ABNB",
+    "EXPE"
+  ],
+  "HLT": [
+    "MAR",
+    "H",
+    "IHG",
+    "BKNG",
+    "ABNB"
+  ],
+  "UAL": [
+    "DAL",
+    "AAL",
+    "LUV",
+    "JBLU",
+    "ALGT"
+  ],
+  "DAL": [
+    "UAL",
+    "AAL",
+    "LUV",
+    "JBLU",
+    "ALGT"
+  ],
+  "AAL": [
+    "UAL",
+    "DAL",
+    "LUV",
+    "JBLU"
+  ],
+  "SBUX": [
+    "MCD",
+    "CMG",
+    "QSR",
+    "YUM",
+    "PZZA",
+    "DNUT"
+  ],
+  "MCD": [
+    "SBUX",
+    "CMG",
+    "QSR",
+    "YUM",
+    "PZZA"
+  ],
+  "CMG": [
+    "MCD",
+    "SBUX",
+    "QSR",
+    "YUM",
+    "JACK",
+    "DPZ"
+  ],
+  "WMT": [
+    "TGT",
+    "COST",
+    "AMZN",
+    "KR",
+    "ACI",
+    "SHOP"
+  ],
+  "TGT": [
+    "WMT",
+    "COST",
+    "AMZN",
+    "KR",
+    "ACI",
+    "SHOP"
+  ],
+  "COST": [
+    "WMT",
+    "TGT",
+    "BJ",
+    "AMZN"
+  ],
+  "NEE": [
+    "DUK",
+    "D",
+    "SO",
+    "AEP",
+    "EXC"
+  ],
+  "DUK": [
+    "NEE",
+    "D",
+    "SO",
+    "AEP",
+    "EXC"
+  ],
+  "AMT": [
+    "CCI",
+    "SBAC",
+    "DLR",
+    "EQIX"
+  ],
+  "EQIX": [
+    "DLR",
+    "AMT",
+    "CCI",
+    "SBAC",
+    "IRM"
+  ],
+  "DLR": [
+    "EQIX",
+    "AMT",
+    "CCI",
+    "SBAC",
+    "IRM"
+  ]
+}

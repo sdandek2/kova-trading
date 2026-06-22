@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     alpaca_pureai_base_url: str = "https://paper-api.alpaca.markets"
     pureai_model: str = "claude-opus-4-8"   # the AI IS the system — best brain by default
 
+    # Experiment engines — three isolated paper accounts for strategy validation
+    alpaca_squeeze_key: str = ""
+    alpaca_squeeze_secret: str = ""
+    alpaca_squeeze_base_url: str = "https://paper-api.alpaca.markets"
+
+    alpaca_spillover_key: str = ""
+    alpaca_spillover_secret: str = ""
+    alpaca_spillover_base_url: str = "https://paper-api.alpaca.markets"
+
+    alpaca_revision_key: str = ""
+    alpaca_revision_secret: str = ""
+    alpaca_revision_base_url: str = "https://paper-api.alpaca.markets"
+
     class Config:
         env_file = ".env"
 

@@ -7,6 +7,7 @@ struct FloatingTabBar: View {
     private let items: [(icon: String, filled: String, label: String)] = [
         ("house",                "house.fill",               "Home"),
         ("list.bullet.rectangle","list.bullet.rectangle.fill","Orders"),
+        ("flask",                "flask.fill",               "Labs"),
         ("brain.head.profile",   "brain.head.profile",       "Pure AI"),
         ("arrow.2.circlepath",   "arrow.2.circlepath",       "Wheel"),
         ("ellipsis.circle",      "ellipsis.circle.fill",     "More")
