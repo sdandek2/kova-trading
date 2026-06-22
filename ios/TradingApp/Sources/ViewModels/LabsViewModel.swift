@@ -71,20 +71,8 @@ struct ExperimentPosition: Decodable, Identifiable {
     }
 }
 
-struct EngineRunResult: Decodable {
-    let engine: String?
-    let result: RunResultDetail?
-
-    struct RunResultDetail: Decodable {
-        let skipped: String?
-        let bought: [BoughtItem]?
-        let candidates: [String]?
-
-        struct BoughtItem: Decodable {
-            let symbol: String?
-        }
-    }
-}
+// Result body is not used — empty struct so polymorphic/unknown fields never cause decode failures
+struct EngineRunResult: Decodable {}
 
 struct CloseResult: Decodable {
     let closed: Bool?
