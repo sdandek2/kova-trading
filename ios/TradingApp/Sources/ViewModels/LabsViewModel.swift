@@ -171,12 +171,11 @@ final class LabsViewModel: ObservableObject {
     }
 
     func loadPositions() async {
-        do {
-            positions = try await api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
-            summary   = try await api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        async let posTask: [ExperimentPosition]? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
+        async let sumTask: EngineSummary? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
+        let (p, sm) = await (posTask, sumTask)
+        if let p { positions = p }
+        if let sm { summary = sm }
     }
 
     func switchEngine(_ engine: Engine) async {
