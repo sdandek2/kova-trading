@@ -82,6 +82,8 @@
 		PA01AA02BB03CC04DD05EE06 /* PureAIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */; };
 		PA02AA03BB04CC05DD06EE07 /* PureAIViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */; };
 		PA03AA04BB05CC06DD07EE08 /* PureAIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */; };
+		LB01AA02BB03CC04DD05EE06 /* LabsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LB11AA12BB13CC14DD15EE16 /* LabsViewModel.swift */; };
+		LB02AA03BB04CC05DD06EE07 /* LabsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LB12AA13BB14CC15DD16EE17 /* LabsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -162,6 +164,8 @@
 		PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIModels.swift; path = Sources/Models/PureAIModels.swift; sourceTree = "<group>"; };
 		PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIViewModel.swift; path = Sources/ViewModels/PureAIViewModel.swift; sourceTree = "<group>"; };
 		PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PureAIView.swift; path = Sources/Views/PureAI/PureAIView.swift; sourceTree = "<group>"; };
+		LB11AA12BB13CC14DD15EE16 /* LabsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LabsViewModel.swift; path = Sources/ViewModels/LabsViewModel.swift; sourceTree = "<group>"; };
+		LB12AA13BB14CC15DD16EE17 /* LabsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LabsView.swift; path = Sources/Views/Labs/LabsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -269,6 +273,8 @@
 				PA11AA12BB13CC14DD15EE16 /* PureAIModels.swift */,
 				PA12AA13BB14CC15DD16EE17 /* PureAIViewModel.swift */,
 				PA13AA14BB15CC16DD17EE18 /* PureAIView.swift */,
+				LB11AA12BB13CC14DD15EE16 /* LabsViewModel.swift */,
+				LB12AA13BB14CC15DD16EE17 /* LabsView.swift */,
 				9788A1872451B15183194D45 /* Sources/Assets.xcassets */,
 				3B61BFC59B1D49ED7380B5EB /* Sources/Info.plist */,
 			);
@@ -420,6 +426,8 @@
 				PA01AA02BB03CC04DD05EE06 /* PureAIModels.swift in Sources */,
 				PA02AA03BB04CC05DD06EE07 /* PureAIViewModel.swift in Sources */,
 				PA03AA04BB05CC06DD07EE08 /* PureAIView.swift in Sources */,
+				LB01AA02BB03CC04DD05EE06 /* LabsViewModel.swift in Sources */,
+				LB02AA03BB04CC05DD06EE07 /* LabsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
