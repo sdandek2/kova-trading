@@ -42,8 +42,6 @@ struct PositionRowView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(String(format: "$%.2f", position.currentPrice))
                     .font(.subheadline.weight(.semibold))
-                    .contentTransition(.numericText())
-                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: position.currentPrice)
 
                 HStack(spacing: 3) {
                     Text(String(format: "%@$%.2f",

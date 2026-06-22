@@ -66,7 +66,6 @@ struct DashboardView: View {
                     )
                     .padding(.horizontal, 8)
                     .padding(.top, 12)
-                    .cardAppear(delay: 0.0)
                 }
 
                 // ── Cards below hero ──────────────────────────────────────
@@ -115,7 +114,6 @@ private struct HeroChartBlock: View {
 
     @State private var selectedPeriod = "1W"
     @State private var breathe = false
-    @Namespace private var periodNS
     let periods = ["1D", "1W", "1M", "3M"]
     @Environment(\.colorScheme) private var scheme
 
@@ -161,28 +159,27 @@ private struct HeroChartBlock: View {
                 .padding(.horizontal, 4)
 
             // ── Period picker ──────────────────────────────────────────────
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 ForEach(periods, id: \.self) { p in
-                    Button {
+                    let isSelected = selectedPeriod == p
+                    ZStack {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(LakshmiTheme.brandGradient)
+                        }
+                        Text(p)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(isSelected ? .white : Color.white.opacity(0.55))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
                         withAnimation(LakshmiTheme.springSnappy) {
                             selectedPeriod = p
                             onPeriodChange?(p)
                         }
-                    } label: {
-                        Text(p)
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .foregroundStyle(selectedPeriod == p ? .white : .white.opacity(0.40))
-                            .background {
-                                if selectedPeriod == p {
-                                    RoundedRectangle(cornerRadius: 7)
-                                        .fill(LakshmiTheme.brandGradient)
-                                        .matchedGeometryEffect(id: "periodBG", in: periodNS)
-                                }
-                            }
                     }
-                    .buttonStyle(PressScaleButtonStyle(scale: 0.94))
                 }
             }
             .padding(4)
@@ -332,11 +329,11 @@ private struct GlassStatCard: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .background(LakshmiTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm))
         .overlay(
             RoundedRectangle(cornerRadius: LakshmiTheme.radiusSm)
-                .stroke(color.opacity(0.15), lineWidth: 1)
+                .stroke(color.opacity(0.25), lineWidth: 1)
         )
     }
 }
