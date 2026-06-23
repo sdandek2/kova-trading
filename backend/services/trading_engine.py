@@ -1870,6 +1870,46 @@ async def run_trading_cycle():
         ACTION_PRIORITY = {"sell": 0, "short": 1, "buy": 1, "hold": 2}
         decisions = sorted(decisions, key=lambda d: ACTION_PRIORITY.get(d.action, 2))
 
+        # ── Score gate: block buy/short decisions for below-threshold symbols ──
+        # Prebreakout candidates (watchlist score ≥3) bypass the signal minimum and
+        # land in the claude_service fallback prompt. Without this gate, Claude can
+        # recommend buying a stock that scored 51 even though the threshold is 60.
+        # Symbols scored by _all_scored but not reaching _min_trade_score are blocked here.
+        if _all_scored:
+            _all_scored_map = {c.symbol: c.score for c in _all_scored}
+            _gated: list = []
+            for _gd in decisions:
+                if _gd.action in ("buy", "short"):
+                    _gd_score = _all_scored_map.get(_gd.symbol)
+                    if _gd_score is not None and _gd_score < _min_trade_score:
+                        logger.info(
+                            f"Score gate: blocking {_gd.action.upper()} {_gd.symbol} "
+                            f"(signal score {_gd_score} < threshold {_min_trade_score})"
+                        )
+                        log_bot_activity(
+                            "entry_rejected",
+                            f"Score gate: {_gd.symbol} scored {_gd_score} < min {_min_trade_score}",
+                            symbol=_gd.symbol, cycle_id=_current_cycle_id,
+                        )
+                        continue
+                _gated.append(_gd)
+            decisions = _gated
+
+        # ── Deduplication: drop duplicate (action, symbol) pairs from AI response ──
+        # Claude occasionally returns the same symbol twice in one decision list
+        # (e.g. a standard momentum buy and a news-driven buy for the same stock).
+        # Without deduplication both execute, creating double bracket orders for the same symbol.
+        _seen_action_sym: set = set()
+        _deduped: list = []
+        for _dd in decisions:
+            _dkey = (_dd.action, _dd.symbol)
+            if _dd.action in ("buy", "short") and _dkey in _seen_action_sym:
+                logger.info(f"Dedup: dropping duplicate {_dd.action.upper()} {_dd.symbol} from AI response")
+                continue
+            _seen_action_sym.add(_dkey)
+            _deduped.append(_dd)
+        decisions = _deduped
+
         # ── Track AI-skipped candidates: scored ≥threshold but Claude didn't pick them ──
         # Separate from near-misses (50-59) — these cleared the signal bar but the
         # AI filtered them out. Tracking their EOD price reveals whether Claude's
@@ -2730,6 +2770,10 @@ async def run_trading_cycle():
                 # Count slot only after confirmed submission
                 if decision.action in ("buy", "short"):
                     _cycle_open_count += 1
+                    # Deduct from tradeable cash so later decisions in this cycle
+                    # are sized against remaining buying power, not the full balance.
+                    if decision.action == "buy" and current_price and current_price > 0:
+                        _tradeable_cash = max(0.0, _tradeable_cash - decision.quantity * current_price)
                 today = datetime.now(timezone.utc).date()
                 _daily_trade_count[today] = _daily_trade_count.get(today, 0) + 1
                 logger.info(
@@ -3058,6 +3102,36 @@ async def _trading_loop():
         _ensure_s7()
     except Exception as _s7_err:
         logger.warning(f"ensure_session7_tables (non-fatal): {_s7_err}")
+
+    # ── Seed _previous_positions from DB on startup ───────────────────────────
+    # After a deploy/restart _previous_positions is empty. Positions open at
+    # restart time would close with setup_type=None ("unknown") in the log.
+    # Seeding from position_log ensures metadata survives restarts.
+    try:
+        from services.db import get_open_positions_from_log as _get_open_pos_log
+        _open_db_rows = _get_open_pos_log()
+        for _op in _open_db_rows:
+            _sym = _op.get("symbol")
+            if _sym and _sym not in _previous_positions:
+                _previous_positions[_sym] = {
+                    "qty": _op.get("quantity"),
+                    "avg_entry_price": _op.get("entry_price"),
+                    "entry_time": _op.get("entry_time"),
+                    "exit_reason": "unknown",
+                    "side": _op.get("side") or "long",
+                    "setup_type": _op.get("setup_type") or "momentum_breakout",
+                    "signal_type": _op.get("signal_type") or "momentum",
+                    "claude_reasoning": _op.get("claude_reasoning"),
+                    "score_breakdown": _op.get("score_breakdown") or {},
+                    "strategy": _op.get("strategy") or "lakshmi_v1",
+                }
+        if _open_db_rows:
+            logger.info(
+                f"Startup: seeded _previous_positions from DB for {len(_open_db_rows)} open positions: "
+                + ", ".join(_op.get("symbol", "?") for _op in _open_db_rows)
+            )
+    except Exception as _pp_err:
+        logger.warning(f"Startup position reload (non-fatal): {_pp_err}")
 
     # Start real-time news stream (non-fatal if it fails)
     try:

@@ -1987,3 +1987,35 @@ def get_sprint_review_history(days: int = 7) -> list[dict]:
     except Exception as e:
         logger.warning(f"get_sprint_review_history failed ({e})")
         return []
+
+
+def get_open_positions_from_log() -> list[dict]:
+    """Return still-open position_log rows (exit_price IS NULL).
+
+    Used on startup to seed _previous_positions with setup_type / signal_type so
+    trades that were open when the bot restarted don't close with 'unknown' metadata.
+    """
+    try:
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, side, entry_time, entry_price, quantity,
+                       strategy, setup_type, signal_type, claude_reasoning,
+                       score_breakdown
+                FROM position_log
+                WHERE exit_price IS NULL
+                ORDER BY entry_time ASC
+            """)
+            cols = [d[0] for d in cur.description]
+            rows = []
+            for row in cur.fetchall():
+                d = dict(zip(cols, row))
+                if d.get("entry_time"):
+                    d["entry_time"] = d["entry_time"]  # already datetime object
+                rows.append(d)
+            return rows
+    except Exception as e:
+        logger.warning(f"get_open_positions_from_log failed ({e})")
+        return []
