@@ -861,6 +861,14 @@ async def run_trading_cycle():
                 ),
                 "exit_reason": _previous_positions.get(p.symbol, {}).get("exit_reason", "unknown"),
                 "side": p.side,
+                # Preserve metadata set at entry — wiping these every cycle was causing
+                # strategy/setup_type/signal_type/hold_duration to log as null on close.
+                "strategy":        _previous_positions.get(p.symbol, {}).get("strategy"),
+                "setup_type":      _previous_positions.get(p.symbol, {}).get("setup_type"),
+                "signal_type":     _previous_positions.get(p.symbol, {}).get("signal_type"),
+                "claude_reasoning":_previous_positions.get(p.symbol, {}).get("claude_reasoning"),
+                "score_breakdown": _previous_positions.get(p.symbol, {}).get("score_breakdown", {}),
+                "max_unrealized_pct": _previous_positions.get(p.symbol, {}).get("max_unrealized_pct"),
             }
             for p in positions
         }
