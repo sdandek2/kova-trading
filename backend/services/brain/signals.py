@@ -254,9 +254,10 @@ def _score_symbol(
             elif raw > 0:
                 db_key = "barchart_very_unusual" if raw >= 15 else "barchart_unusual"
                 pts = weights.get(db_key, raw)
+                breakdown[db_key] = pts  # specific key so weekly weight adjuster can track wins
             else:
                 pts = raw  # negative (put flow) always applies
-            breakdown["options_flow"] = pts
+                breakdown["options_flow"] = pts
             score += pts
 
     except Exception:
@@ -317,9 +318,10 @@ def _score_symbol(
             if raw > 0:
                 db_key = "earnings_surprise_strong" if raw >= 10 else "earnings_surprise_mild"
                 pts = weights.get(db_key, raw)
+                breakdown[db_key] = pts  # specific key so weekly weight adjuster can track wins
             else:
                 pts = raw  # negative surprise keeps hardcoded penalty
-            breakdown["earnings_surprise"] = pts
+                breakdown["earnings_surprise"] = pts
             score += pts
     except Exception:
         pass
@@ -333,9 +335,10 @@ def _score_symbol(
             if raw > 0:
                 db_key = "insider_buy_large" if raw >= 12 else "insider_buy_small"
                 pts = weights.get(db_key, raw)
+                breakdown[db_key] = pts  # specific key so weekly weight adjuster can track wins
             else:
                 pts = raw
-            breakdown["insider_buy"] = pts
+                breakdown["insider_buy"] = pts
             score += pts
     except Exception:
         pass
