@@ -287,7 +287,8 @@ Return valid JSON only — no markdown:
         analysis = trade.get("analysis", "")
         qty_suggestion = trade.get("quantity_suggestion")
 
-        candidate = None  # reset each iteration — sell branch never sets this
+        candidate = None      # reset each iteration — sell branch never sets this
+        _existing_pos = None  # reset; only populated for buy actions
         if action in ("buy", "short"):
             # Hard guards for BUY actions
             if action == "buy":

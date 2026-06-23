@@ -275,6 +275,70 @@ if _run("unit"):
     _pts = max(-15, min(20, _net * 5))
     _assert(_pts == -15, f"net=-4 still capped at -15 (got {_pts})")
 
+    # 0-g. RSI + volume / momentum_burst (Fix 1 — 2026-06-22)
+    _section("0-g. RSI+volume and momentum_burst signal scoring")
+
+    def _rsi_breakdown(rsi, rel_vol):
+        """Mirrors signals.py RSI zone logic."""
+        if rsi is None:
+            return 0
+        if rsi < 35:   return 15
+        if rsi < 50:   return 8
+        if rsi < 65:   return 5
+        if rsi < 75:   return 0
+        return 5 if rel_vol >= 3.0 else -10  # >75: burst vs exhaustion
+
+    def _burst_breakdown(today_pct, rel_vol):
+        """Mirrors signals.py momentum_burst logic."""
+        if today_pct >= 10.0 and rel_vol >= 3.0: return 20
+        if today_pct >= 5.0  and rel_vol >= 3.0: return 12
+        return 0
+
+    _assert(_rsi_breakdown(80, 3.0) == 5,   "RSI=80 + rel_vol=3.0x → +5 (momentum burst continuation)")
+    _assert(_rsi_breakdown(80, 3.5) == 5,   "RSI=80 + rel_vol=3.5x → +5 (high vol confirms RSI)")
+    _assert(_rsi_breakdown(80, 2.9) == -10, "RSI=80 + rel_vol=2.9x → -10 (overbought, no volume)")
+    _assert(_rsi_breakdown(76, 1.0) == -10, "RSI=76 + rel_vol=1x → -10 (exhaustion without fuel)")
+    _assert(_rsi_breakdown(74, 5.0) == 0,   "RSI=74 + any vol → 0 (< 75 threshold, gets RSI<75 score)")
+    _assert(_rsi_breakdown(None, 3.0) == 0, "RSI=None → 0 (no RSI data)")
+
+    _assert(_burst_breakdown(12.0, 3.5) == 20, "+12% + rel_vol=3.5x → momentum_burst +20")
+    _assert(_burst_breakdown(10.0, 3.0) == 20, "+10% + rel_vol=3.0x → momentum_burst +20 (boundary)")
+    _assert(_burst_breakdown(6.0,  3.0) == 12, "+6% + rel_vol=3x → momentum_burst +12")
+    _assert(_burst_breakdown(5.0,  3.0) == 12, "+5% + rel_vol=3x → momentum_burst +12 (boundary)")
+    _assert(_burst_breakdown(12.0, 2.9) == 0,  "+12% but rel_vol=2.9x → 0 (volume required for burst)")
+    _assert(_burst_breakdown(4.9,  4.0) == 0,  "+4.9% + high vol → 0 (price < 5% threshold)")
+    _assert(_burst_breakdown(0.0,  0.0) == 0,  "Flat day, no vol → 0")
+
+    # 0-h. Re-entry cooldown: 4h block, bracket stop bypass fix (Fix 3 — 2026-06-22)
+    _section("0-h. Re-entry cooldown (4h, bracket stop detection)")
+    from datetime import datetime as _dt_h, timezone as _tz_h, timedelta as _td_h
+    from services.entry_timing import (
+        record_stopout as _rec_stop, is_in_stopout_cooldown as _in_cool,
+        _STOPOUT_COOLDOWN_HOURS as _COOL_HRS, _STOPOUT_COOLDOWN as _COOL_DICT,
+        _STOPOUT_COOLDOWN_LOCK as _COOL_LOCK,
+    )
+
+    _assert(_COOL_HRS >= 4.0, f"Cooldown configured ≥ 4h (currently {_COOL_HRS}h)")
+
+    _TEST_SYM = "__e2e_test_sym__"
+    with _COOL_LOCK:
+        _COOL_DICT.pop(_TEST_SYM, None)
+    _in_cool_raw, _ = _in_cool(_TEST_SYM)
+    _assert(not _in_cool_raw, "Symbol never stopped out → cooldown = False")
+
+    _rec_stop(_TEST_SYM)
+    _in_cool_raw2, _msg2 = _in_cool(_TEST_SYM)
+    _assert(_in_cool_raw2, "Just stopped out → cooldown = True")
+    _assert("h" in _msg2.lower() or "min" in _msg2.lower(), f"Cooldown message has time info: '{_msg2}'")
+
+    with _COOL_LOCK:
+        _COOL_DICT[_TEST_SYM] = _dt_h.now(_tz_h.utc) - _td_h(hours=_COOL_HRS + 1)
+    _in_cool_raw3, _ = _in_cool(_TEST_SYM)
+    _assert(not _in_cool_raw3, f"Stopped out {_COOL_HRS+1:.0f}h ago → cooldown expired → False")
+
+    with _COOL_LOCK:
+        _COOL_DICT.pop(_TEST_SYM, None)
+
     print(f"\n  Risk unit tests: {_UNIT_PASS} passed, {_UNIT_FAIL} failed")
     if _UNIT_FAIL > 0:
         print("  ✗ Fix unit failures before deploying.")
@@ -1368,6 +1432,34 @@ if _run("calibrate"):
                 else:
                     print("\n  ⚠  max_unrealized_pct not populated yet — fills from next trade onward")
 
+                # Metadata population check (Fix 4 — 2026-06-22)
+                _cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE hold_duration_mins IS NOT NULL),
+                        COUNT(*) FILTER (WHERE strategy        IS NOT NULL),
+                        COUNT(*) FILTER (WHERE setup_type      IS NOT NULL),
+                        COUNT(*) FILTER (WHERE signal_type     IS NOT NULL),
+                        COUNT(*)
+                    FROM position_log WHERE exit_time IS NOT NULL
+                """)
+                _meta = _cur.fetchone()
+                if _meta and _meta[4] > 0:
+                    _mh, _mst, _msu, _msi, _mtot = _meta
+                    print(f"\n  Metadata population (Fix-4 validation):")
+                    print(f"  {'Field':<24} {'Populated':>10} {'Rate':>7}")
+                    print(f"  {'─'*44}")
+                    for _fname, _fval in [
+                        ("hold_duration_mins", _mh),
+                        ("strategy",           _mst),
+                        ("setup_type",         _msu),
+                        ("signal_type",        _msi),
+                    ]:
+                        _pct = _fval / _mtot * 100
+                        _icon = "✓" if _fval > 0 else "⚠"
+                        print(f"  {_icon} {_fname:<23} {_fval:>6}/{_mtot:<5} {_pct:>5.0f}%")
+                    if _mh == 0:
+                        print("  ⚠  hold_duration_mins always null — metadata fix may not be active yet")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 12 — Profitability projection
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1554,6 +1646,7 @@ if _run("experiments"):
         from types import SimpleNamespace as _SN
         _mock_snap = _SN(
             daily_bar=_SN(close=100.0, open=98.0, volume=2_000_000),
+            prev_daily_bar=_SN(close=99.0, volume=2_000_000),
             latest_trade=_SN(price=100.0),
             latest_quote=None,
         )
