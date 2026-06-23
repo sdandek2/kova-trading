@@ -721,7 +721,7 @@ def check_exits():
                 continue
 
         # Squeeze died: volume fell back to normal
-        vol_r = _volume_ratio(snap)
+        vol_r = _effective_volume_ratio(snap)
         if vol_r < 1.5:
             _place_market_sell(symbol, pos["shares"])
             _close_position(pos["id"], price, "squeeze_died")

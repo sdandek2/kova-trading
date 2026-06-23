@@ -257,12 +257,39 @@ def _current_price(snap) -> Optional[float]:
 
 def _avg_volume(snap) -> float:
     try:
-        daily = snap.daily_bar
-        if daily:
-            return float(daily.volume)
+        if snap.prev_daily_bar:
+            return float(snap.prev_daily_bar.volume)
+        if snap.daily_bar:
+            return float(snap.daily_bar.volume)
     except Exception:
         pass
     return 0.0
+
+
+def _get_daily_bars(symbols: list[str], days: int = 30) -> dict:
+    """Fetch daily bars for candidates. One batch request — provides MA20 + price_at_earnings."""
+    if not symbols:
+        return {}
+    try:
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from datetime import timedelta
+        client = _get_data_client()
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+        req = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+            feed="iex",
+        )
+        raw = client.get_stock_bars(req)
+        data = raw.data if hasattr(raw, "data") else dict(raw)
+        return {sym: data[sym] for sym in data}
+    except Exception as e:
+        logger.warning(f"[Revision] daily bars error: {e}")
+        return {}
 
 
 # ── Place order ───────────────────────────────────────────────────────────────
@@ -346,6 +373,7 @@ def run_scan() -> dict:
 
     symbols = [sym for sym, _ in candidates]
     snaps = _get_snapshots(symbols)
+    bars_map = _get_daily_bars(symbols, days=30)
     equity = _get_equity()
     open_count = _open_position_count()
 
@@ -374,14 +402,30 @@ def run_scan() -> dict:
         beat_pct = data["beat_pct"]
         beat_date = data.get("beat_date", "")
 
-        # Approximate price at earnings — we don't have it directly, use current
-        # The scoring penalizes stocks that have already moved >20%
+        # Compute MA20 and price_at_earnings from daily bars
+        bars = bars_map.get(symbol, [])
+        closing_prices = [float(b.close) for b in bars]
+        from services.indicators import compute_moving_averages
+        ma20 = compute_moving_averages(closing_prices).get("ma20")
+
+        price_at_earnings = None
+        if beat_date and bars:
+            try:
+                beat_dt = datetime.fromisoformat(beat_date[:10]).date()
+                for bar in bars:
+                    bar_date = bar.timestamp.date() if hasattr(bar.timestamp, "date") else bar.timestamp
+                    if bar_date >= beat_dt:
+                        price_at_earnings = float(bar.close)
+                        break
+            except Exception:
+                pass
+
         score = _score_candidate(
             symbol, beat_pct, beat_date,
             current_price=price,
-            price_at_earnings=None,  # not tracked, score still works
+            price_at_earnings=price_at_earnings,
             avg_volume=vol,
-            ma20=None,
+            ma20=ma20,
         )
 
         results["candidates"].append({"symbol": symbol, "score": score, "beat_pct": beat_pct})
