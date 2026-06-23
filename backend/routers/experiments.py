@@ -69,3 +69,64 @@ def close_position(engine: str, position_id: int):
         raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
     mod = _engine_module(engine)
     return mod.close_position_by_id(position_id)
+
+
+@router.get("/squeeze/universe")
+def squeeze_universe():
+    """
+    Fetch the current high short-interest universe from HighShortInterest.com.
+    Read-only — no trades. Use this to validate the dynamic universe before enabling it.
+    """
+    import re
+    import httpx
+    from html.parser import HTMLParser
+
+    class _TableParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self.current_row, self.in_td = [], [], False
+        def handle_starttag(self, tag, attrs):
+            if tag == "td": self.in_td = True
+        def handle_endtag(self, tag):
+            if tag == "td": self.in_td = False
+            if tag == "tr":
+                if self.current_row: self.rows.append(self.current_row[:])
+                self.current_row = []
+        def handle_data(self, data):
+            if self.in_td:
+                s = data.strip()
+                if s: self.current_row.append(s)
+
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    stocks = {}
+
+    try:
+        for exchange, pages in [("Nasdaq", [1, 2]), ("NYSE", [1])]:
+            for page in pages:
+                url = f"https://www.highshortinterest.com/{exchange.lower()}/{page}/"
+                resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+                resp.raise_for_status()
+                p = _TableParser()
+                p.feed(resp.text)
+                for row in p.rows:
+                    if (len(row) >= 4
+                            and re.match(r"^[A-Z]{1,5}$", row[0])
+                            and row[0] not in ("NYSE", "NASDAQ", "AMEX")):
+                        ticker = row[0]
+                        if ticker not in stocks:
+                            stocks[ticker] = {
+                                "ticker": ticker,
+                                "company": row[1] if len(row) > 1 else "",
+                                "exchange": exchange,
+                                "short_float_pct": float(row[3].replace("%", "")) if len(row) > 3 else None,
+                            }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"HighShortInterest.com fetch failed: {e}")
+
+    sorted_stocks = sorted(stocks.values(), key=lambda x: x["short_float_pct"] or 0, reverse=True)
+    return {
+        "source": "highshortinterest.com",
+        "total": len(sorted_stocks),
+        "note": "All stocks with >=20% short float. Sorted by short float desc.",
+        "stocks": sorted_stocks,
+    }
