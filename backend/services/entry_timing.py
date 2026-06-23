@@ -33,7 +33,7 @@ _REJECTION_COOLDOWN_MINUTES = 15  # aggressive: shorter cooldown so symbols re-e
 # a full-day ban, this allows profitable afternoon re-entries.
 _STOPOUT_COOLDOWN: dict = {}   # symbol → datetime of stop-out
 _STOPOUT_COOLDOWN_LOCK = threading.Lock()
-_STOPOUT_COOLDOWN_HOURS = 2.0
+_STOPOUT_COOLDOWN_HOURS = 4.0
 
 
 def record_stopout(symbol: str) -> None:

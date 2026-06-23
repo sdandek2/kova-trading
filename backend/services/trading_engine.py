@@ -771,6 +771,13 @@ async def run_trading_cycle():
                 except Exception:
                     pass
                 _known_reason = prev.get("exit_reason", "unknown")
+                # Bracket stop-losses fire at Alpaca silently — the active exit path
+                # (which calls record_stopout) never runs. Catch them here so the
+                # 4h re-entry cooldown applies to broker-side stops too.
+                _final_reason = _known_reason if _known_reason != "unknown" else (inferred_reason or "unknown")
+                if _final_reason in ("stop_loss_order", "loss_cut"):
+                    from services.entry_timing import record_stopout as _rs
+                    _rs(sym)
                 log_position_close(
                     symbol=sym,
                     exit_price=exit_price,
