@@ -43,8 +43,18 @@ _NASDAQ_API_DELAY = 0.3      # seconds between NASDAQ API calls
 _last_scan_date: Optional[str] = None
 _premarket_scan_done_date: Optional[str] = None
 _premarket_data: dict = {}  # {symbol: {pm_volume, pm_change_pct, prev_close}}
+_universe_cache: dict = {}  # {symbol: short_float_pct} — refreshed daily
+_universe_cache_date: Optional[str] = None
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
+
+# Fallback universe if HighShortInterest.com is unreachable
+_FALLBACK_UNIVERSE = [
+    "MARA", "RIOT", "COIN", "HOOD", "SOFI", "RIVN", "LCID", "NIO",
+    "XPEV", "UPST", "AFRM", "BBAI", "SOUN", "SMCI", "IONQ", "QBTS",
+    "RGTI", "GME", "AMC", "SPCE", "BLNK", "CHPT", "EVGO", "PLUG",
+    "FCEL", "OPEN", "OPFI", "HRTX", "SAVA", "AGEN", "IMVT", "PRAX",
+]
 
 
 # ── Alpaca clients (own account) ─────────────────────────────────────────────
@@ -255,22 +265,74 @@ def _fetch_short_interest(symbol: str) -> Optional[float]:
     return _get_days_to_cover_yfinance(symbol)
 
 
+# ── Dynamic universe (HighShortInterest.com) ─────────────────────────────────
+
+def _fetch_universe() -> dict:
+    """
+    Scrape HighShortInterest.com for stocks with >=20% short float.
+    Returns {symbol: short_float_pct}. Cached once per day.
+    Falls back to _FALLBACK_UNIVERSE if the site is unreachable.
+    """
+    global _universe_cache, _universe_cache_date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _universe_cache_date == today and _universe_cache:
+        return _universe_cache
+
+    from html.parser import HTMLParser
+    import re as _re
+
+    class _Parser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self.current_row, self.in_td = [], [], False
+        def handle_starttag(self, tag, attrs):
+            if tag == "td": self.in_td = True
+        def handle_endtag(self, tag):
+            if tag == "td": self.in_td = False
+            if tag == "tr":
+                if self.current_row: self.rows.append(self.current_row[:])
+                self.current_row = []
+        def handle_data(self, data):
+            if self.in_td:
+                s = data.strip()
+                if s: self.current_row.append(s)
+
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    result = {}
+    try:
+        for exchange, pages in [("nasdaq", [1, 2]), ("nyse", [1])]:
+            for page in pages:
+                url = f"https://www.highshortinterest.com/{exchange}/{page}/"
+                resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+                resp.raise_for_status()
+                p = _Parser()
+                p.feed(resp.text)
+                for row in p.rows:
+                    if (len(row) >= 4
+                            and _re.match(r"^[A-Z]{1,5}$", row[0])
+                            and row[0] not in ("NYSE", "NASDAQ", "AMEX")):
+                        try:
+                            result[row[0]] = float(row[3].replace("%", ""))
+                        except ValueError:
+                            pass
+        logger.info(f"[Squeeze] universe fetched: {len(result)} stocks from HighShortInterest.com")
+        _universe_cache = result
+        _universe_cache_date = today
+    except Exception as e:
+        logger.warning(f"[Squeeze] universe fetch failed, using fallback: {e}")
+        if not _universe_cache:
+            _universe_cache = {sym: None for sym in _FALLBACK_UNIVERSE}
+    return _universe_cache
+
+
 # ── Volume/price screening via Alpaca ────────────────────────────────────────
 
 def _get_all_snapshots_batch() -> dict:
-    """Fetch batch snapshot for a broad universe to find volume spikes."""
+    """Fetch batch snapshot for the current high-short-interest universe."""
     try:
         from alpaca.data.requests import StockSnapshotRequest
         from alpaca.data.enums import DataFeed as Feed
-        # Use a broad but manageable universe — high-vol stocks most likely to squeeze
-        universe = [
-            "MARA", "RIOT", "COIN", "HOOD", "SOFI", "RIVN", "LCID", "NIO",
-            "XPEV", "UPST", "AFRM", "BBAI", "SOUN", "SMCI", "IONQ", "QBTS",
-            "RGTI", "ARKG", "ARKK", "GME", "AMC", "BBBY", "SPCE", "NKLA",
-            "WKHS", "RIDE", "GOEV", "HYLN", "BLNK", "CHPT", "EVGO", "PLUG",
-            "FCEL", "BLDP", "VJET", "OPEN", "OPFI", "CLOV", "WISH", "SKLZ",
-            "BARK", "BODY", "GREE", "HRTX", "SAVA", "AGEN", "IMVT", "PRAX",
-        ]
+        universe = list(_fetch_universe().keys())
         client = _get_data_client()
         req = StockSnapshotRequest(symbol_or_symbols=universe, feed=Feed.IEX)
         snaps = client.get_stock_snapshot(req)
@@ -359,29 +421,32 @@ def _ask_price(snap) -> Optional[float]:
 # ── Scoring ───────────────────────────────────────────────────────────────────
 
 def _score_candidate(dtc: Optional[float], vol_ratio: float,
-                     price_change_pct: float) -> int:
+                     price_change_pct: float,
+                     short_float_pct: Optional[float] = None) -> int:
     score = 0
     has_short_data = dtc is not None
 
+    # Days-to-cover from NASDAQ API — primary squeeze signal
     if has_short_data:
-        if dtc > 7:
-            score += 35
-        elif dtc > 5:
-            score += 25
-        elif dtc > 3:
-            score += 10
+        if dtc > 7:   score += 35
+        elif dtc > 5: score += 25
+        elif dtc > 3: score += 10
 
-    if vol_ratio > 3:
-        score += 20
-    elif vol_ratio > 2:
-        score += 10
+    # Volume ratio — squeeze already in motion
+    if vol_ratio > 3:   score += 20
+    elif vol_ratio > 2: score += 10
 
-    if price_change_pct > 5:
-        score += 15
-    elif price_change_pct > 3:
-        score += 8
+    # Price momentum — confirms direction
+    if price_change_pct > 5:   score += 15
+    elif price_change_pct > 3: score += 8
 
-    # Cap score if no short interest data
+    # Short float bonus — amplification potential (free, from universe scrape)
+    if short_float_pct is not None:
+        if short_float_pct > 40:   score += 15
+        elif short_float_pct > 30: score += 10
+        elif short_float_pct > 20: score += 5
+
+    # Cap score if no DTC data (NYSE stocks where NASDAQ API returns nothing)
     if not has_short_data:
         score = min(score, 60)
 
@@ -552,11 +617,13 @@ def run_scan() -> dict:
 
         time.sleep(_NASDAQ_API_DELAY)
         dtc = _fetch_short_interest(symbol)
+        short_float_pct = _universe_cache.get(symbol)
 
-        score = _score_candidate(dtc, vol_r, pct_chg)
+        score = _score_candidate(dtc, vol_r, pct_chg, short_float_pct)
         results["candidates"].append({
             "symbol": symbol, "score": score,
-            "days_to_cover": dtc, "vol_ratio": vol_r, "price_chg": pct_chg
+            "days_to_cover": dtc, "vol_ratio": vol_r, "price_chg": pct_chg,
+            "short_float_pct": short_float_pct,
         })
 
         if score < _SCORE_THRESHOLD:
