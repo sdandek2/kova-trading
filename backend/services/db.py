@@ -818,7 +818,8 @@ def get_position_history(limit: int = 50) -> list[dict]:
             cur.execute("""
                 SELECT symbol, side, entry_time, exit_time, entry_price, exit_price,
                        quantity, realized_pl, realized_pl_pct, hold_duration_mins,
-                       exit_reason, strategy, claude_reasoning, market_regime
+                       exit_reason, strategy, claude_reasoning, market_regime,
+                       setup_type, signal_type
                 FROM position_log
                 WHERE exit_time IS NOT NULL
                 ORDER BY exit_time DESC
@@ -841,6 +842,8 @@ def get_position_history(limit: int = 50) -> list[dict]:
                 "strategy":          r[11],
                 "claude_reasoning":  r[12],
                 "market_regime":     r[13],
+                "setup_type":        r[14],
+                "signal_type":       r[15],
             }
             for r in rows
         ]
