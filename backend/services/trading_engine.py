@@ -1305,7 +1305,7 @@ async def run_trading_cycle():
             if _now_et_flat.hour * 60 + _now_et_flat.minute >= 15 * 60 + 45:
                 # ── Smart overnight hold ──────────────────────────────────────
                 _overnight_hold = False
-                _oh_min_pct = float(_risk_settings.get("overnight_hold_min_pct", 8.0))
+                _oh_min_pct = float(_risk_settings.get("overnight_hold_min_pct", 5.0))
 
                 if position.side == "long" and position.unrealized_pl_percent >= _oh_min_pct:
                     try:
