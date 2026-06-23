@@ -22,8 +22,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _SCAN_HOUR_ET = 9
-_SCAN_MINUTE_ET = 50
-_CHECK_INTERVAL = 300   # 5 min — ensures we hit the 9:50-9:59 AM scan window reliably
+_SCAN_MINUTE_ET = 32    # 9:32 AM ET — earnings beats known pre-market; enter before peers run
+_CHECK_INTERVAL = 300   # 5 min loop — hits the 9:32 AM scan window reliably
 _MAX_POSITIONS = 3
 _POSITION_SIZE_PCT = 0.20
 _SCORE_THRESHOLD = 60
@@ -244,6 +244,16 @@ def _daily_volume(snap) -> float:
     return 0.0
 
 
+def _prev_daily_volume(snap) -> float:
+    """Yesterday's full-day volume — reliable liquidity proxy at any time of day."""
+    try:
+        if snap.prev_daily_bar:
+            return float(snap.prev_daily_bar.volume)
+    except Exception:
+        pass
+    return 0.0
+
+
 # ── Place / cancel orders ─────────────────────────────────────────────────────
 
 def _place_limit_buy(symbol: str, shares: int, ask: float) -> bool:
@@ -297,29 +307,37 @@ def _score_peer(trigger_sym: str, peer_sym: str, peer_snap,
                 trigger_beat_pct: float) -> int:
     score = 0
 
-    # Same sub-industry: the trigger and peer are in the same peer list
+    # Sub-industry closeness: bidirectional check
     peers = _load_sector_peers()
     trigger_peers = set(peers.get(trigger_sym, []))
     peer_peers = set(peers.get(peer_sym, []))
     if trigger_sym in peer_peers or peer_sym in trigger_peers:
         score += 30
 
-    # Volume uptick (can't compute ratio without historical; use proxy: high volume today)
-    vol = _daily_volume(peer_snap)
-    if vol > 1_000_000:
+    # Liquidity: use prev_daily_bar so this works reliably at market open
+    prev_vol = _prev_daily_volume(peer_snap)
+    if prev_vol > 1_000_000:
         score += 15
-    elif vol > 300_000:
+    elif prev_vol > 300_000:
         score += 5
 
-    # Not overbought — approximate via price vs daily bar
+    # Peer hasn't already moved vs yesterday's close (reliable at any time of day)
     try:
-        if peer_snap.daily_bar:
-            bar = peer_snap.daily_bar
-            day_chg = (bar.close - bar.open) / bar.open * 100
-            if day_chg < 3:  # hasn't already gapped up
-                score += 15
+        prev_close = float(peer_snap.prev_daily_bar.close) if peer_snap.prev_daily_bar else None
+        if prev_close:
+            current = _current_price(peer_snap)
+            if current:
+                day_chg = (current - prev_close) / prev_close * 100
+                if day_chg < 3:
+                    score += 15
     except Exception:
         pass
+
+    # Bonus for large trigger beats — stronger catalyst = higher expected peer move
+    if trigger_beat_pct > 25:
+        score += 10
+    elif trigger_beat_pct > 15:
+        score += 5
 
     return score
 
@@ -376,11 +394,14 @@ def run_scan() -> dict:
     for trigger_sym, beat_pct, peer_list in triggers:
         results["triggers"].append({"symbol": trigger_sym, "beat_pct": beat_pct})
 
+    # Score all qualifying peers across all triggers, then sort best-first
+    scored_candidates = []
+    seen_peers: set[str] = set()
+    for trigger_sym, beat_pct, peer_list in triggers:
         for peer in peer_list:
-            if open_count >= _MAX_POSITIONS:
-                break
-            if _has_open_position(peer):
+            if peer in seen_peers or _has_open_position(peer):
                 continue
+            seen_peers.add(peer)
 
             snap = snaps.get(peer)
             if not snap:
@@ -391,16 +412,17 @@ def run_scan() -> dict:
                 results["skipped"].append({"symbol": peer, "reason": "price_too_low"})
                 continue
 
-            vol = _daily_volume(snap)
-            if vol < _MIN_VOLUME:
+            # Use prev_daily_bar volume — reliable at any time of day
+            liquidity = _prev_daily_volume(snap)
+            if liquidity < _MIN_VOLUME:
                 results["skipped"].append({"symbol": peer, "reason": "low_volume"})
                 continue
 
-            # Check peer hasn't already moved too much
+            # Already moved too much vs yesterday's close (works at market open)
             try:
-                bar = snap.daily_bar
-                if bar:
-                    day_move = abs((bar.close - bar.open) / bar.open * 100)
+                prev_close = float(snap.prev_daily_bar.close) if snap.prev_daily_bar else None
+                if prev_close:
+                    day_move = abs((price - prev_close) / prev_close * 100)
                     if day_move > _PEER_MAX_MOVED_PCT:
                         results["skipped"].append({"symbol": peer, "reason": "already_moved"})
                         continue
@@ -412,21 +434,30 @@ def run_scan() -> dict:
                 results["skipped"].append({"symbol": peer, "reason": f"score_too_low_{score}"})
                 continue
 
-            ask = _ask_price(snap) or price
-            budget = equity * _POSITION_SIZE_PCT
-            shares = max(1, int(budget / ask))
-            stop = round(ask * (1 - _STOP_PCT), 2)
-            target = round(ask * (1 + _TARGET_PCT), 2)
+            scored_candidates.append((score, peer, snap, trigger_sym, beat_pct))
 
-            ok = _place_limit_buy(peer, shares, ask)
-            if ok:
-                _record_open(peer, ask, shares, stop, target,
-                             trigger_sym, beat_pct,
-                             None,
-                             f"trigger={trigger_sym} beat={beat_pct:.1f}% score={score}")
-                results["bought"].append({"symbol": peer, "shares": shares, "price": ask,
-                                          "trigger": trigger_sym})
-                open_count += 1
+    # Buy highest-scored peers first
+    scored_candidates.sort(key=lambda x: x[0], reverse=True)
+    for score, peer, snap, trigger_sym, beat_pct in scored_candidates:
+        if open_count >= _MAX_POSITIONS:
+            break
+
+        price = _current_price(snap)
+        ask = _ask_price(snap) or price
+        budget = equity * _POSITION_SIZE_PCT
+        shares = max(1, int(budget / ask))
+        stop = round(ask * (1 - _STOP_PCT), 2)
+        target = round(ask * (1 + _TARGET_PCT), 2)
+
+        ok = _place_limit_buy(peer, shares, ask)
+        if ok:
+            _record_open(peer, ask, shares, stop, target,
+                         trigger_sym, beat_pct,
+                         None,
+                         f"trigger={trigger_sym} beat={beat_pct:.1f}% score={score}")
+            results["bought"].append({"symbol": peer, "shares": shares, "price": ask,
+                                      "trigger": trigger_sym})
+            open_count += 1
 
     _last_scan_date = today
     logger.info(f"[Spillover] scan done: {len(results['bought'])} bought, "

@@ -22,8 +22,11 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 _SCAN_HOUR_ET = 9
-_SCAN_MINUTE_ET = 50
-_CHECK_INTERVAL = 300   # 5 min — ensures we hit the 9:50-9:59 AM scan window reliably
+_PREMARKET_SCAN_MINUTE_ET = 15   # 9:15 AM ET — pre-market candidate detection
+_CONFIRM_SCAN_MINUTE_ET = 32     # 9:32 AM ET — market-open confirmation + entry
+_PM_MIN_CHANGE_PCT = 2.0         # pre-market price change % to qualify
+_PM_MIN_VOLUME = 50_000          # pre-market share volume to qualify
+_CHECK_INTERVAL = 300   # 5 min loop — hits 9:15 pre-market and 9:35 confirm windows
 _MAX_POSITIONS = 2
 _POSITION_SIZE_PCT = 0.25
 _SCORE_THRESHOLD = 70
@@ -38,6 +41,8 @@ _MIN_PRICE = 3.0
 _NASDAQ_API_DELAY = 0.3      # seconds between NASDAQ API calls
 
 _last_scan_date: Optional[str] = None
+_premarket_scan_done_date: Optional[str] = None
+_premarket_data: dict = {}  # {symbol: {pm_volume, pm_change_pct, prev_close}}
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
 
@@ -275,24 +280,57 @@ def _get_all_snapshots_batch() -> dict:
         return {}
 
 
-def _volume_ratio(snap) -> float:
-    """Volume ratio: today's cumulative volume vs yesterday's total volume."""
+def _get_premarket_bars(symbols: list[str]) -> dict:
+    """Fetch pre-market minute bars (4 AM – 9:15 AM ET). Returns {} if feed unavailable."""
     try:
-        today_vol = snap.daily_bar.volume if snap.daily_bar else None
-        yest_vol = snap.prev_daily_bar.volume if snap.prev_daily_bar else None
-        if today_vol and yest_vol and yest_vol > 0:
-            return today_vol / yest_vol
+        import zoneinfo
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        et = zoneinfo.ZoneInfo("America/New_York")
+        now = datetime.now(et)
+        pm_start = now.replace(hour=4, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        pm_end = now.replace(hour=9, minute=14, second=59, microsecond=0).astimezone(timezone.utc)
+        client = _get_data_client()
+        req = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Minute,
+            start=pm_start,
+            end=pm_end,
+        )
+        raw = client.get_stock_bars(req)
+        return dict(raw) if raw else {}
+    except Exception as e:
+        logger.debug(f"[Squeeze] premarket bars unavailable: {e}")
+        return {}
+
+
+def _effective_volume_ratio(snap) -> float:
+    """Volume ratio extrapolated to full-day pace when < 30 min into session."""
+    import zoneinfo
+    try:
+        today_vol = float(snap.daily_bar.volume) if snap.daily_bar else None
+        yest_vol = float(snap.prev_daily_bar.volume) if snap.prev_daily_bar else None
+        if not today_vol or not yest_vol or yest_vol == 0:
+            return 0.0
+        et = zoneinfo.ZoneInfo("America/New_York")
+        now = datetime.now(et)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        elapsed_min = max(1, (now - market_open).total_seconds() / 60)
+        if elapsed_min < 30:
+            today_vol = today_vol * (390 / elapsed_min)
+        return today_vol / yest_vol
     except Exception:
         pass
     return 0.0
 
 
 def _price_change_pct(snap) -> float:
+    """Price change % from yesterday's close (includes overnight gap + intraday move)."""
     try:
-        if snap.daily_bar:
-            bar = snap.daily_bar
-            if bar.open and bar.open > 0:
-                return (bar.close - bar.open) / bar.open * 100
+        current = _current_price(snap)
+        prev_close = float(snap.prev_daily_bar.close) if snap.prev_daily_bar else None
+        if current and prev_close and prev_close > 0:
+            return (current - prev_close) / prev_close * 100
     except Exception:
         pass
     return 0.0
@@ -397,7 +435,62 @@ def _get_equity() -> float:
         return 25_000.0
 
 
-# ── Main scan ─────────────────────────────────────────────────────────────────
+# ── Pre-market scan (9:15 AM ET) ──────────────────────────────────────────────
+
+def run_premarket_scan() -> dict:
+    """Detect squeeze candidates from pre-market volume + price action."""
+    global _premarket_scan_done_date, _premarket_data
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _premarket_scan_done_date == today:
+        return {"skipped": "already ran today"}
+
+    logger.info("[Squeeze] starting pre-market scan")
+    _premarket_data = {}
+
+    snaps = _get_all_snapshots_batch()
+    if not snaps:
+        _premarket_scan_done_date = today
+        return {"candidates": []}
+
+    bars_dict = _get_premarket_bars(list(snaps.keys()))
+    if not bars_dict:
+        logger.info("[Squeeze] pre-market bars unavailable — will use extrapolated ratio at open")
+        _premarket_scan_done_date = today
+        return {"candidates": []}
+
+    candidates = []
+    for sym, snap in snaps.items():
+        bars = bars_dict.get(sym, [])
+        if not bars:
+            continue
+        try:
+            prev_close = float(snap.prev_daily_bar.close) if snap.prev_daily_bar else None
+            if not prev_close:
+                continue
+            pm_volume = sum(float(b.volume) for b in bars)
+            pm_last_price = float(bars[-1].close)
+            pm_change_pct = (pm_last_price - prev_close) / prev_close * 100
+            if pm_change_pct >= _PM_MIN_CHANGE_PCT and pm_volume >= _PM_MIN_VOLUME:
+                _premarket_data[sym] = {
+                    "pm_volume": pm_volume,
+                    "pm_change_pct": pm_change_pct,
+                    "prev_close": prev_close,
+                }
+                candidates.append({
+                    "symbol": sym,
+                    "pm_change_pct": round(pm_change_pct, 1),
+                    "pm_volume": int(pm_volume),
+                })
+                logger.info(f"[Squeeze] pre-market candidate: {sym} +{pm_change_pct:.1f}% vol={pm_volume:,.0f}")
+        except Exception as e:
+            logger.debug(f"[Squeeze] pre-market {sym}: {e}")
+
+    _premarket_scan_done_date = today
+    logger.info(f"[Squeeze] pre-market done: {len(_premarket_data)} candidates")
+    return {"candidates": candidates}
+
+
+# ── Main scan (9:32 AM ET confirmation) ───────────────────────────────────────
 
 def run_scan() -> dict:
     global _last_scan_date
@@ -405,10 +498,17 @@ def run_scan() -> dict:
     if _last_scan_date == today:
         return {"skipped": "already ran today"}
 
-    logger.info("[Squeeze] starting daily scan")
+    logger.info("[Squeeze] starting confirmation scan")
     results = {"candidates": [], "bought": [], "skipped": []}
 
-    snaps = _get_all_snapshots_batch()
+    # Use pre-market candidates as focused universe; fall back to full universe
+    if _premarket_data:
+        logger.info(f"[Squeeze] confirming {len(_premarket_data)} pre-market candidates")
+        snaps = _get_snapshots(list(_premarket_data.keys()))
+    else:
+        logger.info("[Squeeze] no pre-market data — scanning full universe")
+        snaps = _get_all_snapshots_batch()
+
     if not snaps:
         logger.warning("[Squeeze] no snapshots returned — skipping scan")
         return results
@@ -416,20 +516,34 @@ def run_scan() -> dict:
     equity = _get_equity()
     open_count = _open_position_count()
 
-    # Step 1: filter by volume + price
+    # Step 1: filter by volume + price; sort by signal strength
     first_pass = []
     for symbol, snap in snaps.items():
         price = _current_price(snap)
         if not price or price < _MIN_PRICE:
             continue
-        vol_r = _volume_ratio(snap)
-        pct_chg = _price_change_pct(snap)
+
+        if _premarket_data.get(symbol):
+            pm = _premarket_data[symbol]
+            prev_vol = float(snap.prev_daily_bar.volume) if snap.prev_daily_bar else 0
+            vol_r = pm["pm_volume"] / prev_vol if prev_vol > 0 else 0
+            pct_chg = (price - pm["prev_close"]) / pm["prev_close"] * 100
+            # Reject if move has fully reversed since pre-market
+            if pct_chg < _PM_MIN_CHANGE_PCT * 0.5:
+                results["skipped"].append({"symbol": symbol, "reason": "reversed_at_open"})
+                continue
+        else:
+            vol_r = _effective_volume_ratio(snap)
+            pct_chg = _price_change_pct(snap)
+
         if vol_r >= _MIN_VOLUME_RATIO and pct_chg >= _MIN_PRICE_CHANGE_PCT:
             first_pass.append((symbol, snap, vol_r, pct_chg))
 
+    # Sort by combined signal strength — highest momentum first
+    first_pass.sort(key=lambda x: x[2] * x[3], reverse=True)
     logger.info(f"[Squeeze] {len(first_pass)} candidates after vol/price filter")
 
-    # Step 2: get short interest for each candidate
+    # Step 2: short interest check + score + buy (in signal-strength order)
     for symbol, snap, vol_r, pct_chg in first_pass:
         if open_count >= _MAX_POSITIONS:
             break
@@ -549,22 +663,33 @@ def check_exits():
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
-def _is_scan_time() -> bool:
+def _is_premarket_scan_time() -> bool:
     import zoneinfo
     now = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
     return (now.weekday() < 5 and
             now.hour == _SCAN_HOUR_ET and
-            now.minute >= _SCAN_MINUTE_ET)
+            _PREMARKET_SCAN_MINUTE_ET <= now.minute < 30)
+
+
+def _is_confirm_scan_time() -> bool:
+    import zoneinfo
+    now = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    return (now.weekday() < 5 and
+            now.hour == _SCAN_HOUR_ET and
+            now.minute >= _CONFIRM_SCAN_MINUTE_ET)
 
 
 def _loop():
     logger.info("[Squeeze] scheduler started")
     while not _stop.is_set():
         try:
-            if _is_configured() and _market_is_open():
-                if _is_scan_time():
-                    run_scan()
-                check_exits()
+            if _is_configured():
+                if _is_premarket_scan_time():
+                    run_premarket_scan()
+                if _market_is_open():
+                    if _is_confirm_scan_time():
+                        run_scan()
+                    check_exits()
         except Exception as e:
             logger.error(f"[Squeeze] scheduler error: {e}")
         _stop.wait(_CHECK_INTERVAL)
