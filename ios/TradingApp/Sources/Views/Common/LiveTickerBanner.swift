@@ -5,18 +5,17 @@ import SwiftUI
 
 struct LiveTickerBanner: View {
     let positions: [Position]
-    @State private var started = false
     @State private var offset: CGFloat = 0
 
     private let cellW: CGFloat   = 138
     private let cellGap: CGFloat = 10
 
-    private var loopW: CGFloat {
-        CGFloat(positions.count) * (cellW + cellGap)
+    private func loopW(_ count: Int) -> CGFloat {
+        CGFloat(count) * (cellW + cellGap)
     }
 
     var body: some View {
-        Group {
+        GeometryReader { geo in
             if positions.isEmpty {
                 HStack {
                     Circle().fill(LakshmiTheme.positive).frame(width: 6, height: 6)
@@ -24,8 +23,9 @@ struct LiveTickerBanner: View {
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: geo.size.width, alignment: .center)
             } else {
+                let lw = loopW(positions.count)
                 HStack(spacing: cellGap) {
                     ForEach(0..<2, id: \.self) { _ in
                         ForEach(positions) { pos in
@@ -33,17 +33,28 @@ struct LiveTickerBanner: View {
                         }
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
                 .offset(x: offset)
-                .animation(
-                    .linear(duration: max(Double(positions.count) * 4.0, 10.0))
-                        .repeatForever(autoreverses: false),
-                    value: offset
-                )
+                .onAppear {
+                    offset = 0
+                    withAnimation(
+                        .linear(duration: max(Double(positions.count) * 4.0, 10.0))
+                            .repeatForever(autoreverses: false)
+                    ) {
+                        offset = -lw
+                    }
+                }
+                .onChange(of: positions.count) { _ in
+                    offset = 0
+                    withAnimation(
+                        .linear(duration: max(Double(positions.count) * 4.0, 10.0))
+                            .repeatForever(autoreverses: false)
+                    ) {
+                        offset = -loopW(positions.count)
+                    }
+                }
             }
         }
         .frame(height: 34)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
         .overlay(alignment: .leading) {
             LinearGradient(
@@ -60,11 +71,6 @@ struct LiveTickerBanner: View {
             )
             .frame(width: 20)
             .allowsHitTesting(false)
-        }
-        .onAppear {
-            guard !started, !positions.isEmpty else { return }
-            started = true
-            offset = -loopW
         }
     }
 }

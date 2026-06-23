@@ -261,7 +261,8 @@ private struct InlineChart: View {
     private var lineColor: Color { isPositive ? LakshmiTheme.positive : LakshmiTheme.negative }
     private var labelColor: Color { onDark ? .white.opacity(0.35) : .secondary }
     private var gridColor: Color  { onDark ? .white.opacity(0.12) : Color(.separator).opacity(0.4) }
-    private var areaOpacity: Double { onDark ? 0.38 : 0.20 }
+    // Higher opacity on dark bg so the area fill is visible even on negative (red-on-dark) days
+    private var areaOpacity: Double { onDark ? 0.55 : 0.20 }
 
     var body: some View {
         if points.isEmpty {
