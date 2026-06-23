@@ -2088,13 +2088,16 @@ async def run_trading_cycle():
                 if _existing_conflict:
                     _is_conflict = (
                         (decision.action == "buy" and _existing_conflict.side == "short") or
-                        (decision.action == "short" and _existing_conflict.side == "long")
+                        (decision.action == "short" and _existing_conflict.side == "long") or
+                        (decision.action == "buy" and _existing_conflict.side == "long")
                     )
                     if _is_conflict:
                         _conflict_msg = (
                             f"{decision.action.upper()} {decision.symbol} blocked — "
                             f"already holding {_existing_conflict.side} position. "
-                            f"Conflicting long+short on same symbol creates net-zero exposure."
+                            + ("Use pyramid logic to add to winners, not a new entry."
+                               if decision.action == "buy" and _existing_conflict.side == "long"
+                               else "Conflicting long+short on same symbol creates net-zero exposure.")
                         )
                         logger.info(f"Conflict check: {_conflict_msg}")
                         log_bot_activity("entry_rejected", _conflict_msg,
