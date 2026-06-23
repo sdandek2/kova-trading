@@ -785,6 +785,10 @@ async def run_trading_cycle():
                         or (macro.get("market_regime") if macro else None)
                     ),
                     max_unrealized_pct=prev.get("max_unrealized_pct"),
+                    strategy=prev.get("strategy"),
+                    setup_type=prev.get("setup_type"),
+                    signal_type=prev.get("signal_type"),
+                    claude_reasoning=prev.get("claude_reasoning"),
                 )
                 # Log signal performance for weekly weight adjustment
                 try:
@@ -2783,22 +2787,34 @@ async def run_trading_cycle():
                     if decision.action == "buy" and fill_price > 0:
                         _position_high_watermarks[decision.symbol] = fill_price
                         _save_watermarks()
+                        _prev_scored_deferred = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                         _previous_positions[decision.symbol] = {
                             "qty": decision.quantity,
                             "avg_entry_price": fill_price,
                             "entry_time": datetime.now(timezone.utc),
                             "exit_reason": "unknown",
                             "side": "long",
+                            "strategy": strategy_key,
+                            "setup_type": _setup_type,
+                            "signal_type": _sig_type_entry or "momentum",
+                            "claude_reasoning": decision.reasoning,
+                            "score_breakdown": getattr(_prev_scored_deferred, "score_breakdown", {}) if _prev_scored_deferred else {},
                         }
                     elif decision.action == "short" and fill_price > 0:
                         _short_low_watermarks[decision.symbol] = fill_price
                         _save_watermarks()
+                        _prev_scored_deferred_short = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
                         _previous_positions[decision.symbol] = {
                             "qty": decision.quantity,
                             "avg_entry_price": fill_price,
                             "entry_time": datetime.now(timezone.utc),
                             "exit_reason": "unknown",
                             "side": "short",
+                            "strategy": f"{strategy_key}_short",
+                            "setup_type": _setup_type,
+                            "signal_type": _sig_type_entry or "short_candidate",
+                            "claude_reasoning": decision.reasoning,
+                            "score_breakdown": getattr(_prev_scored_deferred_short, "score_breakdown", {}) if _prev_scored_deferred_short else {},
                         }
                 elif decision.action == "short" and fill_price > 0:
                     _prev_scored_short = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
@@ -2830,6 +2846,10 @@ async def run_trading_cycle():
                         "side": "short",
                         "max_unrealized_pct": None,
                         "score_breakdown": getattr(_prev_scored_short, "score_breakdown", {}) if _prev_scored_short else {},
+                        "strategy": f"{strategy_key}_short",
+                        "setup_type": _setup_type,
+                        "signal_type": _sig_type_entry or "short_candidate",
+                        "claude_reasoning": decision.reasoning,
                     }
                 elif decision.action == "buy" and fill_price > 0:
                     _prev_scored = next((c for c in (_scored or []) if c.symbol == decision.symbol), None)
@@ -2861,6 +2881,10 @@ async def run_trading_cycle():
                         "side": "long",
                         "max_unrealized_pct": None,
                         "score_breakdown": getattr(_prev_scored, "score_breakdown", {}) if _prev_scored else {},
+                        "strategy": strategy_key,
+                        "setup_type": _setup_type,
+                        "signal_type": _sig_type_entry or "momentum",
+                        "claude_reasoning": decision.reasoning,
                     }
                 elif decision.action == "sell" and fill_price:
                     prev = _previous_positions.get(decision.symbol, {})

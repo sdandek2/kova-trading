@@ -719,7 +719,9 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                        entry_price: float = None, quantity: int = None,
                        entry_time: datetime = None, side: str = "long",
                        market_regime: str = None,
-                       max_unrealized_pct: float = None) -> None:
+                       max_unrealized_pct: float = None,
+                       strategy: str = None, setup_type: str = None,
+                       signal_type: str = None, claude_reasoning: str = None) -> None:
     """
     Update the most recent open position_log row for *symbol* with exit data.
     Also handles the case where no open row exists (logs a standalone closed row).
@@ -782,17 +784,22 @@ def log_position_close(symbol: str, exit_price: float, exit_reason: str,
                 """, (now, exit_price, realized_pl, realized_pl_pct,
                       hold_mins, exit_reason, market_regime, max_unrealized_pct, pos_id))
             else:
-                # No open row — insert a closed record directly
+                # No open row — insert a closed record with all available metadata
                 ep = entry_price or 0
                 qty = quantity or 0
                 realized_pl, realized_pl_pct = _calc_pl(ep, exit_price, qty, side)
+                hold_mins = int((now - entry_time).total_seconds() / 60) if entry_time else None
                 cur.execute("""
                     INSERT INTO position_log
                         (symbol, side, entry_time, exit_time, entry_price, exit_price,
-                         quantity, realized_pl, realized_pl_pct, exit_reason)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         quantity, realized_pl, realized_pl_pct, exit_reason,
+                         hold_duration_mins, market_regime, strategy, setup_type,
+                         signal_type, claude_reasoning)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (symbol, side or "long", entry_time or now, now, ep, exit_price,
-                      qty, realized_pl, realized_pl_pct, exit_reason))
+                      qty, realized_pl, realized_pl_pct, exit_reason,
+                      hold_mins, market_regime, strategy, setup_type,
+                      signal_type, claude_reasoning))
         logger.info(f"log_position_close: {symbol} exit=${exit_price:.2f} reason={exit_reason}")
     except Exception as e:
         logger.warning(f"log_position_close failed ({e})")
