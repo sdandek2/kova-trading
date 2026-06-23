@@ -31,45 +31,7 @@ def all_status():
     }
 
 
-@router.get("/{engine}/positions")
-def positions(engine: str, status: str = None):
-    """Open + closed positions for the given engine."""
-    if engine not in _ENGINES:
-        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
-    mod = _engine_module(engine)
-    return mod.get_positions(status_filter=status)
-
-
-@router.get("/{engine}/summary")
-def summary(engine: str):
-    """P&L, win rate, trade count, best/worst for the given engine."""
-    if engine not in _ENGINES:
-        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
-    mod = _engine_module(engine)
-    return mod.get_summary()
-
-
-@router.post("/{engine}/run")
-def manual_run(engine: str):
-    """Trigger one scan cycle manually (ignores market-hours check)."""
-    if engine not in _ENGINES:
-        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
-    mod = _engine_module(engine)
-    # Reset last_scan_date so the scan actually runs
-    if hasattr(mod, "_last_scan_date"):
-        mod._last_scan_date = None
-    result = mod.run_scan()
-    return {"engine": engine, "result": result}
-
-
-@router.post("/{engine}/close/{position_id}")
-def close_position(engine: str, position_id: int):
-    """Manually close a position by ID."""
-    if engine not in _ENGINES:
-        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
-    mod = _engine_module(engine)
-    return mod.close_position_by_id(position_id)
-
+# ── Must be defined BEFORE /{engine}/... parametric routes ───────────────────
 
 @router.get("/squeeze/universe")
 def squeeze_universe():
@@ -130,3 +92,44 @@ def squeeze_universe():
         "note": "All stocks with >=20% short float. Sorted by short float desc.",
         "stocks": sorted_stocks,
     }
+
+
+# ── Parametric engine routes ──────────────────────────────────────────────────
+
+@router.get("/{engine}/positions")
+def positions(engine: str, status: str = None):
+    """Open + closed positions for the given engine."""
+    if engine not in _ENGINES:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    mod = _engine_module(engine)
+    return mod.get_positions(status_filter=status)
+
+
+@router.get("/{engine}/summary")
+def summary(engine: str):
+    """P&L, win rate, trade count, best/worst for the given engine."""
+    if engine not in _ENGINES:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    mod = _engine_module(engine)
+    return mod.get_summary()
+
+
+@router.post("/{engine}/run")
+def manual_run(engine: str):
+    """Trigger one scan cycle manually (ignores market-hours check)."""
+    if engine not in _ENGINES:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    mod = _engine_module(engine)
+    if hasattr(mod, "_last_scan_date"):
+        mod._last_scan_date = None
+    result = mod.run_scan()
+    return {"engine": engine, "result": result}
+
+
+@router.post("/{engine}/close/{position_id}")
+def close_position(engine: str, position_id: int):
+    """Manually close a position by ID."""
+    if engine not in _ENGINES:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    mod = _engine_module(engine)
+    return mod.close_position_by_id(position_id)
