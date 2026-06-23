@@ -1289,14 +1289,55 @@ async def run_trading_cycle():
                     continue  # skip other exit checks for this position
 
             # ── EOD flat: close all positions at 3:45 PM ET ──────────────────
-            # Gap-down exits averaged -$121/trade because of overnight holds.
-            # Closing before market close eliminates gap risk entirely.
+            # Default: close everything to avoid overnight gap risk.
+            # Exception: strong winners with continuing momentum are held overnight.
+            # Criteria (long positions only, all 3 required):
+            #   1. P&L ≥ overnight_hold_min_pct (default 8%)
+            #   2. MACD histogram still positive (momentum not reversing)
+            #   3. Relative volume ≥ 1.5× (institutional conviction behind the move)
+            # When held: ATR stop is tightened to overnight_stop_pct (default 3%)
+            # below current price so a gap-down can't wipe the profit.
             try:
                 from zoneinfo import ZoneInfo as _ZI_flat
                 _now_et_flat = datetime.now(_ZI_flat("America/New_York"))
             except Exception:
                 _now_et_flat = datetime.now(timezone.utc) - timedelta(hours=4)
             if _now_et_flat.hour * 60 + _now_et_flat.minute >= 15 * 60 + 45:
+                # ── Smart overnight hold ──────────────────────────────────────
+                _overnight_hold = False
+                _oh_min_pct = float(_risk_settings.get("overnight_hold_min_pct", 8.0))
+
+                if position.side == "long" and position.unrealized_pl_percent >= _oh_min_pct:
+                    try:
+                        from services.indicators import compute_macd as _oh_macd_fn
+                        _oh_macd_data = _oh_macd_fn(closing_prices) if closing_prices else {}
+                        _oh_hist = float((_oh_macd_data or {}).get("histogram") or 0.0)
+                        _oh_rvol = sym_data.get("relative_volume", 0.0)
+                        if _oh_hist > 0.0 and _oh_rvol >= 1.5:
+                            _oh_curr = float(sym_data.get("current_price") or position.current_price or 0)
+                            _oh_stop_pct = float(_risk_settings.get("overnight_stop_pct", 3.0)) / 100.0
+                            _oh_stop_price = _oh_curr * (1 - _oh_stop_pct)
+                            # Only tighten — never loosen an existing ATR stop
+                            if _oh_stop_price > _atr_stops.get(position.symbol, 0.0):
+                                _atr_stops[position.symbol] = _oh_stop_price
+                                _save_watermarks()
+                            _oh_msg = (
+                                f"{position.symbol} held overnight — "
+                                f"P&L={position.unrealized_pl_percent:+.1f}% "
+                                f"MACD={_oh_hist:.3f} rvol={_oh_rvol:.1f}× "
+                                f"— stop tightened to ${_oh_stop_price:.2f} "
+                                f"({_oh_stop_pct*100:.0f}% below ${_oh_curr:.2f})"
+                            )
+                            logger.info(f"OVERNIGHT_HOLD: {_oh_msg}")
+                            log_bot_activity("approved", _oh_msg,
+                                             symbol=position.symbol, cycle_id=_current_cycle_id)
+                            _overnight_hold = True
+                    except Exception as _oh_err:
+                        logger.debug(f"Overnight hold check (non-fatal): {_oh_err}")
+
+                if _overnight_hold:
+                    continue
+
                 _flat_reason = (
                     f"{position.symbol} EOD flat — 3:45 PM ET, closing to avoid gap risk "
                     f"(P&L: {position.unrealized_pl_percent:+.1f}%)"
