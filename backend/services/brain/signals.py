@@ -194,10 +194,30 @@ def _score_symbol(
         elif rsi < 75:
             breakdown["rsi"] = 0    # getting stretched
         else:
-            breakdown["rsi"] = -10  # overbought — risky long entry
+            # RSI > 75: distinguish exhaustion from momentum burst.
+            # High volume confirms buyers are still in control — continuation likely.
+            # Normal volume at RSI > 75 = stretched without fuel — reversal likely.
+            if rel_vol >= 3.0:
+                breakdown["rsi"] = 5    # momentum burst — high RSI + volume = continuation
+            else:
+                breakdown["rsi"] = -10  # overbought without conviction — risky long entry
     else:
         breakdown["rsi"] = 0
     score += breakdown["rsi"]
+
+    # ── Momentum burst ────────────────────────────────────────────────────────
+    # Stock up >5% today + volume 3x+ = strong directional move with conviction.
+    # These are the stocks that become top gainers by end of day.
+    # Separate from the plain volume signal — requires price confirmation too.
+    _prev_close = prices[-2] if len(prices) >= 2 and prices[-2] else None
+    _today_pct = ((price - _prev_close) / _prev_close * 100) if _prev_close and _prev_close > 0 else 0
+    if _today_pct >= 10.0 and rel_vol >= 3.0:
+        breakdown["momentum_burst"] = 20   # strong catalyst confirmed by volume
+    elif _today_pct >= 5.0 and rel_vol >= 3.0:
+        breakdown["momentum_burst"] = 12   # moderate burst with volume
+    else:
+        breakdown["momentum_burst"] = 0
+    score += breakdown["momentum_burst"]
 
     # ── Price vs MA20 ─────────────────────────────────────────────────────────
     if ma20 and price > 0:
