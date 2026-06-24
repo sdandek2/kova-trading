@@ -412,7 +412,9 @@ def _score_symbol(
         signal_type = "momentum"
         suggested_action = "buy" if (_ALLOW_LEVERAGED and regime_result
                                      and regime_result.allows_leveraged_etfs) else "skip"
-    elif rsi is not None and rsi > 70 and macd_hist is not None and macd_hist < 0.5:
+    elif rsi is not None and rsi > 70 and macd_hist is not None and macd_hist <= 0:
+        # MACD must be negative — don't classify as short while momentum is still positive.
+        # 0.146 is not "fading" — it's still bullish. Only cross-confirmed reversals qualify.
         signal_type = "short_candidate"
         suggested_action = "short" if (_ALLOW_SHORTS and regime in ("bear", "chop")) else "skip"
     elif (_ALLOW_SHORTS and _heavy_put_short
@@ -440,11 +442,36 @@ def _score_symbol(
         signal_type = "reversal"
         suggested_action = "skip"
 
-    # ── Short-context RSI/MACD correction ────────────────────────────────────
-    # RSI and MACD were scored above from a long perspective.
-    # For short candidates: overbought RSI and negative MACD are POSITIVES,
-    # so replace those scores with short-appropriate values.
+    # ── Short-context signal corrections ─────────────────────────────────────
+    # RSI, MACD, RS, and Volume were scored from a long perspective above.
+    # For short candidates, flip each to short-appropriate values.
     if signal_type == "short_candidate":
+        # RS correction: high relative strength = strong stock = terrible short target.
+        # Market leaders rarely roll over cleanly. Weak RS = easier short.
+        if rs_pct >= 80:
+            short_rs = -20   # market leader — fights the short hard
+        elif rs_pct >= 60:
+            short_rs = -10   # above-average — some resistance to shorting
+        elif rs_pct >= 40:
+            short_rs = 5     # average RS — neutral short candidate
+        else:
+            short_rs = 20    # weak RS = stock already underperforming = prime short
+        score += short_rs - breakdown["rs"]
+        breakdown["rs"] = short_rs
+
+        # Volume correction: 8× volume on a strong mover = BUYERS in control, not exhaustion.
+        # Shorts on runaway volume moves get squeezed. Low volume = less conviction = cleaner fade.
+        if rel_vol >= 3.0:
+            short_vol = -15  # extreme volume momentum = fight the tape, avoid
+        elif rel_vol >= 2.0:
+            short_vol = -8
+        elif rel_vol >= 1.5:
+            short_vol = 0
+        else:
+            short_vol = 8    # low volume move = easier to reverse
+        score += short_vol - breakdown["volume"]
+        breakdown["volume"] = short_vol
+
         if rsi is not None:
             if rsi >= 75:
                 short_rsi = 12    # deeply overbought = prime short entry

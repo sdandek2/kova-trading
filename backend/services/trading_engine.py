@@ -1744,11 +1744,16 @@ async def run_trading_cycle():
             # Re-sort after intraday mutations so threshold filter and logs stay score-ordered
             _all_scored.sort(key=lambda c: c.score, reverse=True)
 
-            # Bull regime: lower bar to 55 (regime bonus makes signals more reliable).
-            # Chop/Bear: keep at 60 (no regime bonus, need stronger confirmation).
-            _min_trade_score = 55 if (
-                _brain_regime and _brain_regime.regime == "bull"
-            ) else 60
+            # Bull: lower bar to 55 (regime bonus inflates quality signals reliably).
+            # Chop: 60 (no directional edge, need stronger confirmation).
+            # Bear: raise to 65 — regime penalty is -15, so a 65 in bear = same raw signal
+            #   quality as 80 in bull. CCL scoring 60 in bear = marginal at best.
+            if _brain_regime and _brain_regime.regime == "bull":
+                _min_trade_score = 55
+            elif _brain_regime and _brain_regime.regime == "bear":
+                _min_trade_score = 65
+            else:
+                _min_trade_score = 60
             _scored = [c for c in (_all_scored or []) if c.score >= _min_trade_score]
 
             # Register near-miss candidates for price followup

@@ -140,16 +140,20 @@ def should_confirm_entry(
     """
     # ── Rejection cooldown: skip immediately if recently rejected ──
     in_cooldown, cooldown_reason = _is_in_rejection_cooldown(symbol)
-    if in_cooldown and action == "buy":
+    if in_cooldown and action in ("buy", "short"):
         return False, cooldown_reason
 
-    # ── Stop-out cooldown: block re-entry for 2h after a loss exit ──
-    if action == "buy":
+    # ── Stop-out cooldown: block re-entry for 4h after a loss exit ──
+    if action in ("buy", "short"):
         in_stopout, stopout_reason = is_in_stopout_cooldown(symbol)
         if in_stopout:
             return False, stopout_reason
 
     if not closing_prices or len(closing_prices) < 2:
+        # No historical data — can't verify short conditions, block it.
+        # Buys can proceed cautiously; shorts require confirmed momentum direction.
+        if action == "short":
+            return False, f"{symbol} no historical data — cannot confirm short setup, skipping"
         return True, "Insufficient data for confirmation, proceeding anyway"
 
     from services.indicators import compute_rsi, compute_moving_averages
