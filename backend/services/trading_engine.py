@@ -1921,20 +1921,32 @@ async def run_trading_cycle():
         # land in the claude_service fallback prompt. Without this gate, Claude can
         # recommend buying a stock that scored 51 even though the threshold is 60.
         # Symbols scored by _all_scored but not reaching _min_trade_score are blocked here.
+        # Stocks NOT in _all_scored at all (score=None) are also blocked — Claude can
+        # hallucinate picks from the snapshot that never went through signal scoring.
         if _all_scored:
             _all_scored_map = {c.symbol: c.score for c in _all_scored}
+            _prebreakout_syms = {c["symbol"] for c in (_prebreakout_candidates or [])}
             _gated: list = []
             for _gd in decisions:
                 if _gd.action in ("buy", "short"):
                     _gd_score = _all_scored_map.get(_gd.symbol)
-                    if _gd_score is not None and _gd_score < _min_trade_score:
+                    # Block if score is below threshold OR if symbol was never scored at all
+                    # (unscored = Claude picked it from snapshot without signal pipeline validation).
+                    # Prebreakout candidates are exempt — they bypass scoring intentionally.
+                    if _gd.symbol not in _prebreakout_syms and (
+                        _gd_score is None or _gd_score < _min_trade_score
+                    ):
+                        reason_str = (
+                            f"not in signal universe (unscored)"
+                            if _gd_score is None
+                            else f"signal score {_gd_score} < threshold {_min_trade_score}"
+                        )
                         logger.info(
-                            f"Score gate: blocking {_gd.action.upper()} {_gd.symbol} "
-                            f"(signal score {_gd_score} < threshold {_min_trade_score})"
+                            f"Score gate: blocking {_gd.action.upper()} {_gd.symbol} ({reason_str})"
                         )
                         log_bot_activity(
                             "entry_rejected",
-                            f"Score gate: {_gd.symbol} scored {_gd_score} < min {_min_trade_score}",
+                            f"Score gate: {_gd.symbol} — {reason_str}",
                             symbol=_gd.symbol, cycle_id=_current_cycle_id,
                         )
                         continue
@@ -2998,6 +3010,19 @@ async def run_trading_cycle():
                     prev = _previous_positions.get(decision.symbol, {})
                     if decision.symbol in _previous_positions:
                         _previous_positions[decision.symbol]["exit_reason"] = "ai_sell"
+                    # If Claude sold at a loss, record stopout so re-entry is blocked for 4h.
+                    # Bracket stops call record_stopout via their own path; this covers
+                    # Claude-decided rotation sells that exit a losing position (the APGE churn bug).
+                    _ai_entry_p = prev.get("avg_entry_price") or 0.0
+                    _is_ai_short = prev.get("side", "long") == "short"
+                    _ai_pl = (
+                        ((_ai_entry_p - fill_price) / _ai_entry_p)
+                        if _is_ai_short and _ai_entry_p
+                        else (fill_price - _ai_entry_p) / _ai_entry_p if _ai_entry_p else 0.0
+                    )
+                    if _ai_pl < 0:
+                        from services.entry_timing import record_stopout as _rs_ai
+                        _rs_ai(decision.symbol)
                     log_position_close(
                         symbol=decision.symbol,
                         exit_price=fill_price,
