@@ -364,6 +364,80 @@ def _ensure_table(conn):
             ON experiment_positions(status)
         """)
 
+        # ── SEC Intelligence: signals synced from local DuckDB ──────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sec_intel_signals (
+                id              SERIAL PRIMARY KEY,
+                institution     VARCHAR(60) NOT NULL,
+                ticker          VARCHAR(20) NOT NULL,
+                action          VARCHAR(20) NOT NULL,
+                quarter         VARCHAR(10) NOT NULL,
+                filed_date      DATE NOT NULL,
+                investment_type VARCHAR(10) DEFAULT 'COM',
+                score           INT DEFAULT 0,
+                is_whitelist    BOOLEAN DEFAULT FALSE,
+                hold_days       INT DEFAULT 90,
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(institution, ticker, quarter, investment_type)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sec_intel_signals_filed
+            ON sec_intel_signals(filed_date DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sec_intel_signals_ticker
+            ON sec_intel_signals(ticker)
+        """)
+
+        # ── SEC Intelligence: trade log ──────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sec_intel_trade_log (
+                id                  SERIAL PRIMARY KEY,
+                ticker              VARCHAR(20) NOT NULL,
+                institution         VARCHAR(60),
+                signal_quarter      VARCHAR(10),
+                entry_price         FLOAT,
+                entry_date          TIMESTAMPTZ DEFAULT NOW(),
+                shares              INT,
+                position_size_usd   FLOAT,
+                stop_price          FLOAT,
+                peak_price          FLOAT,
+                sold_25pct_at       FLOAT,
+                sold_25pct_date     TIMESTAMPTZ,
+                sold_25pct_shares   INT,
+                sold_25pct_pl       FLOAT,
+                sold_50pct_at       FLOAT,
+                sold_50pct_date     TIMESTAMPTZ,
+                sold_50pct_shares   INT,
+                sold_50pct_pl       FLOAT,
+                trail_stop_price    FLOAT,
+                status              VARCHAR(20) DEFAULT 'open',
+                exit_price          FLOAT,
+                exit_date           TIMESTAMPTZ,
+                exit_reason         VARCHAR(50),
+                realized_pl         FLOAT,
+                realized_pl_pct     FLOAT,
+                hold_days_actual    INT,
+                max_hold_date       DATE,
+                notes               TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sec_intel_trade_status
+            ON sec_intel_trade_log(status)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sec_intel_trade_ticker
+            ON sec_intel_trade_log(ticker)
+        """)
+        # Migration: add partial-exit P&L columns if table already existed
+        for col, coltype in [("sold_25pct_pl", "FLOAT"), ("sold_50pct_pl", "FLOAT")]:
+            cur.execute(f"""
+                ALTER TABLE sec_intel_trade_log
+                ADD COLUMN IF NOT EXISTS {col} {coltype}
+            """)
+
 
 # ── Public API ─────────────────────────────────────────────────────────────
 

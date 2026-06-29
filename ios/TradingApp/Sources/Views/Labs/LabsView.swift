@@ -8,9 +8,17 @@ struct LabsView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     enginePicker
-                    statusCard
-                    openPositionsSection
-                    closedPositionsSection
+                    if vm.selectedEngine == .secIntel {
+                        secIntelStatusCard
+                        secIntelPerformanceCard
+                        secIntelOpenPositions
+                        secIntelSignalsSection
+                        secIntelHistorySection
+                    } else {
+                        statusCard
+                        openPositionsSection
+                        closedPositionsSection
+                    }
                 }
                 .padding(.horizontal, LakshmiTheme.pagePad)
                 .padding(.top, 8)
@@ -49,6 +57,163 @@ struct LabsView: View {
             Button("Dismiss") { vm.errorMessage = nil }
         } message: {
             Text(vm.errorMessage ?? "")
+        }
+    }
+
+    // ── SEC Intel: Status card ────────────────────────────────────────────────
+
+    private var secIntelStatusCard: some View {
+        VStack(spacing: 0) {
+            if let st = vm.secIntelStatus {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            if st.threadAlive {
+                                LiveDot()
+                            } else {
+                                Circle()
+                                    .fill(st.configured ? Color.orange : Color.gray)
+                                    .frame(width: 8, height: 8)
+                            }
+                            Text(st.threadAlive ? "Running" : (st.configured ? "Stopped" : "Not configured"))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("SEC Intelligence")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                        Text("Institutional 13F following")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 8) {
+                        statPill(label: "Open", value: "\(st.openPositions)/\(st.maxPositions)")
+                        statPill(label: "Signals", value: "\(st.signalCount180d)",
+                                 color: LakshmiTheme.blue)
+                        statPill(label: "Mode", value: "Paper",
+                                 color: .orange)
+                    }
+                }
+                .padding(LakshmiTheme.cardPad)
+            } else if vm.isLoading {
+                HStack { Spacer(); ProgressView(); Spacer() }
+                    .padding(LakshmiTheme.cardPad)
+            } else {
+                Text("SEC Intel not configured — set ALPACA_SEC_INTEL_KEY in Railway")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(LakshmiTheme.cardPad)
+            }
+        }
+        .kovaAccentCard(padded: false)
+        .cardAppear(delay: 0.05)
+    }
+
+    // ── SEC Intel: Performance card ───────────────────────────────────────────
+
+    @ViewBuilder
+    private var secIntelPerformanceCard: some View {
+        if let perf = vm.secIntelPerformance, let total = perf.totalTrades, total > 0 {
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Performance")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(total) trades")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 12) {
+                    perfStat(label: "Win Rate", value: String(format: "%.0f%%", perf.winRate ?? 0),
+                             color: (perf.winRate ?? 0) >= 55 ? LakshmiTheme.positive : LakshmiTheme.negative)
+                    perfStat(label: "Net P&L",
+                             value: String(format: "%+.0f", perf.netPl ?? 0),
+                             color: (perf.netPl ?? 0) >= 0 ? LakshmiTheme.positive : LakshmiTheme.negative)
+                    perfStat(label: "Avg Hold",
+                             value: String(format: "%.0fd", perf.avgHoldDays ?? 0),
+                             color: LakshmiTheme.gold)
+                }
+            }
+            .padding(LakshmiTheme.cardPad)
+            .kovaCard(padded: false)
+            .cardAppear(delay: 0.08)
+        }
+    }
+
+    private func perfStat(label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(color.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    // ── SEC Intel: Open positions ─────────────────────────────────────────────
+
+    @ViewBuilder
+    private var secIntelOpenPositions: some View {
+        if !vm.secIntelPositions.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Open Positions", count: vm.secIntelPositions.count)
+                ForEach(vm.secIntelPositions) { pos in
+                    SecIntelPositionRow(pos: pos)
+                }
+            }
+            .cardAppear(delay: 0.10)
+        }
+    }
+
+    // ── SEC Intel: Signals ────────────────────────────────────────────────────
+
+    @ViewBuilder
+    private var secIntelSignalsSection: some View {
+        if !vm.secIntelSignals.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Active Signals (180d)", count: vm.secIntelSignals.count)
+                ForEach(vm.secIntelSignals.prefix(20)) { sig in
+                    SecIntelSignalRow(signal: sig)
+                }
+            }
+            .cardAppear(delay: 0.12)
+        }
+    }
+
+    // ── SEC Intel: History ────────────────────────────────────────────────────
+
+    @ViewBuilder
+    private var secIntelHistorySection: some View {
+        if !vm.secIntelHistory.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Closed Trades", count: vm.secIntelHistory.count)
+                ForEach(vm.secIntelHistory) { trade in
+                    SecIntelTradeRow(trade: trade)
+                }
+            }
+            .cardAppear(delay: 0.15)
+        } else if vm.selectedEngine == .secIntel && !vm.isLoading {
+            VStack(spacing: 8) {
+                Image(systemName: "building.columns")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.tertiary)
+                Text("No trades yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("Signals process weekly. Add Alpaca + Telegram keys in Railway to activate.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(32)
+            .cardAppear(delay: 0.15)
         }
     }
 
@@ -303,6 +468,8 @@ private struct PositionRow: View {
             if let bp = pos.beatPct {
                 LakshmiChip(text: "+\(String(format: "%.0f", bp))% beat", color: LakshmiTheme.positive)
             }
+        case .secIntel:
+            EmptyView()
         }
     }
 
@@ -321,13 +488,154 @@ private struct PositionRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-        case .revision:
+        case .revision, .secIntel:
             if let date = pos.entryDate {
                 Text("Since \(date.prefix(10))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+// ── SEC Intel rows ────────────────────────────────────────────────────────────
+
+private struct SecIntelPositionRow: View {
+    let pos: SecIntelPosition
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(pos.ticker)
+                    .font(.headline)
+                if let inst = pos.institution {
+                    LakshmiChip(text: inst, color: LakshmiTheme.gold)
+                }
+                Spacer()
+                if let entry = pos.entryPrice {
+                    Text("Entry $\(String(format: "%.2f", entry))")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 12) {
+                if let stop = pos.stop {
+                    label("Stop", "$\(String(format: "%.2f", stop))", LakshmiTheme.negative)
+                }
+                if pos.l1Exit != nil {
+                    label("L1 Done", "✓", LakshmiTheme.positive)
+                }
+                if pos.l2Exit != nil {
+                    label("L2 Done", "✓", LakshmiTheme.positive)
+                }
+                if let trail = pos.trailStop {
+                    label("Trail", "$\(String(format: "%.2f", trail))", LakshmiTheme.amber)
+                }
+                Spacer()
+                if let maxHold = pos.maxHold {
+                    Text("Until \(maxHold.prefix(10))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(LakshmiTheme.cardPad)
+        .kovaCard(padded: false)
+    }
+
+    private func label(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(spacing: 1) {
+            Text(value).font(.caption.weight(.semibold)).foregroundStyle(color)
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct SecIntelSignalRow: View {
+    let signal: SecIntelSignal
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(signal.ticker)
+                        .font(.subheadline.weight(.semibold))
+                    Text(signal.action)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(signal.action == "NEW" ? LakshmiTheme.positive : LakshmiTheme.amber)
+                        .clipShape(Capsule())
+                }
+                Text(signal.institution)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 3) {
+                if signal.isWhitelist {
+                    Text("⭐ WHITELIST")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(LakshmiTheme.gold)
+                } else {
+                    Text("Score \(signal.score)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(signal.score >= 6 ? LakshmiTheme.positive : .secondary)
+                }
+                Text(signal.quarter)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, LakshmiTheme.cardPad)
+        .padding(.vertical, 10)
+        .kovaCard(padded: false)
+    }
+}
+
+private struct SecIntelTradeRow: View {
+    let trade: SecIntelTrade
+
+    private var pl: Double { trade.pl ?? 0 }
+    private var isWin: Bool { pl > 0 }
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: isWin ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(isWin ? LakshmiTheme.positive : LakshmiTheme.negative)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(trade.ticker)
+                        .font(.subheadline.weight(.semibold))
+                    if let reason = trade.reason {
+                        Text(reason.replacingOccurrences(of: "_", with: " ").capitalized)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let inst = trade.institution {
+                        Text(inst)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(pl >= 0 ? "+$\(String(format: "%.2f", pl))" : "-$\(String(format: "%.2f", abs(pl)))")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(isWin ? LakshmiTheme.positive : LakshmiTheme.negative)
+                if let pct = trade.plPct {
+                    Text(String(format: "%+.1f%%", pct))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, LakshmiTheme.cardPad)
+        .padding(.vertical, 12)
+        .kovaCard(padded: false)
     }
 }
 

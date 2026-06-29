@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     alpaca_revision_secret: str = ""
     alpaca_revision_base_url: str = "https://paper-api.alpaca.markets"
 
+    # SEC Intelligence — institutional following strategy
+    alpaca_sec_intel_key: str = ""
+    alpaca_sec_intel_secret: str = ""
+    alpaca_sec_intel_base_url: str = "https://paper-api.alpaca.markets"
+    sec_intel_telegram_token: str = ""
+    sec_intel_telegram_chat_id: str = ""
+
     class Config:
         env_file = ".env"
 

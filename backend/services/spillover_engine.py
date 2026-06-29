@@ -533,9 +533,10 @@ def check_exits():
 def _is_scan_time() -> bool:
     import zoneinfo
     now = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    # Allow catch-up until 10:30 AM — handles Railway restarts during the morning window
     return (now.weekday() < 5 and
-            now.hour == _SCAN_HOUR_ET and
-            now.minute >= _SCAN_MINUTE_ET)
+            (now.hour == _SCAN_HOUR_ET and now.minute >= _SCAN_MINUTE_ET
+             or now.hour == 10 and now.minute <= 30))
 
 
 def _loop():

@@ -31,6 +31,124 @@ struct AllEngineStatus: Decodable {
     let revision: EngineStatus
 }
 
+// ── SEC Intel models ──────────────────────────────────────────────────────────
+
+struct SecIntelStatus: Decodable {
+    let configured: Bool
+    let paperMode: Bool
+    let openPositions: Int
+    let maxPositions: Int
+    let signalCount180d: Int
+    let threadAlive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case configured
+        case paperMode = "paper_mode"
+        case openPositions = "open_positions"
+        case maxPositions = "max_positions"
+        case signalCount180d = "signal_count_180d"
+        case threadAlive = "thread_alive"
+    }
+}
+
+struct SecIntelSignal: Decodable, Identifiable {
+    var id: String { "\(institution)-\(ticker)-\(quarter)" }
+    let institution: String
+    let ticker: String
+    let action: String
+    let quarter: String
+    let filedDate: String
+    let score: Int
+    let isWhitelist: Bool
+    let holdDays: Int
+
+    enum CodingKeys: String, CodingKey {
+        case institution, ticker, action, quarter, score
+        case filedDate = "filed_date"
+        case isWhitelist = "is_whitelist"
+        case holdDays = "hold_days"
+    }
+}
+
+struct SecIntelPosition: Decodable, Identifiable {
+    let id: Int
+    let ticker: String
+    let institution: String?
+    let quarter: String?
+    let entryPrice: Double?
+    let shares: Int?
+    let sizeUsd: Double?
+    let stop: Double?
+    let peak: Double?
+    let l1Exit: Double?
+    let l2Exit: Double?
+    let trailStop: Double?
+    let entryDate: String?
+    let maxHold: String?
+    let status: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "id"
+        case ticker, institution, quarter, stop, peak, status
+        case entryPrice = "entry_price"
+        case shares
+        case sizeUsd = "size_usd"
+        case l1Exit = "l1_exit"
+        case l2Exit = "l2_exit"
+        case trailStop = "trail_stop"
+        case entryDate = "entry_date"
+        case maxHold = "max_hold"
+    }
+}
+
+struct SecIntelTrade: Decodable, Identifiable {
+    let id: Int
+    let ticker: String
+    let institution: String?
+    let quarter: String?
+    let entry: Double?
+    let exit: Double?
+    let shares: Int?
+    let pl: Double?
+    let plPct: Double?
+    let reason: String?
+    let entryDate: String?
+    let exitDate: String?
+    let holdDays: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, ticker, institution, quarter, entry, exit, shares, reason
+        case plPct = "pl_pct"
+        case entryDate = "entry_date"
+        case exitDate = "exit_date"
+        case holdDays = "hold_days"
+    }
+}
+
+struct SecIntelPerformance: Decodable {
+    let totalTrades: Int?
+    let wins: Int?
+    let losses: Int?
+    let winRate: Double?
+    let netPl: Double?
+    let avgPlPct: Double?
+    let bestTrade: Double?
+    let worstTrade: Double?
+    let avgHoldDays: Double?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case totalTrades = "total_trades"
+        case wins, losses, message
+        case winRate = "win_rate"
+        case netPl = "net_pl"
+        case avgPlPct = "avg_pl_pct"
+        case bestTrade = "best_trade"
+        case worstTrade = "worst_trade"
+        case avgHoldDays = "avg_hold_days"
+    }
+}
+
 struct ExperimentPosition: Decodable, Identifiable {
     let id: Int
     let symbol: String
@@ -113,12 +231,14 @@ final class LabsViewModel: ObservableObject {
         case squeeze   = "squeeze"
         case spillover = "spillover"
         case revision  = "revision"
+        case secIntel  = "sec-intel"
 
         var displayName: String {
             switch self {
             case .squeeze:   return "Squeeze"
             case .spillover: return "Spillover"
             case .revision:  return "Revision"
+            case .secIntel:  return "SEC Intel"
             }
         }
 
@@ -127,6 +247,7 @@ final class LabsViewModel: ObservableObject {
             case .squeeze:   return "flame.fill"
             case .spillover: return "arrow.triangle.branch"
             case .revision:  return "chart.line.uptrend.xyaxis"
+            case .secIntel:  return "building.columns.fill"
             }
         }
     }
@@ -140,6 +261,13 @@ final class LabsViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastRefreshed: Date?
 
+    // SEC Intel state
+    @Published var secIntelStatus: SecIntelStatus?
+    @Published var secIntelSignals: [SecIntelSignal] = []
+    @Published var secIntelPositions: [SecIntelPosition] = []
+    @Published var secIntelHistory: [SecIntelTrade] = []
+    @Published var secIntelPerformance: SecIntelPerformance?
+
     private let api = APIService.shared
     private var refreshTask: Task<Void, Never>?
 
@@ -148,22 +276,49 @@ final class LabsViewModel: ObservableObject {
     func loadAll() async {
         isLoading = true
         defer { isLoading = false }
-        async let statusTask: AllEngineStatus? = try? api.fetch("/experiments/status")
-        async let posTask: [ExperimentPosition]? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
-        async let sumTask: EngineSummary? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
-        let (s, p, sm) = await (statusTask, posTask, sumTask)
-        if let s { allStatus = s }
-        if let p { positions = p }
-        if let sm { summary = sm }
+        if selectedEngine == .secIntel {
+            await loadSecIntel()
+        } else {
+            async let statusTask: AllEngineStatus? = try? api.fetch("/experiments/status")
+            async let posTask: [ExperimentPosition]? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
+            async let sumTask: EngineSummary? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
+            let (s, p, sm) = await (statusTask, posTask, sumTask)
+            if let s { allStatus = s }
+            if let p { positions = p }
+            if let sm { summary = sm }
+        }
         lastRefreshed = Date()
     }
 
     func loadPositions() async {
+        if selectedEngine == .secIntel {
+            await loadSecIntel()
+            return
+        }
         async let posTask: [ExperimentPosition]? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/positions")
         async let sumTask: EngineSummary? = try? api.fetch("/experiments/\(selectedEngine.rawValue)/summary")
         let (p, sm) = await (posTask, sumTask)
         if let p { positions = p }
         if let sm { summary = sm }
+    }
+
+    private func loadSecIntel() async {
+        struct SignalWrapper: Decodable { let signals: [SecIntelSignal] }
+        struct PositionWrapper: Decodable { let positions: [SecIntelPosition] }
+        struct TradeWrapper: Decodable { let trades: [SecIntelTrade] }
+
+        async let st: SecIntelStatus?          = try? api.fetch("/sec-intel/status")
+        async let sw: SignalWrapper?            = try? api.fetch("/sec-intel/signals?limit=100")
+        async let pw: PositionWrapper?          = try? api.fetch("/sec-intel/positions")
+        async let tw: TradeWrapper?             = try? api.fetch("/sec-intel/history?limit=20")
+        async let perf: SecIntelPerformance?    = try? api.fetch("/sec-intel/performance")
+
+        let (status, signals, positions, trades, performance) = await (st, sw, pw, tw, perf)
+        if let v = status     { secIntelStatus = v }
+        if let v = signals    { secIntelSignals = v.signals }
+        if let v = positions  { secIntelPositions = v.positions }
+        if let v = trades     { secIntelHistory = v.trades }
+        if let v = performance { secIntelPerformance = v }
     }
 
     func switchEngine(_ engine: Engine) async {
@@ -174,6 +329,11 @@ final class LabsViewModel: ObservableObject {
     func triggerScan() async {
         isRunning = true
         defer { isRunning = false }
+        if selectedEngine == .secIntel {
+            let _: EngineRunResult? = try? await api.fetch("/sec-intel/process-signals", method: "POST")
+            await loadAll()
+            return
+        }
         do {
             let _: EngineRunResult = try await api.fetch(
                 "/experiments/\(selectedEngine.rawValue)/run", method: "POST"
@@ -222,6 +382,7 @@ final class LabsViewModel: ObservableObject {
         case .squeeze:   return s.squeeze
         case .spillover: return s.spillover
         case .revision:  return s.revision
+        case .secIntel:  return nil  // SEC Intel has its own status card
         }
     }
 

@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai, experiments
+from routers import account, positions, orders, trading, news, risk, strategy, performance, geopolitical, predictions, picks, watchlist, eod, finance, prompt, model_settings, wheel, pureai, experiments, sec_intel
 from websocket.manager import manager
 
 logging.basicConfig(
@@ -56,6 +56,13 @@ async def lifespan(app: FastAPI):
         start_revision_scheduler()
     except Exception as e:
         logger.warning(f"Revision scheduler not started: {e}")
+    # SEC Intelligence — institutional following (no-op if keys unset)
+    try:
+        from services.sec_intel_engine import start
+        start()
+        logger.info("SEC Intel engine started.")
+    except Exception as e:
+        logger.warning(f"SEC Intel engine not started: {e}")
     yield
     trading_engine.stop()
     from services.alerts import alert_system_stop
@@ -114,6 +121,7 @@ app.include_router(model_settings.router)
 app.include_router(wheel.router)
 app.include_router(pureai.router)
 app.include_router(experiments.router)
+app.include_router(sec_intel.router)
 
 
 @app.get("/health")
