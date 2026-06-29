@@ -237,10 +237,28 @@ def _db_conn():
 
 # ── Trade execution ────────────────────────────────────────────────────────────
 
+def _is_tradeable_ticker(ticker: str) -> bool:
+    """Skip warrants, preferred shares, OTC foreign shares — Alpaca rejects these."""
+    t = ticker.upper()
+    if t.endswith("W") or t.endswith("R") or t.endswith("U"):
+        return False  # warrants / rights / units
+    if "-" in t:
+        return False  # preferred shares e.g. DLR-PL, HPE-PC
+    if "." in t:
+        return False  # OTC foreign e.g. TSMWF
+    if len(t) > 5:
+        return False  # exchange-listed tickers are max 5 chars
+    return True
+
+
 def enter_trade(ticker: str, institution: str, action: str,
                 quarter: str, score: int, is_whitelist: bool,
                 hold_days: int) -> bool:
     """Buy stock — full position entry."""
+    if not _is_tradeable_ticker(ticker):
+        logger.info(f"[SecIntel] Skipping {ticker} — warrant/preferred/OTC (not tradeable on Alpaca)")
+        return False
+
     if not _is_configured():
         logger.warning("[SecIntel] Alpaca not configured — skipping trade")
         return False
@@ -715,6 +733,16 @@ def status() -> dict:
                 signal_count = cur.fetchone()[0]
         except Exception:
             pass
+    account_value = None
+    buying_power = None
+    if configured:
+        try:
+            client = _alpaca()
+            acct = client.get_account()
+            account_value = float(acct.portfolio_value)
+            buying_power = float(acct.buying_power)
+        except Exception:
+            pass
     return {
         "configured": configured,
         "paper_mode": _is_paper() if configured else True,
@@ -722,4 +750,6 @@ def status() -> dict:
         "max_positions": MAX_POSITIONS,
         "signal_count_180d": signal_count,
         "thread_alive": _thread.is_alive() if _thread else False,
+        "account_value": account_value,
+        "buying_power": buying_power,
     }

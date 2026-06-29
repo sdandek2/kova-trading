@@ -40,6 +40,8 @@ struct SecIntelStatus: Decodable {
     let maxPositions: Int
     let signalCount180d: Int
     let threadAlive: Bool
+    let accountValue: Double?
+    let buyingPower: Double?
 
     enum CodingKeys: String, CodingKey {
         case configured
@@ -48,6 +50,8 @@ struct SecIntelStatus: Decodable {
         case maxPositions = "max_positions"
         case signalCount180d = "signal_count_180d"
         case threadAlive = "thread_alive"
+        case accountValue = "account_value"
+        case buyingPower = "buying_power"
     }
 }
 
@@ -117,7 +121,7 @@ struct SecIntelTrade: Decodable, Identifiable {
     let holdDays: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, ticker, institution, quarter, entry, exit, shares, reason
+        case id, ticker, institution, quarter, entry, exit, shares, pl, reason
         case plPct = "pl_pct"
         case entryDate = "entry_date"
         case exitDate = "exit_date"

@@ -87,11 +87,16 @@ struct LabsView: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 8) {
+                        if let val = st.accountValue {
+                            Text("$\(val, specifier: "%.0f")")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(LakshmiTheme.positive)
+                        }
                         statPill(label: "Open", value: "\(st.openPositions)/\(st.maxPositions)")
                         statPill(label: "Signals", value: "\(st.signalCount180d)",
                                  color: LakshmiTheme.blue)
-                        statPill(label: "Mode", value: "Paper",
-                                 color: .orange)
+                        statPill(label: "Mode", value: st.paperMode ? "Paper" : "Live",
+                                 color: st.paperMode ? .orange : LakshmiTheme.positive)
                     }
                 }
                 .padding(LakshmiTheme.cardPad)
