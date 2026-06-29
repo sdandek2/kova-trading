@@ -737,7 +737,7 @@ def status() -> dict:
     buying_power = None
     if configured:
         try:
-            client = _alpaca()
+            client = _get_trading_client()
             acct = client.get_account()
             account_value = float(acct.portfolio_value)
             buying_power = float(acct.buying_power)
