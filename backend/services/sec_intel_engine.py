@@ -296,6 +296,7 @@ def enter_trade(ticker: str, institution: str, action: str,
     try:
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
+        import time as _time
 
         client = _get_trading_client()
         order = client.submit_order(MarketOrderRequest(
@@ -305,11 +306,26 @@ def enter_trade(ticker: str, institution: str, action: str,
             time_in_force=TimeInForce.DAY,
         ))
         logger.info(f"[SecIntel] BUY {shares} {ticker} @ ~{current_price:.2f} | {institution} {action} | order={order.id}")
+
+        # Wait for fill and use actual fill price so DB entry is accurate
+        filled_price = current_price
+        for _ in range(10):
+            _time.sleep(2)
+            filled_order = client.get_order_by_id(order.id)
+            if filled_order.filled_avg_price:
+                filled_price = float(filled_order.filled_avg_price)
+                break
+        logger.info(f"[SecIntel] FILLED {ticker} @ {filled_price:.2f} (estimated {current_price:.2f})")
+
     except Exception as e:
         logger.error(f"[SecIntel] Order failed for {ticker}: {e}")
         return False
 
-    # Log to DB
+    # Recompute stop using actual fill price
+    stop_price = round(filled_price * (1 - STOP_LOSS_PCT), 2)
+    position_usd = filled_price * shares
+
+    # Log to DB using actual fill price
     if conn:
         try:
             with conn.cursor() as cur:
@@ -321,8 +337,8 @@ def enter_trade(ticker: str, institution: str, action: str,
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'open',%s)
                 """, [
                     ticker, institution, quarter,
-                    current_price, shares, position_usd,
-                    stop_price, current_price,
+                    filled_price, shares, position_usd,
+                    stop_price, filled_price,
                     max_hold_date,
                     f"score={score} whitelist={is_whitelist}",
                 ])
