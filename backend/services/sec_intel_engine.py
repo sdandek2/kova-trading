@@ -66,10 +66,27 @@ HOLD_DAYS = {
     "default":                90,
 }
 
-# Position sizing
-POSITION_SIZE_PCT   = 0.08   # 8% of portfolio per signal
+# Position sizing — tiered by institution conviction (see sec-intelligence/TRADING_PLAN.md).
+# Highest-conviction signals (Berkshire/Pershing/Elliott, whitelisted) get the largest size
+# and widest stop; lower-conviction signals (Goldman, scored/convergence) get smaller size
+# and tighter stops so a weak signal can't lose as much as a strong one.
+POSITION_SIZE_PCT_BY_INSTITUTION = {
+    "Berkshire Hathaway":    0.08,
+    "Pershing Square":       0.08,
+    "Elliott Management":    0.08,
+    "Situational Awareness": 0.08,
+    "Goldman Sachs AM":      0.04,
+    "default":               0.025,  # Third Point, CalPERS, 9+ convergence, everything else
+}
+STOP_LOSS_PCT_BY_INSTITUTION = {
+    "Berkshire Hathaway":    0.10,
+    "Goldman Sachs AM":      0.10,
+    "Pershing Square":       0.12,
+    "Situational Awareness": 0.12,
+    "Elliott Management":    0.15,
+    "default":               0.12,  # 9+ convergence / scored institutions
+}
 MAX_POSITIONS       = 10
-STOP_LOSS_PCT       = 0.12   # -12% hard stop
 TRAIL_PCT           = 0.20   # 20% trailing stop from peak
 LADDER_L1_PCT       = 0.25   # sell 25% of position at +25%
 LADDER_L2_PCT       = 0.50   # sell 25% more at +50%
@@ -288,9 +305,12 @@ def enter_trade(ticker: str, institution: str, action: str,
         logger.warning(f"[SecIntel] Could not get price for {ticker}")
         return False
 
-    position_usd = portfolio_value * POSITION_SIZE_PCT
+    size_pct = POSITION_SIZE_PCT_BY_INSTITUTION.get(institution, POSITION_SIZE_PCT_BY_INSTITUTION["default"])
+    stop_pct = STOP_LOSS_PCT_BY_INSTITUTION.get(institution, STOP_LOSS_PCT_BY_INSTITUTION["default"])
+
+    position_usd = portfolio_value * size_pct
     shares = max(1, int(position_usd / current_price))
-    stop_price = round(current_price * (1 - STOP_LOSS_PCT), 2)
+    stop_price = round(current_price * (1 - stop_pct), 2)
     max_hold_date = (date.today() + timedelta(days=hold_days)).isoformat()
 
     try:
@@ -322,7 +342,7 @@ def enter_trade(ticker: str, institution: str, action: str,
         return False
 
     # Recompute stop using actual fill price
-    stop_price = round(filled_price * (1 - STOP_LOSS_PCT), 2)
+    stop_price = round(filled_price * (1 - stop_pct), 2)
     position_usd = filled_price * shares
 
     # Log to DB using actual fill price
