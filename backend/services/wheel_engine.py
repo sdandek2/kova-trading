@@ -290,6 +290,60 @@ def get_active_wheel_positions() -> list[dict]:
         return []
 
 
+def _derive_exit_reason(status: str, notes: str) -> str:
+    """M4 fix: derive a clean human-readable exit reason from status + notes."""
+    s = (status or "").lower()
+    n = (notes or "").lower()
+    if s == "completed":
+        if "expired worthless" in n:
+            return "expired_worthless"
+        if "tiered close" in n or "tier" in n:
+            return "profit_target"
+        if "dte force" in n:
+            return "dte_force_close"
+        if "full cycle" in n:
+            return "full_cycle_complete"
+        return "completed"
+    if s == "itm_stop":
+        return "itm_stop"
+    if "stop" in s or "stop" in n:
+        return "stop_loss"
+    if s == "bear_spread":
+        return "bear_spread"
+    return s or "unknown"
+
+
+def get_wheel_history(limit: int = 50) -> list[dict]:
+    """Return completed wheel cycles with derived exit_reason field."""
+    try:
+        from services.db import _get_conn
+        conn = _get_conn()
+        if not conn:
+            return []
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, symbol, phase, put_strike, put_expiry, put_premium,
+                       cost_basis, call_strike, call_expiry, call_premium,
+                       total_premium_collected, opened_at, closed_at,
+                       realized_pl, status, notes
+                FROM wheel_positions
+                WHERE status NOT IN ('active', 'order_pending')
+                ORDER BY closed_at DESC NULLS LAST
+                LIMIT %s
+            """, (limit,))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        for r in rows:
+            for k, v in r.items():
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+            r["exit_reason"] = _derive_exit_reason(r.get("status", ""), r.get("notes", ""))
+        return rows
+    except Exception as e:
+        logger.error(f"Wheel DB get_history: {e}")
+        return []
+
+
 def get_wheel_summary() -> dict:
     try:
         from services.db import _get_conn
@@ -958,28 +1012,58 @@ def execute_covered_call(position: dict) -> Optional[dict]:
         best = None
         best_prem = 0.0
 
-        for contract in contracts.option_contracts:
-            strike = float(contract.strike_price)
-            if strike < target_strike:
-                continue
-            try:
-                from alpaca.data.requests import OptionSnapshotRequest
-                snap = opts_client.get_option_snapshot(
-                    OptionSnapshotRequest(symbol_or_symbols=contract.symbol)
-                ).get(contract.symbol)
-                if not snap or not snap.latest_quote:
+        from alpaca.data.requests import OptionSnapshotRequest
+
+        def _scan_contracts(min_strike: float) -> Optional[dict]:
+            _best = None
+            _best_prem = 0.0
+            for contract in contracts.option_contracts:
+                strike = float(contract.strike_price)
+                if strike < min_strike:
                     continue
-                ask = float(snap.latest_quote.ask_price or 0)
-                bid = float(snap.latest_quote.bid_price or 0)
-                prem = (ask + bid) / 2
-                if prem > best_prem:
-                    best_prem = prem
-                    best = {"contract_symbol": contract.symbol, "strike": strike,
-                            "expiry": str(contract.expiration_date), "premium": prem}
+                try:
+                    snap = opts_client.get_option_snapshot(
+                        OptionSnapshotRequest(symbol_or_symbols=contract.symbol)
+                    ).get(contract.symbol)
+                    if not snap or not snap.latest_quote:
+                        continue
+                    ask = float(snap.latest_quote.ask_price or 0)
+                    bid = float(snap.latest_quote.bid_price or 0)
+                    prem = (ask + bid) / 2
+                    if prem > _best_prem:
+                        _best_prem = prem
+                        _best = {"contract_symbol": contract.symbol, "strike": strike,
+                                 "expiry": str(contract.expiration_date), "premium": prem}
+                except Exception:
+                    continue
+            return _best
+
+        best = _scan_contracts(target_strike)
+
+        # M7 fix: if stock dropped far below cost basis, no call >= target_strike exists.
+        # Fall back to current stock price as the minimum strike so we can still collect
+        # some premium instead of leaving the position stuck in "assigned" forever.
+        if not best:
+            try:
+                from alpaca.data.requests import StockLatestQuoteRequest
+                _q = _get_wheel_data_client().get_stock_latest_quote(
+                    StockLatestQuoteRequest(symbol_or_symbols=symbol)
+                ).get(symbol)
+                if _q and _q.ask_price and _q.bid_price:
+                    current_px = float((_q.ask_price + _q.bid_price) / 2)
+                    fallback_strike = round(current_px * 1.01, 2)  # 1% OTM at current price
+                    best = _scan_contracts(fallback_strike)
+                    if best:
+                        logger.warning(
+                            f"Wheel CALL fallback: {symbol} cost_basis=${float(cost_basis):.2f} "
+                            f"target_strike=${target_strike:.2f} → no liquid call found; "
+                            f"falling back to current-price strike ${best['strike']:.2f}"
+                        )
             except Exception:
-                continue
+                pass
 
         if not best:
+            logger.warning(f"Wheel CALL: {symbol} no suitable contract found (cost_basis=${float(cost_basis):.2f})")
             return None
 
         # Match qty to shares held — assignment gives 100 shares per put contract.
@@ -1018,12 +1102,18 @@ def execute_covered_call(position: dict) -> Optional[dict]:
 
 
 def _buy_to_close(position: dict, contract: str, current_price: float, reason: str, qty: int = 1):
-    """Close an option position early (take profit or stop loss)."""
+    """
+    Close an option position early (take profit or stop loss).
+    Returns (order_id, actual_fill_price) or (None, current_price) on failure.
+    M3 fix: polls Alpaca for actual fill price instead of using snapshot mid.
+    """
+    import time as _time2
     try:
         from alpaca.trading.requests import LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, OrderType
 
-        order = _get_wheel_trading_client().submit_order(LimitOrderRequest(
+        client = _get_wheel_trading_client()
+        order = client.submit_order(LimitOrderRequest(
             symbol=contract,
             qty=qty,
             side=OrderSide.BUY,
@@ -1032,10 +1122,26 @@ def _buy_to_close(position: dict, contract: str, current_price: float, reason: s
             limit_price=round(current_price * 1.02, 2),  # 2% above mid to fill
         ))
         logger.info(f"Wheel BUY-TO-CLOSE: {position['symbol']} {reason} | {order.id}")
-        return str(order.id)
+
+        # Poll for actual fill price (up to 10 × 1s = 10s)
+        fill_price = current_price
+        for _ in range(10):
+            _time2.sleep(1)
+            try:
+                filled = client.get_order_by_id(order.id)
+                if filled.filled_avg_price:
+                    fill_price = float(filled.filled_avg_price)
+                    break
+                st = str(filled.status).lower()
+                if st in ("expired", "cancelled", "canceled", "rejected"):
+                    break
+            except Exception:
+                break
+
+        return str(order.id), fill_price
     except Exception as e:
         logger.error(f"Wheel buy-to-close error: {e}")
-        return None
+        return None, current_price
 
 
 # ── Stop-loss on assigned shares ─────────────────────────────────────────────
@@ -1154,7 +1260,15 @@ def check_assignments():
     for wp in waiting:
         # Always sell the covered call now — bounce window has passed
         logger.info(f"Wheel ASSIGNED-WAIT resolved: {wp['symbol']} — selling covered call now")
-        execute_covered_call(wp)
+        result = execute_covered_call(wp)
+        # M2 fix: if no call could be placed, log clearly so operator can intervene.
+        # Do NOT leave position looping in assigned_waiting with silent None return.
+        if result is None:
+            logger.error(
+                f"Wheel ASSIGNED-WAIT: {wp['symbol']} execute_covered_call returned None "
+                f"(no liquid call found). Position id={wp['id']} remains in assigned_waiting. "
+                f"Will retry tomorrow. Check stock price vs cost_basis=${wp.get('cost_basis')}."
+            )
 
     put_open = [p for p in active if p["phase"] == "put_open"]
     if not put_open:
@@ -1406,36 +1520,38 @@ def check_profit_targets():
                         f"{(strike - underlying_px) / strike:.1%} below ${strike:.2f} strike "
                         f"(limit {ITM_CLOSE_PCT:.0%}) — closing {n} contract(s), net ${net:.0f}"
                     )
-                    order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                    order_id, fill_px = _buy_to_close(pos, pos["put_contract"], current_prem,
                                              f"ITM stop: underlying {(strike - underlying_px) / strike:.1%} below strike",
                                              qty=n)
                     if order_id:
-                        _add_to_profit_reserve_if_configured(net)
+                        actual_buyback = fill_px * 100 * n
+                        actual_net = prev_total - actual_buyback
+                        _add_to_profit_reserve_if_configured(actual_net)
                         _update_wheel_position(
                             pos["id"],
                             phase="completed", status="itm_stop",
-                            realized_pl=net,
+                            realized_pl=actual_net,
                             closed_at=now,
                             notes=(
                                 f"ITM stop: underlying ${underlying_px:.2f} < strike ${strike:.2f} "
-                                f"× {1 - ITM_CLOSE_PCT:.2f}. Buyback ${buyback_cost:.0f}, "
-                                f"premium ${prev_total:.0f}, net ${net:.0f}"
+                                f"× {1 - ITM_CLOSE_PCT:.2f}. Buyback ${actual_buyback:.0f}, "
+                                f"premium ${prev_total:.0f}, net ${actual_net:.0f}"
                             ),
                         )
                     continue
 
                 if contracts_left >= 2 and decay_ratio <= PROFIT_TIER_1:
                     # Close contract 1 at 50% profit
-                    profit1 = (original_prem - current_prem) * 100
                     logger.info(
                         f"Wheel TIER-1 CLOSE (put): {pos['symbol']} "
                         f"orig ${original_prem:.2f} → ${current_prem:.2f} "
-                        f"({decay_ratio*100:.0f}% remaining) | 1-of-2 profit ${profit1:.2f}"
+                        f"({decay_ratio*100:.0f}% remaining) | 1-of-2"
                     )
-                    order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                    order_id, fill_px = _buy_to_close(pos, pos["put_contract"], current_prem,
                                              f"tier-1 50% profit (1-of-2)")
                     if order_id:
-                        _add_to_profit_reserve_if_configured(profit1)
+                        actual_profit1 = (original_prem - fill_px) * 100
+                        _add_to_profit_reserve_if_configured(actual_profit1)
                         new_notes = _set_contracts_remaining(pos.get("notes", ""), 1)
                         new_notes += f" | tier1_closed_at:{decay_ratio*100:.0f}%"
                         _update_wheel_position(
@@ -1445,17 +1561,16 @@ def check_profit_targets():
 
                 elif contracts_left == 1 and decay_ratio <= PROFIT_TIER_2:
                     # Close final contract at 25% remaining → position complete
-                    profit2 = (original_prem - current_prem) * 100
-                    total_prem = float(pos.get("total_premium_collected") or 0) + profit2
                     logger.info(
                         f"Wheel TIER-2 CLOSE (put): {pos['symbol']} "
-                        f"${current_prem:.2f} remaining | final profit ${profit2:.2f} "
-                        f"| total collected ${total_prem:.2f}"
+                        f"${current_prem:.2f} remaining | final close"
                     )
-                    order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                    order_id, fill_px = _buy_to_close(pos, pos["put_contract"], current_prem,
                                              f"tier-2 25% final close")
                     if order_id:
-                        _add_to_profit_reserve_if_configured(profit2)
+                        actual_profit2 = (original_prem - fill_px) * 100
+                        total_prem = float(pos.get("total_premium_collected") or 0) + actual_profit2
+                        _add_to_profit_reserve_if_configured(actual_profit2)
                         _update_wheel_position(
                             pos["id"],
                             phase="completed", status="completed",
@@ -1484,43 +1599,43 @@ def check_profit_targets():
                 prev_prem = float(pos.get("total_premium_collected") or 0)
 
                 if contracts_left >= 2 and decay_ratio <= PROFIT_TIER_1:
-                    call_profit1 = (original_prem - current_prem) * 100
                     logger.info(
                         f"Wheel TIER-1 CLOSE (call): {pos['symbol']} "
-                        f"${call_profit1:.2f} profit | 1-of-2"
+                        f"orig ${original_prem:.2f} → ${current_prem:.2f} | 1-of-2"
                     )
-                    order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
+                    order_id, fill_px = _buy_to_close(pos, pos["call_contract"], current_prem,
                                              "tier-1 50% call profit")
                     if order_id:
-                        _add_to_profit_reserve_if_configured(call_profit1)
+                        actual_call_profit1 = (original_prem - fill_px) * 100
+                        _add_to_profit_reserve_if_configured(actual_call_profit1)
                         new_notes = _set_contracts_remaining(pos.get("notes", ""), 1)
                         _update_wheel_position(
                             pos["id"],
-                            total_premium_collected=prev_prem + call_profit1,
+                            total_premium_collected=prev_prem + actual_call_profit1,
                             notes=new_notes,
                         )
 
                 elif contracts_left == 1 and decay_ratio <= PROFIT_TIER_2:
-                    call_profit2 = (original_prem - current_prem) * 100
                     logger.info(
                         f"Wheel TIER-2 CLOSE (call): {pos['symbol']} "
-                        f"${call_profit2:.2f} | back to assigned → sell new call"
+                        f"${current_prem:.2f} | back to assigned → sell new call"
                     )
-                    order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
+                    order_id, fill_px = _buy_to_close(pos, pos["call_contract"], current_prem,
                                              "tier-2 25% final call close")
                     if order_id:
+                        actual_call_profit2 = (original_prem - fill_px) * 100
                         new_notes = _set_contracts_remaining("", CONTRACTS_PER_TRADE)
                         _update_wheel_position(
                             pos["id"],
                             phase="assigned",
                             call_contract=None,
                             call_order_id=None,
-                            total_premium_collected=prev_prem + call_profit2,
+                            total_premium_collected=prev_prem + actual_call_profit2,
                             notes=new_notes,
                         )
                         execute_covered_call({
                             **pos,
-                            "total_premium_collected": prev_prem + call_profit2,
+                            "total_premium_collected": prev_prem + actual_call_profit2,
                         })
 
         except Exception as e:
@@ -1594,17 +1709,18 @@ def check_dte_force_close():
                 profit = (original_prem - current_prem) * contracts_left * 100
                 prev_total = float(pos.get("total_premium_collected") or 0)
 
-                order_id = _buy_to_close(pos, pos["put_contract"], current_prem,
+                order_id, fill_px = _buy_to_close(pos, pos["put_contract"], current_prem,
                                          f"DTE-force (DTE={dte})")
                 if order_id:
-                    _add_to_profit_reserve_if_configured(profit)
+                    actual_profit = (original_prem - fill_px) * contracts_left * 100
+                    _add_to_profit_reserve_if_configured(actual_profit)
                     _update_wheel_position(
                         pos["id"],
                         phase="completed", status="completed",
-                        realized_pl=prev_total + profit,
-                        total_premium_collected=prev_total + profit,
+                        realized_pl=prev_total + actual_profit,
+                        total_premium_collected=prev_total + actual_profit,
                         closed_at=now,
-                        notes=f"DTE force close at DTE={dte}. Profit: ${profit:.2f}",
+                        notes=f"DTE force close at DTE={dte}. Profit: ${actual_profit:.2f}",
                     )
 
             # ── Calls ────────────────────────────────────────────────────
@@ -1634,17 +1750,18 @@ def check_dte_force_close():
                 call_profit = (original_prem - current_prem) * contracts_left * 100
                 prev_total = float(pos.get("total_premium_collected") or 0)
 
-                order_id = _buy_to_close(pos, pos["call_contract"], current_prem,
+                order_id, fill_px = _buy_to_close(pos, pos["call_contract"], current_prem,
                                          f"DTE-force call (DTE={dte})")
                 if order_id:
-                    _add_to_profit_reserve_if_configured(call_profit)
+                    actual_call_profit = (original_prem - fill_px) * contracts_left * 100
+                    _add_to_profit_reserve_if_configured(actual_call_profit)
                     new_notes = _set_contracts_remaining("", CONTRACTS_PER_TRADE)
                     _update_wheel_position(
                         pos["id"],
                         phase="assigned",
                         call_contract=None,
                         call_order_id=None,
-                        total_premium_collected=prev_total + call_profit,
+                        total_premium_collected=prev_total + actual_call_profit,
                         notes=new_notes,
                     )
                     # Back to holding shares → sell new call immediately

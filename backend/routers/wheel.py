@@ -152,6 +152,18 @@ def wheel_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/history")
+def wheel_history(limit: int = 50):
+    """Completed wheel cycles with exit_reason field (M4 fix)."""
+    try:
+        from services.wheel_engine import get_wheel_history
+        history = get_wheel_history(limit=limit)
+        return {"history": history, "count": len(history)}
+    except Exception as e:
+        logger.error(f"GET /wheel/history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Trading ───────────────────────────────────────────────────────────────────
 
 @router.get("/scan")
