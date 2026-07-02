@@ -677,17 +677,22 @@ def _send_telegram(message: str):
 
 # ── Scheduler loop ─────────────────────────────────────────────────────────────
 
+POSITION_CHECK_INTERVAL_MIN = 15  # how often to re-check stops/ladders during market hours
+
+
 def _scheduler_loop():
     """
     Background thread:
-    - Every day at 9:35 AM ET: manage open positions (exit ladder, stops)
+    - Every POSITION_CHECK_INTERVAL_MIN during market hours (9:30 AM-4:00 PM ET,
+      weekdays): manage open positions (exit ladder, stops). Intraday cadence so a
+      hard stop or trailing stop isn't only checked once a day while the market
+      is open and moving.
     - Every Sunday at 6 AM ET: process new signals
-    - Every 5 min: no-op (EDGAR monitor in sec-intelligence handles filing detection)
     """
     import pytz
     et = pytz.timezone("America/New_York")
 
-    last_position_check: Optional[str] = None
+    last_position_check: Optional[str] = None  # "YYYY-MM-DD HH:MM" of last slot run
     last_signal_check: Optional[str] = None
 
     while not _stop_event.is_set():
@@ -695,15 +700,19 @@ def _scheduler_loop():
         today = now_et.strftime("%Y-%m-%d")
         hour, minute, weekday = now_et.hour, now_et.minute, now_et.weekday()
 
-        # Daily position management: 9:35 AM ET on weekdays
-        if (weekday < 5 and hour == 9 and 35 <= minute < 45
-                and last_position_check != today):
-            logger.info("[SecIntel] Running daily position manager...")
-            try:
-                manage_positions()
-                last_position_check = today
-            except Exception as e:
-                logger.error(f"[SecIntel] Position manager error: {e}")
+        # Intraday position management: every N minutes, 9:30 AM-4:00 PM ET, weekdays
+        market_open = (hour > 9 or (hour == 9 and minute >= 30))
+        market_close = hour < 16
+        if (weekday < 5 and market_open and market_close
+                and minute % POSITION_CHECK_INTERVAL_MIN == 0):
+            slot = f"{today} {hour:02d}:{minute:02d}"
+            if last_position_check != slot:
+                logger.info("[SecIntel] Running position manager...")
+                try:
+                    manage_positions()
+                    last_position_check = slot
+                except Exception as e:
+                    logger.error(f"[SecIntel] Position manager error: {e}")
 
         # Weekly signal processing: Sunday 6 AM ET
         if (weekday == 6 and hour == 6 and minute < 10
