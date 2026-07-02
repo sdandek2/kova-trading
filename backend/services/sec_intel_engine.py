@@ -255,14 +255,18 @@ def _db_conn():
 # ── Trade execution ────────────────────────────────────────────────────────────
 
 def _is_tradeable_ticker(ticker: str) -> bool:
-    """Skip warrants, preferred shares, OTC foreign shares — Alpaca rejects these."""
+    """
+    Skip preferred shares and obviously-non-standard tickers before hitting Alpaca.
+    Deliberately does NOT guess warrants/rights/units by suffix (W/R/U) — that
+    heuristic blocked ordinary common stocks like SNOW, UBER, PLTR, NKTR, FOUR.
+    Actual warrants/rights/units that Alpaca can't trade get rejected by the
+    order submission itself (caught in enter_trade's try/except).
+    """
     t = ticker.upper()
-    if t.endswith("W") or t.endswith("R") or t.endswith("U"):
-        return False  # warrants / rights / units
     if "-" in t:
         return False  # preferred shares e.g. DLR-PL, HPE-PC
     if "." in t:
-        return False  # OTC foreign e.g. TSMWF
+        return False  # tickers with a class/exchange suffix e.g. BRK.A
     if len(t) > 5:
         return False  # exchange-listed tickers are max 5 chars
     return True
@@ -386,17 +390,26 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         client = _get_trading_client()
-        client.submit_order(MarketOrderRequest(
+        order = client.submit_order(MarketOrderRequest(
             symbol=ticker,
             qty=shares_to_sell,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         ))
+
+        # Wait for fill and use actual fill price so realized P&L is accurate
+        filled_price = current_price
+        for _ in range(10):
+            time.sleep(2)
+            filled_order = client.get_order_by_id(order.id)
+            if filled_order.filled_avg_price:
+                filled_price = float(filled_order.filled_avg_price)
+                break
     except Exception as e:
         logger.error(f"[SecIntel] Partial exit failed for {ticker}: {e}")
         return
 
-    partial_pl = (current_price - entry_price) * shares_to_sell
+    partial_pl = (filled_price - entry_price) * shares_to_sell
 
     conn = _db_conn()
     if conn:
@@ -407,12 +420,12 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
                     {ladder_shares_field}=%s, {ladder_pl_field}=%s,
                     trail_stop_price=%s
                 WHERE id=%s
-            """, [current_price, shares_to_sell, round(partial_pl, 2),
-                  round(current_price * (1 - TRAIL_PCT), 2), trade_id])
+            """, [filled_price, shares_to_sell, round(partial_pl, 2),
+                  round(filled_price * (1 - TRAIL_PCT), 2), trade_id])
 
     _send_telegram(
         f"🟡 *SEC INTEL PARTIAL EXIT*\n"
-        f"*{ticker}* {reason} @ ${current_price:.2f}\n"
+        f"*{ticker}* {reason} @ ${filled_price:.2f}\n"
         f"Sold {shares_to_sell} shares | P&L: ${partial_pl:+,.0f}\n"
         f"Remaining position now trailing at 20%"
     )
@@ -426,18 +439,27 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         client = _get_trading_client()
-        client.submit_order(MarketOrderRequest(
+        order = client.submit_order(MarketOrderRequest(
             symbol=ticker,
             qty=shares,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         ))
+
+        # Wait for fill and use actual fill price so realized P&L is accurate
+        filled_price = current_price
+        for _ in range(10):
+            time.sleep(2)
+            filled_order = client.get_order_by_id(order.id)
+            if filled_order.filled_avg_price:
+                filled_price = float(filled_order.filled_avg_price)
+                break
     except Exception as e:
         logger.error(f"[SecIntel] Full exit failed for {ticker}: {e}")
         return
 
-    pl = (current_price - entry_price) * shares
-    pl_pct = (current_price - entry_price) / entry_price * 100
+    pl = (filled_price - entry_price) * shares
+    pl_pct = (filled_price - entry_price) / entry_price * 100
 
     conn = _db_conn()
     if conn:
@@ -448,7 +470,7 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
                     exit_reason=%s, realized_pl=%s, realized_pl_pct=%s,
                     hold_days_actual=%s
                 WHERE id=%s
-            """, [current_price, reason, pl, pl_pct,
+            """, [filled_price, reason, pl, pl_pct,
                   (datetime.now(timezone.utc).date() - entry_date.date()).days
                   if entry_date else None,
                   trade_id])
@@ -456,7 +478,7 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
     emoji = "🟢" if pl >= 0 else "🔴"
     _send_telegram(
         f"{emoji} *SEC INTEL EXIT*\n"
-        f"*{ticker}* @ ${current_price:.2f} | Reason: {reason}\n"
+        f"*{ticker}* @ ${filled_price:.2f} | Reason: {reason}\n"
         f"P&L: ${pl:+,.0f} ({pl_pct:+.1f}%)"
     )
 
