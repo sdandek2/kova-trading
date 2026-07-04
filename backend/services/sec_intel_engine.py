@@ -272,6 +272,26 @@ def _get_current_price(ticker: str) -> Optional[float]:
     return None
 
 
+def _get_actual_qty(ticker: str) -> Optional[float]:
+    """
+    Ground-truth share count actually held at the broker for this ticker.
+    Returns 0.0 if the broker shows no position at all; None if the lookup itself failed
+    (network/API error — caller should NOT treat that as "position closed").
+    The DB's shares/sold_25pct_shares/sold_50pct_shares can go stale if a partial-exit
+    DB write ever fails after the broker-side sell already succeeded — manage_positions()
+    must not trust those columns as the source of truth for how many shares remain.
+    """
+    try:
+        client = _get_trading_client()
+        pos = client.get_open_position(ticker)
+        return abs(float(pos.qty))
+    except Exception as e:
+        if "position does not exist" in str(e).lower() or "404" in str(e):
+            return 0.0
+        logger.warning(f"[SecIntel] actual qty lookup failed for {ticker}: {e}")
+        return None
+
+
 def _db_conn():
     from services.db import _get_conn
     return _get_conn()
@@ -446,15 +466,27 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
 
     conn = _db_conn()
     if conn:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                UPDATE sec_intel_trade_log
-                SET {ladder_price_field}=%s, {ladder_date_field}=NOW(),
-                    {ladder_shares_field}=%s, {ladder_pl_field}=%s,
-                    trail_stop_price=%s
-                WHERE id=%s
-            """, [filled_price, shares_to_sell, round(partial_pl, 2),
-                  round(filled_price * (1 - TRAIL_PCT), 2), trade_id])
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    UPDATE sec_intel_trade_log
+                    SET {ladder_price_field}=%s, {ladder_date_field}=NOW(),
+                        {ladder_shares_field}=%s, {ladder_pl_field}=%s,
+                        trail_stop_price=%s
+                    WHERE id=%s
+                """, [filled_price, shares_to_sell, round(partial_pl, 2),
+                      round(filled_price * (1 - TRAIL_PCT), 2), trade_id])
+        except Exception as e:
+            # The broker-side sell already succeeded — real shares, real money moved.
+            # If this write fails, the DB goes stale (this exact gap caused a real
+            # position to get stuck open for days past its stop). manage_positions()
+            # now re-derives remaining shares from the broker each cycle rather than
+            # trusting these columns, so a failure here is degraded bookkeeping, not
+            # a stuck position — but it must be loud, not silently swallowed.
+            logger.error(
+                f"[SecIntel] DB update FAILED after successful partial sell of "
+                f"{shares_to_sell} {ticker} @ ${filled_price:.2f} — trade_id={trade_id}: {e}"
+            )
 
     _send_telegram(
         f"🟡 *SEC INTEL PARTIAL EXIT*\n"
@@ -496,17 +528,25 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
 
     conn = _db_conn()
     if conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE sec_intel_trade_log
-                SET status='closed', exit_price=%s, exit_date=NOW(),
-                    exit_reason=%s, realized_pl=%s, realized_pl_pct=%s,
-                    hold_days_actual=%s
-                WHERE id=%s
-            """, [filled_price, reason, pl, pl_pct,
-                  (datetime.now(timezone.utc).date() - entry_date.date()).days
-                  if entry_date else None,
-                  trade_id])
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE sec_intel_trade_log
+                    SET status='closed', exit_price=%s, exit_date=NOW(),
+                        exit_reason=%s, realized_pl=%s, realized_pl_pct=%s,
+                        hold_days_actual=%s
+                    WHERE id=%s
+                """, [filled_price, reason, pl, pl_pct,
+                      (datetime.now(timezone.utc).date() - entry_date.date()).days
+                      if entry_date else None,
+                      trade_id])
+        except Exception as e:
+            # Broker-side sell already succeeded — see _exit_partial for why this
+            # must be loud rather than silently swallowed.
+            logger.error(
+                f"[SecIntel] DB update FAILED after successful full exit of "
+                f"{shares} {ticker} @ ${filled_price:.2f} — trade_id={trade_id}: {e}"
+            )
 
     emoji = "🟢" if pl >= 0 else "🔴"
     _send_telegram(
@@ -552,9 +592,39 @@ def manage_positions():
 
         pct_gain = (price - entry_price) / entry_price
 
-        # Actual shares still held in Alpaca (original minus any ladder exits)
+        # Ground-truth remaining shares from the broker, not the DB. If a partial-exit
+        # DB write ever fails after the broker-side sell already succeeded, the DB's
+        # shares/sold_25pct_shares/sold_50pct_shares go stale forever and every future
+        # exit attempt tries to sell more shares than actually exist — Alpaca rejects
+        # it, the exception is swallowed, and the position gets stuck open indefinitely
+        # (this happened to a real position: two ladder exits executed at the broker
+        # but were never recorded, leaving it un-sellable for days past its stop).
+        actual_qty = _get_actual_qty(ticker)
+        if actual_qty == 0.0:
+            logger.warning(
+                f"[SecIntel] {ticker} has no broker position but DB shows status='open' — "
+                f"reconciling: marking closed"
+            )
+            conn2 = _db_conn()
+            if conn2:
+                with conn2.cursor() as cur2:
+                    cur2.execute(
+                        "UPDATE sec_intel_trade_log SET status='closed', exit_price=%s, "
+                        "exit_date=NOW(), exit_reason='reconciled_no_position' WHERE id=%s",
+                        [price, trade_id]
+                    )
+            continue
+        if actual_qty is None:
+            # Lookup itself failed (network/API error) — don't guess, skip this cycle.
+            continue
+        remaining_shares = max(1, int(actual_qty))
         already_sold = (sold_25pct_shares or 0) + (sold_50pct_shares or 0)
-        remaining_shares = max(1, shares - already_sold)
+        expected_remaining = max(1, shares - already_sold)
+        if remaining_shares != expected_remaining:
+            logger.warning(
+                f"[SecIntel] {ticker} share mismatch — DB expected {expected_remaining}, "
+                f"broker actually holds {remaining_shares}. Using broker as ground truth."
+            )
 
         # Update peak price
         if price > (peak_price or 0):
