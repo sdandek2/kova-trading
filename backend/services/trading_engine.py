@@ -124,6 +124,7 @@ def _load_short_watermarks() -> dict:
     return cached if isinstance(cached, dict) else {}
 
 
+_cb_fast_monitor_task = None  # background task handle for _circuit_breaker_fast_monitor
 _position_high_watermarks: dict = _load_watermarks()    # symbol → peak price seen while holding long position
 _short_low_watermarks: dict = _load_short_watermarks()  # symbol → lowest price seen while holding short position
 _previous_positions: dict = {}         # symbol → {qty, avg_entry_price, entry_time, side} for close detection
@@ -289,6 +290,72 @@ async def run_premarket_scan():
         logger.warning(f"Pre-market scan failed (non-fatal): {e}")
 
 
+def _circuit_breaker_tripped_today() -> bool:
+    """Sticky daily flag: once the loss limit is breached, stay tripped until the
+    next ET trading day, even if equity recovers before the next 10-min cycle checks.
+    Set by _circuit_breaker_fast_monitor (60s polling) and by run_trading_cycle."""
+    from zoneinfo import ZoneInfo as _ZI_cb
+    today = datetime.now(_ZI_cb("America/New_York")).date().isoformat()
+    return bool(cache_get(f"circuit_breaker_tripped:{today}"))
+
+
+def _mark_circuit_breaker_tripped():
+    from zoneinfo import ZoneInfo as _ZI_cb
+    today = datetime.now(_ZI_cb("America/New_York")).date().isoformat()
+    cache_set(f"circuit_breaker_tripped:{today}", True, 86400)
+
+
+async def _circuit_breaker_fast_monitor():
+    """Polls account day P&L every 60s, independent of the 10-min decision cycle.
+
+    A fast intraday drop can breach and even fully round-trip past the daily loss
+    limit inside a single 10-min cycle window, so the per-cycle check in
+    run_trading_cycle can miss it entirely (confirmed: a -4.54% day in prod never
+    logged a circuit_breaker event). This task exists purely to catch the breach
+    and set the sticky flag; run_trading_cycle still owns actually blocking buys.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            if alpaca_service.get_market_status() == "closed":
+                continue
+            account = await asyncio.get_running_loop().run_in_executor(None, alpaca_service.get_account)
+            day_pl_pct = float(account.day_pl_percent or 0)
+            limit_pct = _risk_settings.get("daily_loss_limit_pct", _RISK_DEFAULTS["daily_loss_limit_pct"])
+            if day_pl_pct < -limit_pct and not _circuit_breaker_tripped_today():
+                _mark_circuit_breaker_tripped()
+                logger.warning(
+                    f"⛔ Circuit breaker (fast monitor) tripped: down {day_pl_pct:.2f}% "
+                    f"(limit -{limit_pct}%). New buys blocked for the rest of the trading day."
+                )
+                log_circuit_breaker(
+                    day_pl_percent=day_pl_pct,
+                    portfolio_value=account.portfolio_value,
+                    limit_pct=limit_pct,
+                )
+                log_bot_activity(
+                    "circuit_breaker",
+                    f"Daily loss limit hit (fast monitor): down {day_pl_pct:.2f}% "
+                    f"(limit -{limit_pct}%). New buys blocked.",
+                )
+                try:
+                    from services.alerts import alert_circuit_breaker as _acb
+                    _acb(day_pl_pct, limit_pct)
+                except Exception:
+                    pass
+                await manager.broadcast({
+                    "type": "circuit_breaker",
+                    "data": {
+                        "reason": f"Daily loss limit of {limit_pct}% hit — new buys blocked",
+                        "day_pl_percent": day_pl_pct,
+                    }
+                })
+        except asyncio.CancelledError:
+            raise
+        except Exception as _cb_err:
+            logger.debug(f"Circuit breaker fast monitor cycle failed (non-fatal): {_cb_err}")
+
+
 async def run_trading_cycle():
     global _last_analysis_at, _next_run_at, _latest_analysis, \
            _position_high_watermarks, _previous_positions, _current_cycle_id, \
@@ -420,7 +487,12 @@ async def run_trading_cycle():
         # which causes TypeError on f"{:.2f}" formatting and comparison with negative threshold.
         # Guard against None (returned pre-market when day P&L is undefined).
         _day_pl_pct = float(account.day_pl_percent or 0)
-        circuit_breaker_active = _day_pl_pct < -_risk_settings["daily_loss_limit_pct"]
+        # OR with the sticky daily flag: a fast intraday drop can breach (and even
+        # recover past) the limit between 10-min cycle checks — see
+        # _circuit_breaker_fast_monitor, which polls every 60s and sets this flag.
+        circuit_breaker_active = _day_pl_pct < -_risk_settings["daily_loss_limit_pct"] or _circuit_breaker_tripped_today()
+        if circuit_breaker_active and _day_pl_pct < -_risk_settings["daily_loss_limit_pct"]:
+            _mark_circuit_breaker_tripped()
         if circuit_breaker_active:
             logger.warning(
                 f"⛔ Circuit breaker active: down {_day_pl_pct:.2f}% today "
@@ -3203,6 +3275,15 @@ async def _trading_loop():
             )
     except Exception as _pp_err:
         logger.warning(f"Startup position reload (non-fatal): {_pp_err}")
+
+    # Start fast circuit-breaker monitor (60s polling, independent of the 10-min
+    # decision cycle — see _circuit_breaker_fast_monitor for why this exists).
+    global _cb_fast_monitor_task
+    try:
+        _cb_fast_monitor_task = asyncio.create_task(_circuit_breaker_fast_monitor())
+        logger.info("Circuit breaker fast monitor started (60s polling).")
+    except Exception as _cbm_err:
+        logger.warning(f"Could not start circuit breaker fast monitor (non-fatal): {_cbm_err}")
 
     # Start real-time news stream (non-fatal if it fails)
     try:

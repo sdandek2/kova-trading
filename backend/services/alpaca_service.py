@@ -107,6 +107,7 @@ def get_orders(limit: int = 50, status: str = "all", symbol: str = None) -> list
                 status=o.status.value,
                 filled_avg_price=float(o.filled_avg_price) if o.filled_avg_price else None,
                 created_at=o.created_at,
+                order_type=(o.order_type.value if hasattr(o.order_type, "value") else o.order_type) if o.order_type else None,
             )
         )
     return result

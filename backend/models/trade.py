@@ -22,6 +22,7 @@ class Order(BaseModel):
     status: str
     filled_avg_price: Optional[float] = None
     created_at: datetime
+    order_type: Optional[str] = None  # "market" | "limit" | "stop" | "stop_limit" | "trailing_stop"
 
 
 class TradeDecision(BaseModel):
