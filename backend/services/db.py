@@ -377,9 +377,14 @@ def _ensure_table(conn):
                 score           INT DEFAULT 0,
                 is_whitelist    BOOLEAN DEFAULT FALSE,
                 hold_days       INT DEFAULT 90,
+                pct_of_portfolio DOUBLE PRECISION,
                 created_at      TIMESTAMPTZ DEFAULT NOW(),
                 UNIQUE(institution, ticker, quarter, investment_type)
             )
+        """)
+        cur.execute("""
+            ALTER TABLE sec_intel_signals
+            ADD COLUMN IF NOT EXISTS pct_of_portfolio DOUBLE PRECISION
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_sec_intel_signals_filed

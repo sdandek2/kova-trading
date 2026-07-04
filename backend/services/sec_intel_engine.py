@@ -637,7 +637,8 @@ def sync_signals_from_duckdb(duckdb_path: str):
                 s.action,
                 s.quarter,
                 s.filed_date,
-                s.investment_type
+                s.investment_type,
+                s.pct_of_portfolio
             FROM signals s
             JOIN institutions i ON i.id = s.institution_id
             WHERE s.action IN ('NEW', 'STRONG_BUY', 'ADD')
@@ -658,7 +659,7 @@ def sync_signals_from_duckdb(duckdb_path: str):
 
     synced = 0
     with conn.cursor() as cur:
-        for institution, ticker, action, quarter, filed_date, inv_type in rows:
+        for institution, ticker, action, quarter, filed_date, inv_type, pct_of_portfolio in rows:
             score, is_whitelist = score_signal(institution, action)
             hold = HOLD_DAYS.get(institution, HOLD_DAYS["default"])
 
@@ -666,15 +667,16 @@ def sync_signals_from_duckdb(duckdb_path: str):
                 cur.execute("""
                     INSERT INTO sec_intel_signals
                     (institution, ticker, action, quarter, filed_date,
-                     investment_type, score, is_whitelist, hold_days)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     investment_type, score, is_whitelist, hold_days, pct_of_portfolio)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (institution, ticker, quarter, investment_type)
                     DO UPDATE SET
                         action=EXCLUDED.action,
                         score=EXCLUDED.score,
-                        is_whitelist=EXCLUDED.is_whitelist
+                        is_whitelist=EXCLUDED.is_whitelist,
+                        pct_of_portfolio=EXCLUDED.pct_of_portfolio
                 """, [institution, ticker, action, quarter, filed_date,
-                      inv_type, score, is_whitelist, hold])
+                      inv_type, score, is_whitelist, hold, pct_of_portfolio])
                 synced += 1
             except Exception as e:
                 logger.warning(f"[SecIntel] Signal insert failed {ticker}: {e}")
@@ -715,7 +717,8 @@ def process_new_signals():
                 AND t.signal_quarter = s.quarter
             )
             AND s.filed_date >= CURRENT_DATE - INTERVAL '180 days'
-            ORDER BY s.is_whitelist DESC, s.score DESC, s.filed_date DESC
+            ORDER BY s.is_whitelist DESC, s.score DESC,
+                     s.pct_of_portfolio DESC NULLS LAST, s.filed_date DESC
         """, [AUTO_TRADE_MIN_SCORE])
         signals = cur.fetchall()
 
