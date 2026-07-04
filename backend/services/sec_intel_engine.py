@@ -87,6 +87,11 @@ STOP_LOSS_PCT_BY_INSTITUTION = {
     "default":               0.12,  # 9+ convergence / scored institutions
 }
 MAX_POSITIONS       = 10
+# Cap how much of the portfolio any single institution's open positions can occupy —
+# matches TRADING_PLAN.md's "Max sector concentration: 25%". Without this, one
+# institution's whitelisted signals from a single 13F quarter can dominate the
+# entire book (e.g. 7 of 10 positions from one fund's Q1 filing).
+MAX_INSTITUTION_CONCENTRATION_PCT = 0.25
 TRAIL_PCT           = 0.20   # 20% trailing stop from peak
 LADDER_L1_PCT       = 0.25   # sell 25% of position at +25%
 LADDER_L2_PCT       = 0.50   # sell 25% more at +50%
@@ -232,6 +237,26 @@ def _open_position_count() -> int:
         return 0
 
 
+def _institution_exposure_pct(institution: str, portfolio_value: float) -> float:
+    """Fraction of portfolio already committed to OPEN positions from this institution."""
+    if portfolio_value <= 0:
+        return 0.0
+    try:
+        conn = _db_conn()
+        if not conn:
+            return 0.0
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(position_size_usd), 0) FROM sec_intel_trade_log "
+                "WHERE institution=%s AND status='open'",
+                [institution]
+            )
+            committed = float(cur.fetchone()[0] or 0)
+        return committed / portfolio_value
+    except Exception:
+        return 0.0
+
+
 def _get_current_price(ticker: str) -> Optional[float]:
     try:
         from alpaca.data.requests import StockLatestQuoteRequest
@@ -304,13 +329,21 @@ def enter_trade(ticker: str, institution: str, action: str,
     if portfolio_value <= 0:
         return False
 
+    size_pct = POSITION_SIZE_PCT_BY_INSTITUTION.get(institution, POSITION_SIZE_PCT_BY_INSTITUTION["default"])
+    stop_pct = STOP_LOSS_PCT_BY_INSTITUTION.get(institution, STOP_LOSS_PCT_BY_INSTITUTION["default"])
+
+    existing_exposure = _institution_exposure_pct(institution, portfolio_value)
+    if existing_exposure + size_pct > MAX_INSTITUTION_CONCENTRATION_PCT:
+        logger.info(
+            f"[SecIntel] Skipping {ticker} — {institution} already at "
+            f"{existing_exposure*100:.0f}% of portfolio (cap {MAX_INSTITUTION_CONCENTRATION_PCT*100:.0f}%)"
+        )
+        return False
+
     current_price = _get_current_price(ticker)
     if not current_price or current_price <= 0:
         logger.warning(f"[SecIntel] Could not get price for {ticker}")
         return False
-
-    size_pct = POSITION_SIZE_PCT_BY_INSTITUTION.get(institution, POSITION_SIZE_PCT_BY_INSTITUTION["default"])
-    stop_pct = STOP_LOSS_PCT_BY_INSTITUTION.get(institution, STOP_LOSS_PCT_BY_INSTITUTION["default"])
 
     position_usd = portfolio_value * size_pct
     shares = max(1, int(position_usd / current_price))
