@@ -259,14 +259,23 @@ def _institution_exposure_pct(institution: str, portfolio_value: float) -> float
 
 def _get_current_price(ticker: str) -> Optional[float]:
     try:
-        from alpaca.data.requests import StockLatestQuoteRequest
+        from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
         client = _get_data_client()
         req = StockLatestQuoteRequest(symbol_or_symbols=[ticker])
         quotes = client.get_stock_latest_quote(req)
         if ticker in quotes:
             q = quotes[ticker]
-            mid = (float(q.bid_price) + float(q.ask_price)) / 2
-            return mid if mid > 0 else float(q.ask_price)
+            bid, ask = float(q.bid_price), float(q.ask_price)
+            # A stale/thin quote with bid=0 makes mid = ask/2 -- a phantom halved
+            # price. This exact bug triggered a false stop-loss on AMD 2026-07-03
+            # (quote read bid=0, computed mid ~$245 vs a real market price ~$518).
+            # Require both sides to be sane before trusting the midpoint.
+            if bid > 0 and ask > 0 and ask < bid * 3:
+                return (bid + ask) / 2
+            trade_req = StockLatestTradeRequest(symbol_or_symbols=[ticker])
+            trades = client.get_stock_latest_trade(trade_req)
+            if ticker in trades and trades[ticker].price > 0:
+                return float(trades[ticker].price)
     except Exception as e:
         logger.warning(f"[SecIntel] price fetch failed for {ticker}: {e}")
     return None
@@ -439,6 +448,7 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
                   ladder_price_field: str, ladder_date_field: str,
                   ladder_shares_field: str, ladder_pl_field: str):
     """Sell a partial position (ladder step). Stores P&L for performance tracking."""
+    filled_price = None
     try:
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
@@ -451,7 +461,6 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
         ))
 
         # Wait for fill and use actual fill price so realized P&L is accurate
-        filled_price = current_price
         for _ in range(10):
             time.sleep(2)
             filled_order = client.get_order_by_id(order.id)
@@ -460,6 +469,22 @@ def _exit_partial(trade_id: int, ticker: str, shares_to_sell: int,
                 break
     except Exception as e:
         logger.error(f"[SecIntel] Partial exit failed for {ticker}: {e}")
+        return
+
+    if filled_price is None:
+        # Order never confirmed filled within the poll window -- do not fabricate
+        # a P&L using current_price (see _exit_full for the AMD incident this
+        # mirrors). Leave ladder fields untouched; next manage_positions() cycle
+        # re-evaluates against the real broker state.
+        logger.error(
+            f"[SecIntel] {ticker} partial exit order {order.id} not confirmed filled "
+            f"after 20s — leaving trade_id={trade_id} ladder fields unchanged."
+        )
+        _send_telegram(
+            f"⚠️ *SEC INTEL PARTIAL EXIT UNCONFIRMED*\n"
+            f"*{ticker}* sell order submitted but not filled after 20s — "
+            f"will re-check next cycle."
+        )
         return
 
     partial_pl = (filled_price - entry_price) * shares_to_sell
@@ -500,6 +525,7 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
                current_price: float, entry_price: float, reason: str,
                entry_date=None):
     """Exit full remaining position."""
+    filled_price = None
     try:
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
@@ -512,7 +538,6 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
         ))
 
         # Wait for fill and use actual fill price so realized P&L is accurate
-        filled_price = current_price
         for _ in range(10):
             time.sleep(2)
             filled_order = client.get_order_by_id(order.id)
@@ -521,6 +546,26 @@ def _exit_full(trade_id: int, ticker: str, shares: int,
                 break
     except Exception as e:
         logger.error(f"[SecIntel] Full exit failed for {ticker}: {e}")
+        return
+
+    if filled_price is None:
+        # Order never confirmed filled within the poll window -- do NOT fabricate
+        # a close using current_price. This exact gap logged a phantom -53% loss
+        # on AMD (2026-07-03): a bad bid=0 quote made current_price ~$245 vs a
+        # real market price of ~$518, the sell order sat unfilled ('accepted') at
+        # the broker, and this function still marked the DB row closed with that
+        # fake exit price -- while the broker-side position stayed open, roughly
+        # flat, and untracked by the bot from then on. Leave the DB row open;
+        # next manage_positions() cycle re-evaluates against real broker state.
+        logger.error(
+            f"[SecIntel] {ticker} exit order {order.id} not confirmed filled after "
+            f"20s — leaving trade_id={trade_id} open for re-evaluation next cycle."
+        )
+        _send_telegram(
+            f"⚠️ *SEC INTEL EXIT UNCONFIRMED*\n"
+            f"*{ticker}* sell order submitted but not filled after 20s — "
+            f"still tracked as open, will re-check next cycle."
+        )
         return
 
     pl = (filled_price - entry_price) * shares
