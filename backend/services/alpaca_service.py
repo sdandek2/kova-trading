@@ -173,19 +173,31 @@ def submit_market_order(
                 half_qty = qty // 2
                 remaining_qty = qty - half_qty
 
-                # First half: limit sell at TP price (DAY — expires if not hit today)
+                # First half: OCO — take-profit OR stop-loss, whichever hits first.
+                # Previously this was a bare TP limit order with no downside leg at all:
+                # if price cratered instead of reaching TP, this half sat fully exposed
+                # until the bot's own polling cycle (every cycle_interval_seconds, default
+                # 600s) noticed and force-sold at whatever price was left — this is exactly
+                # what happened to JEM (-32% realized vs. an intended 4% stop). GTC so the
+                # stop doesn't silently expire after one day like the old DAY order did.
                 try:
-                    limit_sell = LimitOrderRequest(
+                    oco_sell = LimitOrderRequest(
                         symbol=symbol,
                         qty=half_qty,
                         side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY,
-                        limit_price=take_profit_price,
+                        time_in_force=TimeInForce.GTC,
+                        order_class=OrderClass.OCO,
+                        take_profit=TakeProfitRequest(limit_price=take_profit_price),
+                        stop_loss=StopLossRequest(stop_price=stop_price),
                     )
-                    trading_client.submit_order(limit_sell)
-                    logger.info(f"Partial TP: selling {half_qty} {symbol} at ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%)")
+                    trading_client.submit_order(oco_sell)
+                    logger.info(
+                        f"Partial TP/SL (OCO): {half_qty} {symbol} — "
+                        f"TP ${take_profit_price:.2f} (+{take_profit_pct*100:.0f}%) / "
+                        f"SL ${stop_price:.2f} (-{stop_loss_pct*100:.0f}%)"
+                    )
                 except Exception as e:
-                    logger.warning(f"Partial limit sell failed (non-fatal): {e}")
+                    logger.warning(f"Partial OCO sell failed (non-fatal): {e}")
 
                 # Second half: trailing stop — MUST use GTC (Alpaca rejects DAY for trailing stops)
                 try:
