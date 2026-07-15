@@ -646,17 +646,29 @@ def manage_positions():
         # but were never recorded, leaving it un-sellable for days past its stop).
         actual_qty = _get_actual_qty(ticker)
         if actual_qty == 0.0:
+            # No broker position but DB still shows 'open' — almost always means a
+            # sell filled at the broker but the DB write for that exit failed (see
+            # _exit_full/_exit_partial). The real fill price from that sell is lost,
+            # so this approximates realized P&L using the current quote against the
+            # remaining (post-ladder) share count instead of leaving it at 0/null —
+            # a $0 P&L here previously made ~77% of "closed" trades untraceable.
+            remaining_shares = max(0, shares - (sold_25pct_shares or 0) - (sold_50pct_shares or 0))
+            pl = (price - entry_price) * remaining_shares
+            pl_pct = (price - entry_price) / entry_price * 100 if entry_price else 0
+            hold_days = (datetime.now(timezone.utc).date() - entry_date.date()).days if entry_date else None
             logger.warning(
                 f"[SecIntel] {ticker} has no broker position but DB shows status='open' — "
-                f"reconciling: marking closed"
+                f"reconciling: marking closed, approx P&L ${pl:+,.0f} ({pl_pct:+.1f}%) "
+                f"using current quote (actual fill price unrecoverable)"
             )
             conn2 = _db_conn()
             if conn2:
                 with conn2.cursor() as cur2:
                     cur2.execute(
                         "UPDATE sec_intel_trade_log SET status='closed', exit_price=%s, "
-                        "exit_date=NOW(), exit_reason='reconciled_no_position' WHERE id=%s",
-                        [price, trade_id]
+                        "exit_date=NOW(), exit_reason='reconciled_no_position', "
+                        "realized_pl=%s, realized_pl_pct=%s, hold_days_actual=%s WHERE id=%s",
+                        [price, pl, pl_pct, hold_days, trade_id]
                     )
             continue
         if actual_qty is None:

@@ -166,15 +166,32 @@ def run_weekly_weight_adjustment() -> None:
     Rules:
     - Sample count < 15: skip (not enough data)
     - Win rate < 40%: reduce weight by up to 15% (min 85% of original)
-    - Win rate > 70%: increase weight by up to 15% (max 115% of original)
-    - 40–70%: leave unchanged
+    - Win rate > (overall win rate + 10pp): increase weight by up to 15% (max 115%)
+    - Otherwise: leave unchanged
+
+    The boost threshold is relative, not a fixed 70%, because this strategy's
+    overall win rate runs ~30-40% — a flat 70% bar was unreachable in practice
+    (e.g. analyst_revision sat at 47.6% win rate over 42 trades, comfortably
+    the best-performing signal in the system, and never once qualified for a
+    boost). A signal meaningfully outperforming the bot's own baseline should
+    get more weight even if it isn't outperforming a coin flip.
     """
-    from services.db import get_signal_win_rates, get_signal_weights_full, update_signal_weight
+    from services.db import (
+        get_signal_win_rates, get_signal_weights_full, update_signal_weight,
+        get_trade_performance_summary,
+    )
 
     logger.info("Running weekly signal weight adjustment...")
     try:
         win_rates = get_signal_win_rates(days=30)
         all_weights = get_signal_weights_full()  # {signal: {current, default}}
+
+        overall = get_trade_performance_summary()
+        overall_win_rate = float(overall.get("win_rate_pct") or 0) / 100.0
+        boost_threshold = overall_win_rate + 0.10
+        logger.info(
+            f"Overall win rate {overall_win_rate:.0%} — signal boost threshold set to {boost_threshold:.0%}"
+        )
 
         for row in win_rates:
             signal = row["signal_name"]
@@ -199,7 +216,7 @@ def run_weekly_weight_adjustment() -> None:
                                      old_weight=current, win_rate=win_rate, sample_count=sample_count)
                 logger.info(f"Weight adjusted: {signal} {current} → {new_weight} ({reason})")
 
-            elif win_rate > 0.70:
+            elif win_rate > boost_threshold:
                 # Recovery/boost capped at 150% of DEFAULT — not current.
                 # Prevents permanent death: a signal at weight=1 can climb back to default
                 # at +2/week even after months of suppression.

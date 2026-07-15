@@ -24,7 +24,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_EDGAR_BASE = "https://data.sec.gov"
+_EDGAR_BASE = "https://data.sec.gov"       # JSON submissions API
+_EDGAR_ARCHIVES_BASE = "https://www.sec.gov"  # raw filing documents (XML) — data.sec.gov 404s on these
 
 
 def _log_health(result: dict) -> None:
@@ -127,7 +128,7 @@ def _fetch_form4_buys(cik: str, days_back: int = 30) -> dict:
         # Fetch the actual Form 4 XML to get transaction details
         acc_clean = accession.replace("-", "")
         xml_url = (
-            f"{_EDGAR_BASE}/Archives/edgar/data/{int(cik)}"
+            f"{_EDGAR_ARCHIVES_BASE}/Archives/edgar/data/{int(cik)}"
             f"/{acc_clean}/form4.xml"
         )
         try:
